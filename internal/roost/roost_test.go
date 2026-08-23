@@ -162,6 +162,58 @@ func TestReplicationRequiresFixedKitRelease(t *testing.T) {
 	}
 }
 
+func TestProductionRenderingIncludesDurabilityAndTopologyGuards(t *testing.T) {
+	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"mongo", "redis", "nats", "checkpoint", "nestwal"}, []string{"config", "nest"})
+	production := renderServiceConfig(m, "game", true)
+	for _, want := range []string{
+		"require_replica_set: true",
+		"transaction_timeout: 30s",
+		"transaction_receipt_ttl: 720h",
+		"dir: /var/lib/roost/wal",
+		"max_disk_bytes: 8589934592",
+		"duplicate_window: 10m",
+		"replicas: 3",
+		"aof_replicas: 1",
+	} {
+		if !strings.Contains(production, want) {
+			t.Errorf("production config missing %q:\n%s", want, production)
+		}
+	}
+	if strings.Contains(production, "127.0.0.1") || strings.Contains(production, "file: true") {
+		t.Fatalf("development topology leaked into production config:\n%s", production)
+	}
+	dockerfile := renderDockerfile(m)
+	if !strings.Contains(dockerfile, `VOLUME ["/var/lib/roost/wal"]`) || !strings.Contains(dockerfile, "USER nonroot:nonroot") {
+		t.Fatalf("durable non-root Dockerfile missing:\n%s", dockerfile)
+	}
+	compose := renderCompose(m)
+	if !strings.Contains(compose, `"--appendfsync", "everysec"`) {
+		t.Fatalf("Redis AOF configuration missing from compose:\n%s", compose)
+	}
+	if !strings.Contains(compose, `"-sd", "/data"`) || !strings.Contains(compose, "mongo-data:/data/db") {
+		t.Fatalf("development dependencies are not durable:\n%s", compose)
+	}
+	if m.Versions.Core != "v1.3.0" || m.Versions.Kit != "v1.3.0" || m.Versions.Codegen != "v1.3.0" {
+		t.Fatalf("release defaults = %+v", m.Versions)
+	}
+}
+
+func TestBootstrapImportsTransitiveModDependencies(t *testing.T) {
+	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"nestwal"}, []string{"nest"})
+	bootstrap := renderBootstrap(m)
+	for _, want := range []string{
+		`kitcheckpoint "github.com/tjbdwanghaibo/cube-kit/checkpoint"`,
+		`kitmongo "github.com/tjbdwanghaibo/cube-kit/mongo"`,
+		`kitredis "github.com/tjbdwanghaibo/cube-kit/redis"`,
+		`kitnats "github.com/tjbdwanghaibo/cube-kit/nats"`,
+		"kitcheckpoint.NewMod(",
+	} {
+		if !strings.Contains(bootstrap, want) {
+			t.Errorf("bootstrap missing transitive dependency %q:\n%s", want, bootstrap)
+		}
+	}
+}
+
 func TestSyncPreflightsConflictsBeforeWriting(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Features: []string{"config"}})

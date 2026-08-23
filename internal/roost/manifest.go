@@ -74,7 +74,7 @@ func DefaultManifest(name, module string, services, mods, features []string) Man
 	return Manifest{
 		Schema:     1,
 		Project:    ProjectSpec{Name: name, Module: module},
-		Versions:   VersionSpec{Core: "v1.2.0", Kit: "v1.2.0", Skill: "v1.0.0", Codegen: "v1.2.0"},
+		Versions:   VersionSpec{Core: "v1.3.0", Kit: "v1.3.0", Skill: "v1.0.0", Codegen: "v1.3.0"},
 		SharedMods: shared,
 		Services:   svc,
 		Features:   uniqueSorted(features),

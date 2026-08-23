@@ -510,6 +510,7 @@ func (e *{{.Entity.Name}}) RemoveSnapshot() []checkpoint.SaveItem {
 		items = append(items, checkpoint.SaveItem{
 			Db: e.{{.FieldName}}.DbName(), DbScope: checkpoint.ResolveDatabaseScope(e.{{.FieldName}}),
 			Collection: e.{{.FieldName}}.CollName(), ID: e.{{.FieldName}}.Id(),
+			Version: e.{{.FieldName}}.Tracker.IncVersion(), Deleted: true,
 		})
 	}
 {{- end}}

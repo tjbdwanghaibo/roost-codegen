@@ -42,7 +42,7 @@ var modCatalog = map[string]modSpec{
 	},
 	"mongo": {
 		ImportPath: "github.com/tjbdwanghaibo/cube-kit/mongo", Alias: "kitmongo", Constructor: "kitmongo.NewMongoMod()",
-		Config:     "mongo:\n  uri: mongodb://127.0.0.1:27017/?replicaSet=rs0\n  connect_timeout: 5s\n  max_pool_size: 100\n  min_pool_size: 5\n",
+		Config:     "mongo:\n  uri: mongodb://127.0.0.1:27017/?replicaSet=rs0\n  connect_timeout: 5s\n  transaction_timeout: 30s\n  require_replica_set: true\n  max_pool_size: 100\n  min_pool_size: 5\n  max_idle_time: 5m\n",
 		DevService: "mongo",
 	},
 	"nats": {
@@ -60,11 +60,11 @@ var modCatalog = map[string]modSpec{
 	},
 	"checkpoint": {
 		ImportPath: "github.com/tjbdwanghaibo/cube-kit/checkpoint", Alias: "kitcheckpoint", Constructor: "kitcheckpoint.NewMod()", Depends: []string{"mongo", "redis"},
-		Config: "checkpoint:\n  database: game\n  journal_capacity: 10000\n  admission_pending_capacity: 10000\n  admission_retry_interval: 100ms\n  flush_workers: 4\n  batch_size: 200\n  batch_bytes: 524288\n  flush_interval: 1s\n  retry_backoff: 100ms\n  retry_max_backoff: 5s\n  submit_timeout: 50ms\n  load_concurrency: 4\n  mongo_max_concurrent_groups: 8\n  health_warn_fill_ratio: 0.8\n  wal:\n    prefix: roost:checkpoint:wal\n    shards: 16\n    workers: 4\n    queue_capacity: 4096\n    durable_timeout: 50ms\n    replay_batch_size: 200\n",
+		Config: "checkpoint:\n  database: game\n  journal_capacity: 10000\n  admission_pending_capacity: 10000\n  admission_retry_interval: 100ms\n  flush_workers: 4\n  batch_size: 200\n  batch_bytes: 524288\n  flush_interval: 1s\n  retry_backoff: 100ms\n  retry_max_backoff: 5s\n  submit_timeout: 50ms\n  load_concurrency: 4\n  mongo_max_concurrent_groups: 8\n  transaction_receipt_ttl: 720h\n  health_warn_fill_ratio: 0.8\n  wal:\n    prefix: roost:checkpoint:wal\n    shards: 16\n    workers: 4\n    queue_capacity: 4096\n    durable_timeout: 5s\n    aof_timeout: 3s\n    aof_replicas: 0\n    replay_batch_size: 200\n",
 	},
 	"nestwal": {
 		ImportPath: "github.com/tjbdwanghaibo/cube-kit/nestwal", Alias: "kitnestwal", Depends: []string{"checkpoint", "nats"},
-		Config: "nest:\n  worker_num: 8\n  heartbeat_worker_num: 2\n  queue_capacity: 4096\n  delayed_capacity: 4096\n  max_delay: 24h\n  tick_duration: 50ms\n  request_timeout: 3s\n  wal:\n    segment_bytes: 268435456\n    max_record_bytes: 4194304\n    queue_capacity: 8192\n    batch_max_records: 256\n    batch_max_bytes: 1048576\n    batch_delay: 1ms\n    group_commit_interval: 2ms\n    retain_segments: 2\n    replay_retry_min: 100ms\n    replay_retry_max: 5s\n    replay_idle_poll: 20ms\n    replay_batch_records: 256\n    startup_timeout: 30s\n    effects:\n      subject_prefix: roost.effect\n      stream: ROOST_EFFECTS\n      max_age: 168h\n      duplicate_window: 24h\n      replicas: 1\n",
+		Config: "nest:\n  worker_num: 8\n  heartbeat_worker_num: 2\n  queue_capacity: 4096\n  delayed_capacity: 4096\n  max_delay: 24h\n  tick_duration: 50ms\n  request_timeout: 3s\n  wal:\n    dir: data/wal/nest\n    segment_bytes: 268435456\n    max_record_bytes: 4194304\n    max_disk_bytes: 8589934592\n    max_unacked_age: 24h\n    queue_capacity: 8192\n    batch_max_records: 256\n    batch_max_bytes: 1048576\n    batch_delay: 1ms\n    group_commit_interval: 2ms\n    retain_segments: 2\n    replay_retry_min: 100ms\n    replay_retry_max: 5s\n    replay_idle_poll: 20ms\n    replay_batch_records: 256\n    receipt_cleanup_batch: 256\n    receipt_cleanup_capacity: 65536\n    startup_timeout: 30s\n    effects:\n      subject_prefix: roost.effect\n      stream: ROOST_EFFECTS\n      max_age: 168h\n      duplicate_window: 10m\n      replicas: 1\n",
 	},
 	"nest": {
 		ImportPath: "github.com/tjbdwanghaibo/cube-kit/nest", Alias: "kitnest", Depends: []string{"nestwal"},
@@ -114,14 +114,19 @@ func resolveMods(requested []string) ([]string, error) {
 }
 
 func allProjectMods(m Manifest) []string {
-	seen := map[string]bool{}
-	for _, mod := range m.SharedMods {
-		seen[mod] = true
-	}
+	requested := append([]string(nil), m.SharedMods...)
 	for _, svc := range m.Services {
-		for _, mod := range svc.Mods {
-			seen[mod] = true
-		}
+		requested = append(requested, svc.Mods...)
+	}
+	resolved, err := resolveMods(requested)
+	if err == nil {
+		return resolved
+	}
+	// Manifest validation reports the actual catalog error. Keep rendering
+	// deterministic for callers that are collecting more than one diagnostic.
+	seen := map[string]bool{}
+	for _, mod := range requested {
+		seen[mod] = true
 	}
 	out := make([]string, 0, len(seen))
 	for mod := range seen {

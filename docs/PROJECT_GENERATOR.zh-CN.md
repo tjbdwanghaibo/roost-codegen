@@ -16,11 +16,11 @@ roost-codegen 用一份 roost.yaml 管理项目结构、Service、Kit Mod、代�
 
 推荐直接运行固定发布版本，不需要把 codegen 加进业务 module：
 
-    go run github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.2.0 help
+    go run github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.3.0 help
 
 也可以安装本地命令：
 
-    go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.2.0
+    go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.3.0
     roost help
 
 生产项目不要在 Makefile 或 CI 中使用 @latest。创建项目时可以查询最新版本，但落盘后必须固定版本。
@@ -49,7 +49,7 @@ Go bin 目录：
 例如当前 `GOPATH` 为 `D:\Program Files\Go\bin` 且 `GOBIN` 为空时，需要加入
 PATH 的目录就是 `D:\Program Files\Go\bin\bin`。关闭并重新打开 PowerShell 后执行：
 
-    go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.2.0
+    go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.3.0
     Get-Command roost
     roost help
 
@@ -85,10 +85,10 @@ PATH 的目录就是 `D:\Program Files\Go\bin\bin`。关闭并重新打开 Power
 固定依赖版本：
 
     roost project new planet \
-      -roost-core-version v1.2.0 \
-      -roost-kit-version v1.1.0 \
+      -roost-core-version v1.3.0 \
+      -roost-kit-version v1.3.0 \
       -roost-skill-version v1.0.0 \
-      -codegen-version v1.1.0
+      -codegen-version v1.3.0
 
 默认生成：
 
@@ -119,10 +119,10 @@ PATH 的目录就是 `D:\Program Files\Go\bin\bin`。关闭并重新打开 Power
       name: planet
       module: github.com/acme/planet
     versions:
-      core: v1.1.0
-      kit: v1.0.4
+      core: v1.3.0
+      kit: v1.3.0
       skill: v1.0.0
-      codegen: v1.1.0
+      codegen: v1.3.0
     shared_mods:
       - lock
       - ops
@@ -250,7 +250,7 @@ check-generated 会复制项目到临时目录，在副本中执行全部生成�
 
 独立调用：
 
-    go run github.com/tjbdwanghaibo/roost-codegen/cmd/protocol@v1.2.0 \
+    go run github.com/tjbdwanghaibo/roost-codegen/cmd/protocol@v1.3.0 \
       -def ./protocol/def \
       -bind "" \
       -handlers "" \
@@ -307,7 +307,7 @@ Core 已经通过 RegisterServer 自动创建 Cobra 子命令，业务层不需�
     make vet
     make test
     make test-race
-    make build VERSION=v1.2.0
+    make build VERSION=v1.3.0
     make ci
 
 build 使用 ldflags 注入 Core buildinfo 的 Version、Commit、BuildTime 和 Dirty。
@@ -329,10 +329,10 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 升级固定版本：
 
     roost project upgrade \
-      -core v1.2.0 \
-      -kit v1.1.0 \
+      -core v1.3.0 \
+      -kit v1.3.0 \
       -skill v1.0.1 \
-      -codegen v1.2.0
+      -codegen v1.3.0
 
 升级只更新 roost.yaml 和生成器管理的文件。业务代码和业务配置保留。
 
@@ -347,6 +347,10 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 - UDP/KCP 接入层配置鉴权、密钥轮换、Cookie、限速和 DDoS 防护。
 - 提交前执行 make ci。
 - 部署前执行 race 测试和优雅停服演练。
+- MongoDB 使用 replica set 或支持 transaction 的 sharded cluster；禁止 standalone。
+- `/var/lib/roost/wal` 使用单写持久卷，并验证异常重启后 replay。
+- JetStream effect consumer 使用 `nestwal.MongoEffectInbox`，receipt TTL 大于消息最大保留时间。
+- 房间慢消费者淘汰、断线 session 清理、100 Entity/20 Hz 和 Redis/Mongo/NATS 故障注入均通过 staging 门禁。
 
 ## 15. 当前 module path 兼容
 

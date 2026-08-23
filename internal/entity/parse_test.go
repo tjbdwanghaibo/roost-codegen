@@ -124,6 +124,7 @@ func TestGenerate(t *testing.T) {
 		"func (e *Player) generatedOnClear()",
 		"func (e *Player) generatedOnDestroy(reason entity.EntityDestroyReason)",
 		"func (e *Player) Snapshot() []checkpoint.SaveItem",
+		"Version: e.dao.Tracker.IncVersion(), Deleted: true",
 	}
 	for _, check := range checks {
 		if !contains(s, check) {
