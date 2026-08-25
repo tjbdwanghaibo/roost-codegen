@@ -5,8 +5,8 @@
 //	go run ./tool/dao -def ./db/def -out ./db -pkg db
 //
 // Scans def directory for //cube:dao and //cube:redisdao markers, generates:
-//   - gen_<name>_dao.go   — DaoInterface impl, setters, Init, Marshal, Unmarshal
-//   - gen_<name>_nested.go — nested struct setters
+//   - gen_<name>_dao.go   — private storage, typed accessors/mutators, Init, Marshal, Unmarshal
+//   - gen_<name>_nested.go — private nested storage and typed accessors/mutators
 //   - gen_<name>_redis_dao.go — typed Redis DAO wrapper
 package dao
 

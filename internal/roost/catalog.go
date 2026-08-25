@@ -64,10 +64,14 @@ var modCatalog = map[string]modSpec{
 	},
 	"nestwal": {
 		ImportPath: "github.com/tjbdwanghaibo/cube-kit/nestwal", Alias: "kitnestwal", Depends: []string{"checkpoint", "nats"},
-		Config: "nest:\n  worker_num: 8\n  heartbeat_worker_num: 2\n  queue_capacity: 4096\n  delayed_capacity: 4096\n  max_delay: 24h\n  tick_duration: 50ms\n  request_timeout: 3s\n  wal:\n    dir: data/wal/nest\n    segment_bytes: 268435456\n    max_record_bytes: 4194304\n    max_disk_bytes: 8589934592\n    max_unacked_age: 24h\n    queue_capacity: 8192\n    batch_max_records: 256\n    batch_max_bytes: 1048576\n    batch_delay: 1ms\n    group_commit_interval: 2ms\n    retain_segments: 2\n    replay_retry_min: 100ms\n    replay_retry_max: 5s\n    replay_idle_poll: 20ms\n    replay_batch_records: 256\n    receipt_cleanup_batch: 256\n    receipt_cleanup_capacity: 65536\n    startup_timeout: 30s\n    effects:\n      subject_prefix: roost.effect\n      stream: ROOST_EFFECTS\n      max_age: 168h\n      duplicate_window: 10m\n      replicas: 1\n",
+		Config: "nest:\n  worker_num: 8\n  heartbeat_worker_num: 2\n  queue_capacity: 4096\n  delayed_capacity: 4096\n  max_delay: 24h\n  tick_duration: 50ms\n  request_timeout: 3s\n  wal:\n    dir: data/wal/nest\n    segment_bytes: 268435456\n    max_record_bytes: 4194304\n    max_disk_bytes: 8589934592\n    max_unacked_age: 24h\n    queue_capacity: 8192\n    batch_max_records: 256\n    batch_max_bytes: 1048576\n    batch_delay: 1ms\n    group_commit_interval: 2ms\n    retain_segments: 2\n    replay_retry_min: 100ms\n    replay_retry_max: 5s\n    replay_idle_poll: 20ms\n    replay_batch_records: 256\n    receipt_cleanup_batch: 256\n    receipt_cleanup_capacity: 65536\n    startup_timeout: 30s\n    effects:\n      subject_prefix: roost.effect\n      stream: ROOST_EFFECTS\n      max_age: 168h\n      max_bytes: 8589934592\n      duplicate_window: 10m\n      replicas: 1\n",
 	},
 	"nest": {
 		ImportPath: "github.com/tjbdwanghaibo/cube-kit/nest", Alias: "kitnest", Depends: []string{"nestwal"},
+	},
+	"saga": {
+		ImportPath: "github.com/tjbdwanghaibo/cube-kit/saga", Alias: "kitsaga", Constructor: "kitsaga.NewMod()", Depends: []string{"nestwal"},
+		Config: "saga:\n  database: saga\n  subject_prefix: roost.saga\n  stream: ROOST_SAGA\n  coordinator_workers: 4\n  publisher_workers: 4\n  coordinator_claim_batch: 3\n  publisher_claim_batch: 1\n  lease_duration: 15s\n  store_timeout: 3s\n  poll_interval: 100ms\n  publish_timeout: 3s\n  publish_backoff_min: 50ms\n  publish_backoff_max: 5s\n  max_payload_bytes: 65536\n  completion_receipt_ttl: 720h\n  stream_max_age: 168h\n  stream_max_bytes: 8589934592\n  duplicate_window: 10m\n  replicas: 1\n  result_ack_wait: 30s\n  result_process_timeout: 3s\n  result_max_deliver: 25000\n  result_max_ack_pending: 256\n  result_nak_backoff_min: 250ms\n  result_nak_backoff_max: 30s\n  start_effect_stream: ROOST_EFFECTS\n  start_effect_prefix: roost.effect\n  start_effect_durable: roost-saga-start\n  start_effect_ack_wait: 30s\n  start_effect_process_timeout: 3s\n  start_effect_max_deliver: 25000\n  start_effect_max_ack_pending: 256\n  start_effect_nak_backoff_min: 250ms\n  start_effect_nak_backoff_max: 30s\n",
 	},
 }
 
@@ -75,6 +79,7 @@ var knownFeatures = map[string]bool{
 	"protocol": true, "config": true, "entity": true, "nest": true,
 	"event": true, "dao": true, "attribute": true, "webroute": true,
 	"errcode":          true,
+	"saga":             true,
 	"replication-quic": true, "replication-kcp": true, "replication-udp": true,
 }
 

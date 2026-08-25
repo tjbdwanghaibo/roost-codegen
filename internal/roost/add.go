@@ -10,7 +10,7 @@ import (
 
 type AddOptions struct {
 	Kind, Name, Service, Group string
-	Mods                       []string
+	Mods, Steps                []string
 	ID                         int64
 }
 
@@ -55,6 +55,35 @@ func Add(root string, options AddOptions) ([]string, error) {
 		_, err := SyncProject(root)
 		return []string{"roost.yaml"}, err
 	}
+	if options.Kind == "saga" {
+		service := toSnake(options.Service)
+		if service == "" {
+			services := sortedServiceNames(m)
+			if len(services) != 1 {
+				return nil, fmt.Errorf("saga requires -service when the project has multiple services")
+			}
+			service = services[0]
+		}
+		spec, ok := m.Services[service]
+		if !ok {
+			return nil, fmt.Errorf("unknown service %q", service)
+		}
+		paths, addErr := addArtifact(root, m, options)
+		if addErr != nil {
+			return nil, addErr
+		}
+		spec.Mods = uniqueSorted(append(spec.Mods, "saga"))
+		m.Services[service] = spec
+		m.Features = uniqueSorted(append(m.Features, "saga"))
+		m.Sagas = uniqueSorted(append(m.Sagas, toSnake(options.Name)))
+		if err := saveManifest(root, m); err != nil {
+			return paths, err
+		}
+		if _, err := SyncProject(root); err != nil {
+			return paths, err
+		}
+		return append(paths, "roost.yaml", "internal/bootstrap/generated.go"), nil
+	}
 	return addArtifact(root, m, options)
 }
 
@@ -97,6 +126,68 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 	case "module":
 		path = "game/controllers/" + snake + "/controller.go"
 		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/cube-core/app\"\n\ntype Controller struct{}\nfunc FromRegistry(*app.Registry) (Controller, error) { return Controller{}, nil }\n", snake)
+	case "saga":
+		if len(o.Steps) == 0 {
+			return nil, fmt.Errorf("saga %s requires -steps", o.Name)
+		}
+		path = "saga/" + snake + "/definition.go"
+		var steps strings.Builder
+		var subscribers strings.Builder
+		for _, stepName := range o.Steps {
+			stepSnake, stepPascal := toSnake(stepName), toPascal(stepName)
+			if !validName(stepSnake) {
+				return nil, fmt.Errorf("invalid saga step %q", stepName)
+			}
+			fmt.Fprintf(&steps, "\t\t{Name: %q, ForwardTopic: %q, CompensateTopic: %q, Timeout: 5 * time.Second, MaxAttempts: 5, BackoffMin: 100 * time.Millisecond, BackoffMax: 5 * time.Second}, // %s\n", stepSnake, snake+"."+stepSnake, snake+"."+stepSnake+".compensate", stepPascal)
+			fmt.Fprintf(&subscribers, "\nfunc Subscribe%s(ctx context.Context, client fnats.IJetStream, transport *kitsaga.JetStreamPublisher, inbox *kitsaga.MongoCommandInbox, stream, durable string, handler kitsaga.StepHandler) (fnats.IJetStreamSubscription, error) {\n\treturn kitsaga.SubscribeStep(ctx, client, transport, inbox, kitsaga.StepConsumerConfig{Stream: stream, Durable: durable, Topic: %q}, handler)\n}\n\nfunc Subscribe%sCompensation(ctx context.Context, client fnats.IJetStream, transport *kitsaga.JetStreamPublisher, inbox *kitsaga.MongoCommandInbox, stream, durable string, handler kitsaga.StepHandler) (fnats.IJetStreamSubscription, error) {\n\treturn kitsaga.SubscribeStep(ctx, client, transport, inbox, kitsaga.StepConsumerConfig{Stream: stream, Durable: durable, Topic: %q}, handler)\n}\n", stepPascal, snake+"."+stepSnake, stepPascal, snake+"."+stepSnake+".compensate")
+		}
+		body = fmt.Sprintf(`package %s
+
+import (
+	"context"
+	"time"
+
+	fnats "github.com/tjbdwanghaibo/cube-core/nats"
+	"github.com/tjbdwanghaibo/cube-core/saga"
+	kitsaga "github.com/tjbdwanghaibo/cube-kit/saga"
+)
+
+const (
+	Type = %q
+	Version uint32 = 1
+)
+
+func Definition() saga.Definition {
+	return saga.Definition{Type: Type, Version: Version, Steps: []saga.Step{
+%s	}}
+}
+
+// Definitions must retain every version which still has non-terminal records.
+// When changing step order or compensation semantics, keep the old definition
+// here and make Definition return the new version.
+func Definitions() []saga.Definition { return []saga.Definition{Definition()} }
+
+func Register(engine *saga.Engine) error {
+	for _, definition := range Definitions() {
+		if err := engine.Register(definition); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// EmitStart is the production entry point from a Nest handler: the Saga start
+// intent and current Entity mutations are committed in the same Nest WAL record.
+func EmitStart(businessKey string, state []byte, deadline time.Time) error {
+	return saga.EmitStart(saga.StartRequest{Type: Type, DefinitionVersion: Version, BusinessKey: businessKey, Data: state, DeadlineAt: deadline})
+}
+
+// Start is for durable consumers, administration and recovery paths which are
+// already outside a Nest transaction. Calls are idempotent for one intent.
+func Start(ctx context.Context, engine *saga.Engine, businessKey string, state []byte, deadline time.Time) (saga.Record, error) {
+	return engine.StartSaga(ctx, saga.StartRequest{Type: Type, DefinitionVersion: Version, BusinessKey: businessKey, Data: state, DeadlineAt: deadline})
+}
+%s`, snake, snake, steps.String(), subscribers.String())
 	default:
 		return nil, fmt.Errorf("unsupported artifact kind %q", o.Kind)
 	}

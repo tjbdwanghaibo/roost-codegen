@@ -174,7 +174,10 @@ func renderBootstrap(m Manifest) string {
 		"github.com/tjbdwanghaibo/cube-core/app/buildinfo": "",
 	}
 	allMods := allProjectMods(m)
-	instanceRuntime := contains(allMods, "nest") || contains(allMods, "remote_entity")
+	// checkpoint constructors require the instance-scoped EntityAccess even
+	// when a project enables them transitively (for example through Saga)
+	// without generating Nest handlers.
+	instanceRuntime := contains(allMods, "checkpoint") || contains(allMods, "nest") || contains(allMods, "remote_entity")
 	if instanceRuntime {
 		imports["github.com/tjbdwanghaibo/cube-core/entity"] = ""
 	}
@@ -192,6 +195,9 @@ func renderBootstrap(m Manifest) string {
 	}
 	if hasFeature(m, "nest") {
 		imports[m.Project.Module+"/game/bootstrap"] = "gamebootstrap"
+	}
+	for _, name := range m.Sagas {
+		imports[m.Project.Module+"/saga/"+name] = "saga" + safeIdent(name)
 	}
 	var b strings.Builder
 	b.WriteString(generatedHeader + "\npackage bootstrap\n\nimport (\n")
@@ -224,7 +230,7 @@ func renderBootstrap(m Manifest) string {
 	if len(shared) > 0 {
 		b.WriteString("\ta.Mods(\n")
 		for _, name := range shared {
-			fmt.Fprintf(&b, "\t\t%s,\n", renderModConstructor(name, allMods))
+			fmt.Fprintf(&b, "\t\t%s,\n", renderModConstructor(m, name, allMods))
 		}
 		b.WriteString("\t)\n")
 	}
@@ -232,7 +238,7 @@ func renderBootstrap(m Manifest) string {
 		mods, _ := resolveMods(m.Services[name].Mods)
 		fmt.Fprintf(&b, "\ta.RegisterServer(app.ServiceName(%q), service%s.New()", name, safeIdent(name))
 		for _, mod := range mods {
-			fmt.Fprintf(&b, ",\n\t\t%s", renderModConstructor(mod, allMods))
+			fmt.Fprintf(&b, ",\n\t\t%s", renderModConstructor(m, mod, allMods))
 		}
 		b.WriteString(")\n")
 	}
@@ -240,7 +246,7 @@ func renderBootstrap(m Manifest) string {
 	return b.String()
 }
 
-func renderModConstructor(name string, allMods []string) string {
+func renderModConstructor(m Manifest, name string, allMods []string) string {
 	switch name {
 	case "checkpoint":
 		return "kitcheckpoint.NewMod(kitcheckpoint.WithEntityAccess(EntityAccess))"
@@ -250,6 +256,15 @@ func renderModConstructor(name string, allMods []string) string {
 		return fmt.Sprintf("kitnestwal.NewMod(%t)", contains(allMods, "remote_entity"))
 	case "nest":
 		return "kitnest.NewMod(EntityAccess)"
+	case "saga":
+		if len(m.Sagas) == 0 {
+			return "kitsaga.NewMod()"
+		}
+		definitions := make([]string, 0, len(m.Sagas))
+		for _, sagaName := range m.Sagas {
+			definitions = append(definitions, "saga"+safeIdent(sagaName)+".Definitions()")
+		}
+		return "kitsaga.NewMod(kitsaga.CombineDefinitions(" + strings.Join(definitions, ", ") + ")...)"
 	default:
 		return modCatalog[name].Constructor
 	}
@@ -346,7 +361,7 @@ DIRTY := $(shell git status --porcelain)
 LDFLAGS := -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Version=$(VERSION) -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Commit=$(COMMIT) -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.BuildTime=$(BUILD_TIME) -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Dirty=$(DIRTY)
 
 .PHONY: help sync doctor fmt fmt-check vet test test-race build run generate generate-changed check-generated config-check id-check ci dev-up dev-down dev-logs clean
-.PHONY: new-service add-mod new-module new-protocol new-entity new-component new-event new-table new-dao new-webroute new-errcode
+.PHONY: new-service add-mod new-module new-protocol new-entity new-component new-event new-table new-dao new-webroute new-errcode new-saga
 
 help:
 	$(ROOST) help-make
@@ -400,6 +415,8 @@ new-webroute:
 	$(ROOST) add webroute $(NAME)
 new-errcode:
 	$(ROOST) add errcode $(NAME)
+new-saga:
+	$(ROOST) add saga $(NAME) -service $(SERVICE) -steps $(STEPS)
 ci: fmt-check vet test test-race check-generated config-check id-check
 dev-up:
 	docker compose -f deploy/dev/docker-compose.yaml up -d

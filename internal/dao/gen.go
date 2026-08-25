@@ -10,10 +10,14 @@ import (
 	"strings"
 	"text/template"
 	"time"
+	"unicode"
 )
 
 func generateDao(dao DaoDef, defs *Definitions, pkg string, outFile string, force bool) (bool, error) {
 	if err := validateDatabaseScope(dao); err != nil {
+		return false, err
+	}
+	if err := validateGeneratedStorageFields(dao.Name, dao.Fields, "id", "tracker", "persistPatchSet", "persistPatchUnset", "persistPatchFull"); err != nil {
 		return false, err
 	}
 	if err := validateGeneratedMapFields(dao.Fields); err != nil {
@@ -44,6 +48,9 @@ func generateDao(dao DaoDef, defs *Definitions, pkg string, outFile string, forc
 }
 
 func generateNested(nested NestedDef, pkg string, outFile string, force bool) (bool, error) {
+	if err := validateGeneratedStorageFields(nested.Name, nested.Fields); err != nil {
+		return false, err
+	}
 	if err := validateGeneratedMapFields(nested.Fields); err != nil {
 		return false, err
 	}
@@ -51,6 +58,7 @@ func generateNested(nested NestedDef, pkg string, outFile string, force bool) (b
 		"snakeCase":  toSnake,
 		"lower1":     lower1,
 		"fieldType":  fieldType,
+		"fieldVar":   fieldVarName,
 		"mapValType": mapValType,
 		"mapNewExpr": mapNewExpr,
 		"rawMapType": rawMapType,
@@ -151,6 +159,7 @@ func funcMap(defs *Definitions) template.FuncMap {
 		"fieldMaskName": fieldMaskName,
 		"dirtyScope":    dirtyScopeExpr,
 		"fieldType":     fieldType,
+		"fieldVar":      fieldVarName,
 		"mapValType":    mapValType,
 		"mapNewExpr":    mapNewExpr,
 		"rawMapType":    rawMapType,
@@ -263,6 +272,21 @@ func validateGeneratedMapFields(fields []FieldDef) error {
 	return nil
 }
 
+func validateGeneratedStorageFields(typeName string, fields []FieldDef, reserved ...string) error {
+	owners := make(map[string]string, len(fields)+len(reserved))
+	for _, name := range reserved {
+		owners[name] = "framework field " + name
+	}
+	for _, field := range fields {
+		name := fieldVarName(field.Name)
+		if owner, exists := owners[name]; exists {
+			return fmt.Errorf("dao %s field %s generates private storage name %q, which conflicts with %s", typeName, field.Name, name, owner)
+		}
+		owners[name] = "field " + field.Name
+	}
+	return nil
+}
+
 func shardCountExpr(capExpr string) string {
 	if capExpr == "0" {
 		return "32"
@@ -325,6 +349,7 @@ func filterDirty(fields []FieldDef) []FieldDef {
 }
 
 func isNestedType(defs *Definitions, typeName string) bool {
+	typeName = strings.TrimPrefix(typeName, "*")
 	for _, n := range defs.Nested {
 		if n.Name == typeName {
 			return true
@@ -338,6 +363,24 @@ func lower1(s string) string {
 		return s
 	}
 	return strings.ToLower(s[:1]) + s[1:]
+}
+
+func fieldVarName(name string) string {
+	if name == "" {
+		return ""
+	}
+	runes := []rune(name)
+	end := 1
+	for end < len(runes) && unicode.IsUpper(runes[end]) {
+		if end+1 < len(runes) && unicode.IsLower(runes[end+1]) {
+			break
+		}
+		end++
+	}
+	for i := 0; i < end; i++ {
+		runes[i] = unicode.ToLower(runes[i])
+	}
+	return string(runes)
 }
 
 type daoTmplData struct {

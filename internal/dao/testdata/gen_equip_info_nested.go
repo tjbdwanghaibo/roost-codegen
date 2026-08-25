@@ -4,34 +4,73 @@ package testdata
 import (
 	"github.com/tjbdwanghaibo/cube-core/checkpoint"
 	fmap "github.com/tjbdwanghaibo/cube-core/map"
+	"github.com/tjbdwanghaibo/cube-core/nest"
 )
 
 // EquipInfo is a nested struct with dirty propagation.
 type EquipInfo struct {
 	checkpoint.DirtyHook
-	Level int32
-	Star  int32
-	Gems  *fmap.SmallSafeMap[int32, *GemInfo]
+	level int32
+	star  int32
+	gems  *fmap.SmallSafeMap[int32, *GemInfo]
+}
+
+func (s *EquipInfo) GetLevel() int32 { return s.level }
+
+func (s *EquipInfo) GetStar() int32 { return s.star }
+
+func (s *EquipInfo) GetGems(key int32) (*GemInfo, bool) {
+	if s.gems == nil {
+		var zero *GemInfo
+		return zero, false
+	}
+	return s.gems.Get(key)
+}
+
+func (s *EquipInfo) RangeGems(f func(key int32, val *GemInfo) bool) {
+	if s.gems == nil || f == nil {
+		return
+	}
+	s.gems.Range(f)
+}
+
+func (s *EquipInfo) GemsLen() int {
+	if s.gems == nil {
+		return 0
+	}
+	return s.gems.Len()
 }
 
 func (s *EquipInfo) SetLevel(v int32) {
-	if s.Level != v {
-		s.Level = v
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old := s.level
+		_ = tx.RecordUndo(s, uint64(0), func() error { s.level = old; return nil })
+	}
+	if s.level != v {
+		s.level = v
 		s.Mark()
 	}
 }
 
 func (s *EquipInfo) SetStar(v int32) {
-	if s.Star != v {
-		s.Star = v
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old := s.star
+		_ = tx.RecordUndo(s, uint64(1), func() error { s.star = old; return nil })
+	}
+	if s.star != v {
+		s.star = v
 		s.Mark()
 	}
 }
 
 func (s *EquipInfo) SetGems(v map[int32]*GemInfo) {
-	s.Gems = fmap.NewSmallSafeMap[int32, *GemInfo](len(v))
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old := s.gems
+		_ = tx.RecordUndo(s, uint64(2), func() error { s.gems = old; return nil })
+	}
+	s.gems = fmap.NewSmallSafeMap[int32, *GemInfo](len(v))
 	for key, val := range v {
-		s.Gems.Set(key, val)
+		s.gems.Set(key, val)
 	}
 	s.Mark()
 }

@@ -99,7 +99,6 @@ func (s cacheSessionRedisDAOStore) PatchCacheSession(ctx context.Context, key in
 	}
 	return s.store.Set(ctx, current)
 }
-
 func wrapCacheSessionRedisDAOStore(store fcache.Store[int64, CacheSession], patcher fcache.RefHMapPatcher[int64]) CacheSessionRedisDAO {
 	return cacheSessionRedisDAOStore{store: store, patcher: patcher}
 }

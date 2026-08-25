@@ -23,6 +23,7 @@ type Manifest struct {
 	SharedMods []string               `yaml:"shared_mods,omitempty"`
 	Services   map[string]ServiceSpec `yaml:"services"`
 	Features   []string               `yaml:"features,omitempty"`
+	Sagas      []string               `yaml:"sagas,omitempty"`
 	IDs        map[string]IDSpace     `yaml:"ids,omitempty"`
 }
 
@@ -74,7 +75,7 @@ func DefaultManifest(name, module string, services, mods, features []string) Man
 	return Manifest{
 		Schema:     1,
 		Project:    ProjectSpec{Name: name, Module: module},
-		Versions:   VersionSpec{Core: "v1.3.0", Kit: "v1.3.0", Skill: "v1.0.0", Codegen: "v1.3.0"},
+		Versions:   VersionSpec{Core: "v1.4.0", Kit: "v1.4.0", Skill: "v1.0.0", Codegen: "v1.4.0"},
 		SharedMods: shared,
 		Services:   svc,
 		Features:   uniqueSorted(features),
@@ -155,8 +156,25 @@ func (m Manifest) Validate() error {
 			joined = errors.Join(joined, fmt.Errorf("unknown feature %q", feature))
 		}
 	}
+	for _, sagaName := range m.Sagas {
+		if !validName(sagaName) {
+			joined = errors.Join(joined, fmt.Errorf("invalid saga %q", sagaName))
+		}
+	}
+	if len(m.Sagas) > 0 {
+		hasSagaMod := false
+		for _, service := range m.Services {
+			hasSagaMod = hasSagaMod || contains(service.Mods, "saga")
+		}
+		if !hasSagaMod {
+			joined = errors.Join(joined, errors.New("sagas require the saga mod on at least one service"))
+		}
+	}
 	if hasReplicationFeature(m) && !versionAtLeast(m.Versions.Kit, 1, 1, 0) {
 		joined = errors.Join(joined, fmt.Errorf("replication features require roost-kit >= v1.1.0; got %q", m.Versions.Kit))
+	}
+	if contains(allProjectMods(m), "saga") && (!versionAtLeast(m.Versions.Core, 1, 4, 0) || !versionAtLeast(m.Versions.Kit, 1, 4, 0)) {
+		joined = errors.Join(joined, fmt.Errorf("saga requires roost-core and roost-kit >= v1.4.0; got core=%q kit=%q", m.Versions.Core, m.Versions.Kit))
 	}
 	for kind, space := range m.IDs {
 		if space.Min != 0 || space.Max != 0 {

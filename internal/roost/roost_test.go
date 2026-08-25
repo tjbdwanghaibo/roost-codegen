@@ -137,6 +137,69 @@ func TestAddCamelCaseProtocolUsesSnakeFileAndPascalTypes(t *testing.T) {
 	}
 }
 
+func TestAddSagaGeneratesValidatedDefinition(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Features: []string{"saga"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, err := Add(root, AddOptions{Kind: "saga", Name: "AllianceRally", Steps: []string{"ReserveTroops", "CreateMarch"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := paths[0], "saga/alliance_rally/definition.go"; got != want {
+		t.Fatalf("path = %s, want %s", got, want)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(paths[0])))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"= \"alliance_rally\"", "Version uint32 = 1", "DefinitionVersion: Version", "func Definitions() []saga.Definition", "reserve_troops.compensate", "func Register(engine *saga.Engine) error", "func EmitStart(", "saga.EmitStart", "engine.StartSaga", "func SubscribeReserveTroops(", "func SubscribeReserveTroopsCompensation("} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("generated Saga missing %q:\n%s", want, raw)
+		}
+	}
+	bootstrap, err := os.ReadFile(filepath.Join(root, "internal", "bootstrap", "generated.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"var EntityAccess = entity.NewManagerAccess(EntityManager)", "kitsaga.NewMod(kitsaga.CombineDefinitions(sagaAllianceRally.Definitions())...)", "example.com/planet/saga/alliance_rally"} {
+		if !strings.Contains(string(bootstrap), want) {
+			t.Fatalf("bootstrap missing %q:\n%s", want, bootstrap)
+		}
+	}
+	manifest, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(manifest.Services["game"].Mods, "saga") || !contains(manifest.Sagas, "alliance_rally") {
+		t.Fatalf("Saga was not wired into manifest: %+v", manifest)
+	}
+}
+
+func TestAddSagaRequiresSteps(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Features: []string{"saga"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "saga", Name: "AllianceRally"}); err == nil {
+		t.Fatal("expected missing steps to fail")
+	}
+}
+
+func TestSagaRequiresV140CoreAndKit(t *testing.T) {
+	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"saga"}, []string{"saga"})
+	m.Versions.Core = "v1.3.0"
+	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "v1.4.0") {
+		t.Fatalf("expected Saga version guard, got %v", err)
+	}
+	m.Versions.Core, m.Versions.Kit = "v1.4.0", "v1.4.0"
+	if err := m.Validate(); err != nil {
+		t.Fatalf("v1.4.0 rejected: %v", err)
+	}
+}
+
 func TestReplicationPresetCompilesAsGoSource(t *testing.T) {
 	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"etcd"}, []string{"replication-quic", "replication-kcp", "replication-udp"})
 	m.Versions.Kit = "v1.1.0"
@@ -193,7 +256,7 @@ func TestProductionRenderingIncludesDurabilityAndTopologyGuards(t *testing.T) {
 	if !strings.Contains(compose, `"-sd", "/data"`) || !strings.Contains(compose, "mongo-data:/data/db") {
 		t.Fatalf("development dependencies are not durable:\n%s", compose)
 	}
-	if m.Versions.Core != "v1.3.0" || m.Versions.Kit != "v1.3.0" || m.Versions.Codegen != "v1.3.0" {
+	if m.Versions.Core != "v1.4.0" || m.Versions.Kit != "v1.4.0" || m.Versions.Codegen != "v1.4.0" {
 		t.Fatalf("release defaults = %+v", m.Versions)
 	}
 }

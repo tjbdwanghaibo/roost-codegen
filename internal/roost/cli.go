@@ -143,13 +143,14 @@ func runGenerate(args []string, stdout, stderr io.Writer) error {
 
 func runAdd(args []string, stdout, stderr io.Writer) error {
 	if len(args) < 2 {
-		return errors.New("usage: roost add <service|mod|module|protocol|entity|component|event|table|dao|webroute|errcode> <name> [flags]")
+		return errors.New("usage: roost add <service|mod|module|protocol|entity|component|event|table|dao|webroute|errcode|saga> <name> [flags]")
 	}
 	fs := flag.NewFlagSet("add "+args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	rootFlag := fs.String("root", ".", "project directory")
 	service := fs.String("service", "", "target service")
 	mods := fs.String("mods", "", "comma-separated Kit mods")
+	steps := fs.String("steps", "", "comma-separated Saga steps")
 	group := fs.String("group", "", "ID allocation group")
 	id := fs.Int64("id", 0, "explicit numeric ID")
 	if err := fs.Parse(args[2:]); err != nil {
@@ -159,7 +160,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Group: *group, ID: *id})
+	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitList(*steps), Group: *group, ID: *id})
 	if err != nil {
 		return err
 	}
@@ -259,7 +260,7 @@ See docs/PROJECT_GENERATOR.zh-CN.md for complete documentation.
 }
 
 func printMakeHelp(w io.Writer) {
-	fmt.Fprint(w, `Targets: sync doctor generate generate-changed check-generated config-check id-check build run test test-race ci dev-up dev-down dev-logs
+	fmt.Fprint(w, `Targets: sync doctor generate generate-changed check-generated config-check id-check build run test test-race new-saga ci dev-up dev-down dev-logs
 `)
 }
 

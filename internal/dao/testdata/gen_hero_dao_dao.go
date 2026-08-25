@@ -2,32 +2,36 @@
 package testdata
 
 import (
+	"fmt"
 	"github.com/tjbdwanghaibo/cube-core/checkpoint"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	fmap "github.com/tjbdwanghaibo/cube-core/map"
 	"github.com/tjbdwanghaibo/cube-core/migration"
+	"github.com/tjbdwanghaibo/cube-core/nest"
 	"go.mongodb.org/mongo-driver/bson"
 )
 
 // HeroDao is the DAO for collection "heroes".
 type HeroDao struct {
 	id                int64
-	Tracker           checkpoint.DirtyTracker
+	tracker           checkpoint.DirtyTracker
 	persistPatchSet   map[string]any
 	persistPatchUnset []string
 	persistPatchFull  map[string]bool
-	Name              string
-	Level             int32
-	Exp               int64
-	LoginAt           int64
-	Items             *fmap.SmallSafeMap[int64, int32]
-	Friends           []int64
-	Pos               Position
-	Equips            *fmap.SmallSafeMap[int64, *EquipInfo]
+	name              string
+	level             int32
+	exp               int64
+	loginAt           int64
+	items             *fmap.SmallSafeMap[int64, int32]
+	friends           []int64
+	pos               Position
+	equips            *fmap.SmallSafeMap[int64, *EquipInfo]
 }
 
 // Ensure interface compliance.
 var _ entity.DaoInterface = (*HeroDao)(nil)
+var _ nest.RollbackSnapshotter = (*HeroDao)(nil)
+var _ nest.CommitParticipant = (*HeroDao)(nil)
 
 const (
 	HeroDaoDBName               = "game"
@@ -38,22 +42,23 @@ const (
 // NewHeroDao creates a new HeroDao instance with initialized maps/slices.
 func NewHeroDao() *HeroDao {
 	d := &HeroDao{}
-	d.Items = fmap.NewSmallSafeMap[int64, int32](0)
-	d.Equips = fmap.NewSmallSafeMap[int64, *EquipInfo](0)
+	d.items = fmap.NewSmallSafeMap[int64, int32](0)
+	d.equips = fmap.NewSmallSafeMap[int64, *EquipInfo](0)
 	return d
 }
 
-func (d *HeroDao) Id() int64             { return d.id }
-func (d *HeroDao) SetId(id int64)        { d.id = id }
-func (d *HeroDao) DbName() string        { return HeroDaoDBName }
-func (d *HeroDao) CollName() string      { return HeroDaoCollection }
-func (d *HeroDao) SchemaVersion() uint32 { return HeroDaoSchemaVersion }
+func (d *HeroDao) Id() int64                         { return d.id }
+func (d *HeroDao) SetId(id int64)                    { d.id = id }
+func (d *HeroDao) DbName() string                    { return HeroDaoDBName }
+func (d *HeroDao) DbScope() checkpoint.DatabaseScope { return checkpoint.DatabaseScopeServer }
+func (d *HeroDao) CollName() string                  { return HeroDaoCollection }
+func (d *HeroDao) SchemaVersion() uint32             { return HeroDaoSchemaVersion }
 func (d *HeroDao) Migrate(raw []byte, from uint32) ([]byte, error) {
 	return migration.MigrateDAO(d.CollName(), raw, from, HeroDaoSchemaVersion)
 }
-func (d *HeroDao) Dirty() entity.IDirty                   { return &d.Tracker }
-func (d *HeroDao) CleanDirty()                            { d.Tracker.SelfClean(); d.clearPersistPathPatch() }
-func (d *HeroDao) DirtyTracker() *checkpoint.DirtyTracker { return &d.Tracker }
+func (d *HeroDao) Dirty() entity.IDirty                   { return &d.tracker }
+func (d *HeroDao) CleanDirty()                            { d.tracker.SelfClean(); d.clearPersistPathPatch() }
+func (d *HeroDao) DirtyTracker() *checkpoint.DirtyTracker { return &d.tracker }
 
 const (
 	heroDaoFieldName    uint64 = 1 << iota
@@ -67,35 +72,35 @@ const (
 )
 
 func (d *HeroDao) markNameDirty() {
-	d.Tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldName)
+	d.tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldName)
 }
 
 func (d *HeroDao) markLevelDirty() {
-	d.Tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldLevel)
+	d.tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldLevel)
 }
 
 func (d *HeroDao) markExpDirty() {
-	d.Tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldExp)
+	d.tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldExp)
 }
 
 func (d *HeroDao) markLoginAtDirty() {
-	d.Tracker.MarkScope(checkpoint.DirtyPersist, heroDaoFieldLoginAt)
+	d.tracker.MarkScope(checkpoint.DirtyPersist, heroDaoFieldLoginAt)
 }
 
 func (d *HeroDao) markItemsDirty() {
-	d.Tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldItems)
+	d.tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldItems)
 }
 
 func (d *HeroDao) markFriendsDirty() {
-	d.Tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldFriends)
+	d.tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldFriends)
 }
 
 func (d *HeroDao) markPosDirty() {
-	d.Tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldPos)
+	d.tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldPos)
 }
 
 func (d *HeroDao) markEquipsDirty() {
-	d.Tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldEquips)
+	d.tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldEquips)
 }
 
 func (d *HeroDao) recordPersistPatchSet(field string, path string, value any) {
@@ -199,9 +204,9 @@ func (d *HeroDao) markEquipsKeyDeleted(key int64) {
 
 // Init wires dirty callbacks for nested structs and map values.
 func (d *HeroDao) Init() {
-	d.Pos.SetNotify(d.markPosDirty)
-	if d.Equips != nil {
-		d.Equips.Range(func(key int64, v *EquipInfo) bool {
+	d.pos.SetNotify(d.markPosDirty)
+	if d.equips != nil {
+		d.equips.Range(func(key int64, v *EquipInfo) bool {
 			if v != nil {
 				key, v := key, v
 				v.SetNotify(func() { d.markEquipsKeyDirty(key, v) })
@@ -211,87 +216,164 @@ func (d *HeroDao) Init() {
 	}
 }
 
-// --- Setters ---
+// --- Accessors ---
+
+func (d *HeroDao) GetName() string { return d.name }
+
+func (d *HeroDao) GetLevel() int32 { return d.level }
+
+func (d *HeroDao) GetExp() int64 { return d.exp }
+
+func (d *HeroDao) GetLoginAt() int64 { return d.loginAt }
+
+func (d *HeroDao) GetFriends(idx int) (int64, bool) {
+	if idx < 0 || idx >= len(d.friends) {
+		var zero int64
+		return zero, false
+	}
+	return d.friends[idx], true
+}
+
+func (d *HeroDao) GetPos() *Position { return &d.pos }
+
+// --- Mutators ---
 
 func (d *HeroDao) SetName(v string) {
-	if d.Name != v {
-		d.Name = v
+	if d.name != v {
+		if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+			old := d.name
+			_ = tx.RecordUndo(d, heroDaoFieldName, func() error { d.name = old; return nil })
+		}
+		d.name = v
 		d.markNameDirty()
 	}
 }
 
 func (d *HeroDao) SetLevel(v int32) {
-	if d.Level != v {
-		d.Level = v
+	if d.level != v {
+		if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+			old := d.level
+			_ = tx.RecordUndo(d, heroDaoFieldLevel, func() error { d.level = old; return nil })
+		}
+		d.level = v
 		d.markLevelDirty()
 	}
 }
 
 func (d *HeroDao) SetExp(v int64) {
-	if d.Exp != v {
-		d.Exp = v
+	if d.exp != v {
+		if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+			old := d.exp
+			_ = tx.RecordUndo(d, heroDaoFieldExp, func() error { d.exp = old; return nil })
+		}
+		d.exp = v
 		d.markExpDirty()
 	}
 }
 
 func (d *HeroDao) SetLoginAt(v int64) {
-	if d.LoginAt != v {
-		d.LoginAt = v
+	if d.loginAt != v {
+		if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+			old := d.loginAt
+			_ = tx.RecordUndo(d, heroDaoFieldLoginAt, func() error { d.loginAt = old; return nil })
+		}
+		d.loginAt = v
 		d.markLoginAtDirty()
 	}
 }
 
 func (d *HeroDao) GetItems(key int64) (int32, bool) {
-	if d.Items == nil {
+	if d.items == nil {
 		var zero int32
 		return zero, false
 	}
-	return d.Items.Get(key)
+	return d.items.Get(key)
 }
 
 func (d *HeroDao) SetItems(key int64, val int32) {
-	if d.Items == nil {
-		d.Items = fmap.NewSmallSafeMap[int64, int32](0)
+	if d.items == nil {
+		d.items = fmap.NewSmallSafeMap[int64, int32](0)
 	}
-	d.Items.Set(key, val)
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old, existed := d.items.Get(key)
+		_ = tx.RecordUndoToken(d, heroDaoFieldItems, key, func() error {
+			if existed {
+				d.items.Set(key, old)
+			} else {
+				d.items.Delete(key)
+			}
+			d.Init()
+			return nil
+		})
+	}
+	d.items.Set(key, val)
 	d.markItemsKeyDirty(key, val)
 }
 
 func (d *HeroDao) DelItems(key int64) {
-	if d.Items == nil {
+	if d.items == nil {
 		return
 	}
-	if d.Items.Delete(key) {
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old, existed := d.items.Get(key)
+		_ = tx.RecordUndoToken(d, heroDaoFieldItems, key, func() error {
+			if existed {
+				d.items.Set(key, old)
+				d.Init()
+			}
+			return nil
+		})
+	}
+	if d.items.Delete(key) {
 		d.markItemsKeyDeleted(key)
 	}
 }
 
 func (d *HeroDao) RangeItems(f func(key int64, val int32) bool) {
-	if d.Items == nil || f == nil {
+	if d.items == nil || f == nil {
 		return
 	}
-	d.Items.Range(f)
+	d.items.Range(f)
 }
 
 func (d *HeroDao) ItemsLen() int {
-	if d.Items == nil {
+	if d.items == nil {
 		return 0
 	}
-	return d.Items.Len()
+	return d.items.Len()
 }
 
 func (d *HeroDao) AddFriends(v int64) {
-	d.Friends = append(d.Friends, v)
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old := d.friends
+		_ = tx.RecordUndo(d, heroDaoFieldFriends, func() error {
+			d.friends = old
+			d.Init()
+			return nil
+		})
+	}
+	d.friends = append(d.friends, v)
 	d.markFriendsDirty()
 }
 
 func (d *HeroDao) SetFriendsAll(v []int64) {
-	d.Friends = v
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old := d.friends
+		_ = tx.RecordUndo(d, heroDaoFieldFriends, func() error {
+			d.friends = old
+			d.Init()
+			return nil
+		})
+	}
+	d.friends = append([]int64(nil), v...)
 	d.markFriendsDirty()
 }
 
 func (d *HeroDao) RangeFriends(f func(idx int, val int64) bool) {
-	for i, v := range d.Friends {
+	if f == nil {
+		return
+	}
+	for i, v := range d.friends {
 		if !f(i, v) {
 			break
 		}
@@ -299,66 +381,96 @@ func (d *HeroDao) RangeFriends(f func(idx int, val int64) bool) {
 }
 
 func (d *HeroDao) FriendsLen() int {
-	return len(d.Friends)
+	return len(d.friends)
 }
 
 func (d *HeroDao) SetPos(v Position) {
-	d.Pos = v
-	d.Pos.SetNotify(d.markPosDirty)
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old := d.pos
+		_ = tx.RecordUndo(d, heroDaoFieldPos, func() error {
+			d.pos = old
+			d.pos.SetNotify(d.markPosDirty)
+			return nil
+		})
+	}
+	d.pos = v
+	d.pos.SetNotify(d.markPosDirty)
 	d.markPosDirty()
 }
 
 func (d *HeroDao) GetEquips(key int64) (*EquipInfo, bool) {
-	if d.Equips == nil {
+	if d.equips == nil {
 		var zero *EquipInfo
 		return zero, false
 	}
-	return d.Equips.Get(key)
+	return d.equips.Get(key)
 }
 
 func (d *HeroDao) SetEquips(key int64, val *EquipInfo) {
-	if d.Equips == nil {
-		d.Equips = fmap.NewSmallSafeMap[int64, *EquipInfo](0)
+	if d.equips == nil {
+		d.equips = fmap.NewSmallSafeMap[int64, *EquipInfo](0)
+	}
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old, existed := d.equips.Get(key)
+		_ = tx.RecordUndoToken(d, heroDaoFieldEquips, key, func() error {
+			if existed {
+				d.equips.Set(key, old)
+			} else {
+				d.equips.Delete(key)
+			}
+			d.Init()
+			return nil
+		})
 	}
 	if val != nil {
 		val.SetNotify(func() { d.markEquipsKeyDirty(key, val) })
 	}
-	d.Equips.Set(key, val)
+	d.equips.Set(key, val)
 	d.markEquipsKeyDirty(key, val)
 }
 
 func (d *HeroDao) DelEquips(key int64) {
-	if d.Equips == nil {
+	if d.equips == nil {
 		return
 	}
-	if v, ok := d.Equips.Get(key); ok && v != nil {
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old, existed := d.equips.Get(key)
+		_ = tx.RecordUndoToken(d, heroDaoFieldEquips, key, func() error {
+			if existed {
+				d.equips.Set(key, old)
+				d.Init()
+			}
+			return nil
+		})
+	}
+	if v, ok := d.equips.Get(key); ok && v != nil {
 		v.SetNotify(nil)
 	}
-	if d.Equips.Delete(key) {
+	if d.equips.Delete(key) {
 		d.markEquipsKeyDeleted(key)
 	}
 }
 
 func (d *HeroDao) RangeEquips(f func(key int64, val *EquipInfo) bool) {
-	if d.Equips == nil || f == nil {
+	if d.equips == nil || f == nil {
 		return
 	}
-	d.Equips.Range(f)
+	d.equips.Range(f)
 }
 
 func (d *HeroDao) EquipsLen() int {
-	if d.Equips == nil {
+	if d.equips == nil {
 		return 0
 	}
-	return d.Equips.Len()
+	return d.equips.Len()
 }
 
 func (d *HeroDao) heroDaoItemsRawMap() map[int64]int32 {
-	if d.Items == nil {
+	if d.items == nil {
 		return nil
 	}
-	ret := make(map[int64]int32, d.Items.Len())
-	d.Items.Range(func(key int64, val int32) bool {
+	ret := make(map[int64]int32, d.items.Len())
+	d.items.Range(func(key int64, val int32) bool {
 		ret[key] = val
 		return true
 	})
@@ -366,18 +478,18 @@ func (d *HeroDao) heroDaoItemsRawMap() map[int64]int32 {
 }
 
 func (d *HeroDao) setItemsRawMap(src map[int64]int32) {
-	d.Items = fmap.NewSmallSafeMap[int64, int32](len(src))
+	d.items = fmap.NewSmallSafeMap[int64, int32](len(src))
 	for key, val := range src {
-		d.Items.Set(key, val)
+		d.items.Set(key, val)
 	}
 }
 
 func (d *HeroDao) heroDaoEquipsRawMap() map[int64]*EquipInfo {
-	if d.Equips == nil {
+	if d.equips == nil {
 		return nil
 	}
-	ret := make(map[int64]*EquipInfo, d.Equips.Len())
-	d.Equips.Range(func(key int64, val *EquipInfo) bool {
+	ret := make(map[int64]*EquipInfo, d.equips.Len())
+	d.equips.Range(func(key int64, val *EquipInfo) bool {
 		ret[key] = val
 		return true
 	})
@@ -385,17 +497,115 @@ func (d *HeroDao) heroDaoEquipsRawMap() map[int64]*EquipInfo {
 }
 
 func (d *HeroDao) setEquipsRawMap(src map[int64]*EquipInfo) {
-	d.Equips = fmap.NewSmallSafeMap[int64, *EquipInfo](len(src))
+	d.equips = fmap.NewSmallSafeMap[int64, *EquipInfo](len(src))
 	for key, val := range src {
 		if val != nil {
 			key, val := key, val
 			val.SetNotify(func() { d.markEquipsKeyDirty(key, val) })
 		}
-		d.Equips.Set(key, val)
+		d.equips.Set(key, val)
 	}
 }
 
 // --- Marshal (persist fields) ---
+
+// CaptureRollbackState is side-effect free. It includes transient and
+// sync-only fields plus pending path-patch state; persistence Marshal methods
+// are intentionally not reused because some of them consume patch metadata.
+func (d *HeroDao) CaptureRollbackState() ([]byte, error) {
+	type rollbackDoc struct {
+		Id         int64                `bson:"_id"`
+		PatchSet   map[string]any       `bson:"_rollback_patch_set"`
+		PatchUnset []string             `bson:"_rollback_patch_unset"`
+		PatchFull  map[string]bool      `bson:"_rollback_patch_full"`
+		Name       string               `bson:"name"`
+		Level      int32                `bson:"level"`
+		Exp        int64                `bson:"exp"`
+		LoginAt    int64                `bson:"login_at"`
+		Items      map[int64]int32      `bson:"items"`
+		Friends    []int64              `bson:"friends"`
+		Pos        Position             `bson:"pos"`
+		Equips     map[int64]*EquipInfo `bson:"equips"`
+	}
+	doc := rollbackDoc{
+		Id: d.id, PatchSet: d.persistPatchSet, PatchUnset: d.persistPatchUnset, PatchFull: d.persistPatchFull,
+		Name:    d.name,
+		Level:   d.level,
+		Exp:     d.exp,
+		LoginAt: d.loginAt,
+		Items:   d.heroDaoItemsRawMap(),
+		Friends: d.friends,
+		Pos:     d.pos,
+		Equips:  d.heroDaoEquipsRawMap(),
+	}
+	return bson.Marshal(doc)
+}
+
+func (d *HeroDao) RestoreRollbackState(raw []byte) error {
+	type rollbackDoc struct {
+		Id         int64                `bson:"_id"`
+		PatchSet   map[string]any       `bson:"_rollback_patch_set"`
+		PatchUnset []string             `bson:"_rollback_patch_unset"`
+		PatchFull  map[string]bool      `bson:"_rollback_patch_full"`
+		Name       string               `bson:"name"`
+		Level      int32                `bson:"level"`
+		Exp        int64                `bson:"exp"`
+		LoginAt    int64                `bson:"login_at"`
+		Items      map[int64]int32      `bson:"items"`
+		Friends    []int64              `bson:"friends"`
+		Pos        Position             `bson:"pos"`
+		Equips     map[int64]*EquipInfo `bson:"equips"`
+	}
+	var doc rollbackDoc
+	if err := bson.Unmarshal(raw, &doc); err != nil {
+		return err
+	}
+	d.id = doc.Id
+	d.persistPatchSet = doc.PatchSet
+	d.persistPatchUnset = doc.PatchUnset
+	d.persistPatchFull = doc.PatchFull
+	d.name = doc.Name
+	d.level = doc.Level
+	d.exp = doc.Exp
+	d.loginAt = doc.LoginAt
+	d.setItemsRawMap(doc.Items)
+	d.friends = doc.Friends
+	d.pos = doc.Pos
+	d.setEquipsRawMap(doc.Equips)
+	d.Init()
+	return nil
+}
+
+func (d *HeroDao) marshalCommitState() ([]byte, error) {
+	doc := bson.M{
+		"_id":      d.id,
+		"_schema":  HeroDaoSchemaVersion,
+		"name":     d.name,
+		"level":    d.level,
+		"exp":      d.exp,
+		"login_at": d.loginAt,
+		"items":    d.heroDaoItemsRawMap(),
+		"friends":  d.friends,
+		"pos":      d.pos,
+		"equips":   d.heroDaoEquipsRawMap(),
+	}
+	return bson.Marshal(doc)
+}
+
+func (d *HeroDao) PrepareCommit(tx *nest.RollbackTx) error {
+	if tx == nil || !d.tracker.HasPersistDirty() {
+		return nil
+	}
+	data, err := d.marshalCommitState()
+	if err != nil {
+		return fmt.Errorf("prepare commit %s/%d: %w", d.CollName(), d.id, err)
+	}
+	return tx.AddMutation(nest.EntityMutation{
+		EntityID: d.id, Database: d.DbName(), DatabaseScope: uint8(d.DbScope()), Resource: d.CollName(), Version: d.tracker.Version() + 1,
+		Mask:   d.tracker.PersistDirtyMask(),
+		Schema: HeroDaoSchemaVersion, Codec: "bson-full-v1", Data: data,
+	})
+}
 
 func (d *HeroDao) Marshal() []byte {
 	return d.MarshalPersist(checkpoint.DirtyAll)
@@ -414,13 +624,13 @@ func (d *HeroDao) marshalPersistData(mask uint64) []byte {
 	doc := bson.M{
 		"_id":      d.id,
 		"_schema":  HeroDaoSchemaVersion,
-		"name":     d.Name,
-		"level":    d.Level,
-		"exp":      d.Exp,
-		"login_at": d.LoginAt,
+		"name":     d.name,
+		"level":    d.level,
+		"exp":      d.exp,
+		"login_at": d.loginAt,
 		"items":    d.heroDaoItemsRawMap(),
-		"friends":  d.Friends,
-		"pos":      d.Pos,
+		"friends":  d.friends,
+		"pos":      d.pos,
 		"equips":   d.heroDaoEquipsRawMap(),
 	}
 	data, _ := bson.Marshal(doc)
@@ -438,16 +648,16 @@ func (d *HeroDao) MarshalPersistPatch(mask uint64) checkpoint.PersistPatch {
 	}
 	fullFields := make(map[string]bool)
 	if mask&heroDaoFieldName != 0 {
-		patch.Set["name"] = d.Name
+		patch.Set["name"] = d.name
 	}
 	if mask&heroDaoFieldLevel != 0 {
-		patch.Set["level"] = d.Level
+		patch.Set["level"] = d.level
 	}
 	if mask&heroDaoFieldExp != 0 {
-		patch.Set["exp"] = d.Exp
+		patch.Set["exp"] = d.exp
 	}
 	if mask&heroDaoFieldLoginAt != 0 {
-		patch.Set["login_at"] = d.LoginAt
+		patch.Set["login_at"] = d.loginAt
 	}
 	if mask&heroDaoFieldItems != 0 {
 		if d.persistPatchFull["items"] || !d.hasPersistPathPatch("items") {
@@ -456,10 +666,10 @@ func (d *HeroDao) MarshalPersistPatch(mask uint64) checkpoint.PersistPatch {
 		}
 	}
 	if mask&heroDaoFieldFriends != 0 {
-		patch.Set["friends"] = d.Friends
+		patch.Set["friends"] = d.friends
 	}
 	if mask&heroDaoFieldPos != 0 {
-		patch.Set["pos"] = d.Pos
+		patch.Set["pos"] = d.pos
 	}
 	if mask&heroDaoFieldEquips != 0 {
 		if d.persistPatchFull["equips"] || !d.hasPersistPathPatch("equips") {
@@ -479,22 +689,22 @@ func (d *HeroDao) MarshalSync(mask uint64) []byte {
 		"_id": d.id,
 	}
 	if mask&heroDaoFieldName != 0 {
-		doc["name"] = d.Name
+		doc["name"] = d.name
 	}
 	if mask&heroDaoFieldLevel != 0 {
-		doc["level"] = d.Level
+		doc["level"] = d.level
 	}
 	if mask&heroDaoFieldExp != 0 {
-		doc["exp"] = d.Exp
+		doc["exp"] = d.exp
 	}
 	if mask&heroDaoFieldItems != 0 {
 		doc["items"] = d.heroDaoItemsRawMap()
 	}
 	if mask&heroDaoFieldFriends != 0 {
-		doc["friends"] = d.Friends
+		doc["friends"] = d.friends
 	}
 	if mask&heroDaoFieldPos != 0 {
-		doc["pos"] = d.Pos
+		doc["pos"] = d.pos
 	}
 	if mask&heroDaoFieldEquips != 0 {
 		doc["equips"] = d.heroDaoEquipsRawMap()
@@ -522,7 +732,7 @@ func (d *HeroDao) ApplySync(raw []byte) error {
 		if err := bson.Unmarshal(data, &wrap); err != nil {
 			return err
 		}
-		d.Name = wrap.V
+		d.name = wrap.V
 	}
 	if v, ok := doc["level"]; ok {
 		data, err := bson.Marshal(bson.M{"v": v})
@@ -535,7 +745,7 @@ func (d *HeroDao) ApplySync(raw []byte) error {
 		if err := bson.Unmarshal(data, &wrap); err != nil {
 			return err
 		}
-		d.Level = wrap.V
+		d.level = wrap.V
 	}
 	if v, ok := doc["exp"]; ok {
 		data, err := bson.Marshal(bson.M{"v": v})
@@ -548,7 +758,7 @@ func (d *HeroDao) ApplySync(raw []byte) error {
 		if err := bson.Unmarshal(data, &wrap); err != nil {
 			return err
 		}
-		d.Exp = wrap.V
+		d.exp = wrap.V
 	}
 	if v, ok := doc["items"]; ok {
 		data, err := bson.Marshal(bson.M{"v": v})
@@ -574,7 +784,7 @@ func (d *HeroDao) ApplySync(raw []byte) error {
 		if err := bson.Unmarshal(data, &wrap); err != nil {
 			return err
 		}
-		d.Friends = wrap.V
+		d.friends = wrap.V
 	}
 	if v, ok := doc["pos"]; ok {
 		data, err := bson.Marshal(bson.M{"v": v})
@@ -587,7 +797,7 @@ func (d *HeroDao) ApplySync(raw []byte) error {
 		if err := bson.Unmarshal(data, &wrap); err != nil {
 			return err
 		}
-		d.Pos = wrap.V
+		d.pos = wrap.V
 	}
 	if v, ok := doc["equips"]; ok {
 		data, err := bson.Marshal(bson.M{"v": v})
@@ -625,15 +835,37 @@ func (d *HeroDao) Unmarshal(raw []byte) error {
 		return err
 	}
 	d.id = dd.Id
-	d.Name = dd.Name
-	d.Level = dd.Level
-	d.Exp = dd.Exp
-	d.LoginAt = dd.LoginAt
+	d.name = dd.Name
+	d.level = dd.Level
+	d.exp = dd.Exp
+	d.loginAt = dd.LoginAt
 	d.setItemsRawMap(dd.Items)
-	d.Friends = dd.Friends
-	d.Pos = dd.Pos
+	d.friends = dd.Friends
+	d.pos = dd.Pos
 	d.setEquipsRawMap(dd.Equips)
 	d.Init()
+	return nil
+}
+
+// RestorePersisted is the single production hydration path used by the
+// checkpoint aggregate repository. Migration and tracker restoration happen
+// before the DAO is published through its entity.
+func (d *HeroDao) RestorePersisted(raw []byte, schemaVersion uint32, version uint64) error {
+	if schemaVersion > HeroDaoSchemaVersion {
+		return fmt.Errorf("dao HeroDao: stored schema %d is newer than runtime schema %d", schemaVersion, HeroDaoSchemaVersion)
+	}
+	var err error
+	if schemaVersion < HeroDaoSchemaVersion {
+		raw, err = d.Migrate(raw, schemaVersion)
+		if err != nil {
+			return fmt.Errorf("dao HeroDao: migrate schema %d to %d: %w", schemaVersion, HeroDaoSchemaVersion, err)
+		}
+	}
+	if err := d.Unmarshal(raw); err != nil {
+		return err
+	}
+	d.tracker.SetVersion(version)
+	d.CleanDirty()
 	return nil
 }
 

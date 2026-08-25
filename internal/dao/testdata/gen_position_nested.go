@@ -3,25 +3,38 @@ package testdata
 
 import (
 	"github.com/tjbdwanghaibo/cube-core/checkpoint"
+	"github.com/tjbdwanghaibo/cube-core/nest"
 )
 
 // Position is a nested struct with dirty propagation.
 type Position struct {
 	checkpoint.DirtyHook
-	X int32
-	Y int32
+	x int32
+	y int32
 }
 
+func (s *Position) GetX() int32 { return s.x }
+
+func (s *Position) GetY() int32 { return s.y }
+
 func (s *Position) SetX(v int32) {
-	if s.X != v {
-		s.X = v
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old := s.x
+		_ = tx.RecordUndo(s, uint64(0), func() error { s.x = old; return nil })
+	}
+	if s.x != v {
+		s.x = v
 		s.Mark()
 	}
 }
 
 func (s *Position) SetY(v int32) {
-	if s.Y != v {
-		s.Y = v
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old := s.y
+		_ = tx.RecordUndo(s, uint64(1), func() error { s.y = old; return nil })
+	}
+	if s.y != v {
+		s.y = v
 		s.Mark()
 	}
 }

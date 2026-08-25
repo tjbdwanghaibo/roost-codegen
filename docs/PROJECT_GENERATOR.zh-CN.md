@@ -16,11 +16,11 @@ roost-codegen 用一份 roost.yaml 管理项目结构、Service、Kit Mod、代�
 
 推荐直接运行固定发布版本，不需要把 codegen 加进业务 module：
 
-    go run github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.3.0 help
+    go run github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.4.0 help
 
 也可以安装本地命令：
 
-    go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.3.0
+    go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.4.0
     roost help
 
 生产项目不要在 Makefile 或 CI 中使用 @latest。创建项目时可以查询最新版本，但落盘后必须固定版本。
@@ -49,7 +49,7 @@ Go bin 目录：
 例如当前 `GOPATH` 为 `D:\Program Files\Go\bin` 且 `GOBIN` 为空时，需要加入
 PATH 的目录就是 `D:\Program Files\Go\bin\bin`。关闭并重新打开 PowerShell 后执行：
 
-    go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.3.0
+    go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.4.0
     Get-Command roost
     roost help
 
@@ -85,10 +85,10 @@ PATH 的目录就是 `D:\Program Files\Go\bin\bin`。关闭并重新打开 Power
 固定依赖版本：
 
     roost project new planet \
-      -roost-core-version v1.3.0 \
-      -roost-kit-version v1.3.0 \
+      -roost-core-version v1.4.0 \
+      -roost-kit-version v1.4.0 \
       -roost-skill-version v1.0.0 \
-      -codegen-version v1.3.0
+      -codegen-version v1.4.0
 
 默认生成：
 
@@ -119,10 +119,10 @@ PATH 的目录就是 `D:\Program Files\Go\bin\bin`。关闭并重新打开 Power
       name: planet
       module: github.com/acme/planet
     versions:
-      core: v1.3.0
-      kit: v1.3.0
+      core: v1.4.0
+      kit: v1.4.0
       skill: v1.0.0
-      codegen: v1.3.0
+      codegen: v1.4.0
     shared_mods:
       - lock
       - ops
@@ -191,6 +191,32 @@ Core 会根据 DependsOn 排序生命周期。生成器负责补齐必需依赖�
     roost add dao Player
     roost add webroute AdminQuery
     roost add errcode InvalidRequest
+    roost add mod saga -service game
+    roost add saga AllianceRally -service game -steps ReserveTroops,CreateMarch,CreateRally
+
+Saga 命令会自动给目标 Service 添加 `saga`、`nestwal` 及其传递依赖，并生成
+`saga/alliance_rally/definition.go`，其中包含类型、步骤、重试、
+补偿 topic、`Register`、`EmitStart` 和幂等 `Start` 入口。业务 Nest handler 必须调用
+`EmitStart`，使 Entity mutation 与 Saga 启动意图进入同一个 WAL record；`Start` 仅用于
+durable consumer、管理和恢复路径。生成的 bootstrap 会把 manifest 中的
+定义传给 Saga Mod；自定义装配时才需要调用 `Register`。步骤消费者使用
+`cube-kit/saga.SubscribeStep`，并把
+每个 command 的 `IdempotencyKey` 作为本地预留/确认/释放操作的唯一键；不要以
+投递次数或 `CommandID` 作为业务幂等键。
+
+每个步骤还会生成 `Subscribe<Step>` 和 `Subscribe<Step>Compensation`，不同服务
+只订阅自己拥有的步骤。调用者显式传入 stream 和 durable；同一逻辑服务的多个
+副本应共享 durable，不同处理器不得复用 durable。
+
+每个骨架还会生成 `Definitions()`。修改步骤顺序或补偿语义时递增 `Version`，把旧定义
+保留在 `Definitions()` 中；bootstrap 会注册全部仍在运行的版本。通过
+`Engine.List` 确认旧版本已无非终态记录后，才能删除旧定义。
+
+生成配置把 coordinator/publisher 的 claim batch 分开，并限制 `max_ack_pending`、
+Mongo 操作时间、NAK 指数退避和 stream 最大磁盘占用。生产集群应把 Saga 与 Nest
+effect stream 的 `replicas` 调整为 3；`start_effect_durable` 在同一 NATS domain 内必须
+按应用唯一、在同一应用的所有 coordinator 副本间保持一致。扩容优先增加固定 worker，
+修改 batch/timeout 时必须满足生成器文档中的 lease 预算并重新压测。
 
 protocol、entity、component 默认从 roost.yaml 的 ID 空间分配下一个空闲 ID，也可以使用 -id 显式指定。
 
@@ -199,6 +225,7 @@ Makefile 也提供了对应入口，例如：
     make new-protocol NAME=PlayerLogin GROUP=game
     make new-table NAME=Item
     make new-service NAME=chat MODS=etcd,redis,nats
+    make new-saga NAME=AllianceRally SERVICE=game STEPS=ReserveTroops,CreateMarch,CreateRally
 
 生成业务骨架后运行：
 
@@ -250,7 +277,7 @@ check-generated 会复制项目到临时目录，在副本中执行全部生成�
 
 独立调用：
 
-    go run github.com/tjbdwanghaibo/roost-codegen/cmd/protocol@v1.3.0 \
+    go run github.com/tjbdwanghaibo/roost-codegen/cmd/protocol@v1.4.0 \
       -def ./protocol/def \
       -bind "" \
       -handlers "" \
@@ -307,7 +334,7 @@ Core 已经通过 RegisterServer 自动创建 Cobra 子命令，业务层不需�
     make vet
     make test
     make test-race
-    make build VERSION=v1.3.0
+    make build VERSION=v1.4.0
     make ci
 
 build 使用 ldflags 注入 Core buildinfo 的 Version、Commit、BuildTime 和 Dirty。
@@ -329,10 +356,10 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 升级固定版本：
 
     roost project upgrade \
-      -core v1.3.0 \
-      -kit v1.3.0 \
+      -core v1.4.0 \
+      -kit v1.4.0 \
       -skill v1.0.1 \
-      -codegen v1.3.0
+      -codegen v1.4.0
 
 升级只更新 roost.yaml 和生成器管理的文件。业务代码和业务配置保留。
 

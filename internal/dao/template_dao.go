@@ -18,12 +18,12 @@ import (
 // {{.Dao.Name}} is the DAO for collection "{{.Dao.Coll}}".
 type {{.Dao.Name}} struct {
 	id      int64
-	Tracker checkpoint.DirtyTracker
+	tracker checkpoint.DirtyTracker
 	persistPatchSet map[string]any
 	persistPatchUnset []string
 	persistPatchFull map[string]bool
 {{- range .Dao.Fields}}
-	{{.Name}} {{fieldType .}}
+	{{fieldVar .Name}} {{fieldType .}}
 {{- end}}
 }
 
@@ -43,7 +43,7 @@ func New{{.Dao.Name}}() *{{.Dao.Name}} {
 	d := &{{.Dao.Name}}{}
 {{- range .Dao.Fields}}
 {{- if eq .Kind 2}}
-	d.{{.Name}} = {{mapNewExpr . "0"}}
+	d.{{fieldVar .Name}} = {{mapNewExpr . "0"}}
 {{- end}}
 {{- end}}
 	return d
@@ -56,9 +56,9 @@ func (d *{{.Dao.Name}}) DbScope() checkpoint.DatabaseScope { return {{dbScope .D
 func (d *{{.Dao.Name}}) CollName() string  { return {{daoCollConst .Dao.Name}} }
 func (d *{{.Dao.Name}}) SchemaVersion() uint32 { return {{.Dao.Name}}SchemaVersion }
 func (d *{{.Dao.Name}}) Migrate(raw []byte, from uint32) ([]byte, error) { return migration.MigrateDAO(d.CollName(), raw, from, {{.Dao.Name}}SchemaVersion) }
-func (d *{{.Dao.Name}}) Dirty() entity.IDirty { return &d.Tracker }
-func (d *{{.Dao.Name}}) CleanDirty()      { d.Tracker.SelfClean(); d.clearPersistPathPatch() }
-func (d *{{.Dao.Name}}) DirtyTracker() *checkpoint.DirtyTracker { return &d.Tracker }
+func (d *{{.Dao.Name}}) Dirty() entity.IDirty { return &d.tracker }
+func (d *{{.Dao.Name}}) CleanDirty()      { d.tracker.SelfClean(); d.clearPersistPathPatch() }
+func (d *{{.Dao.Name}}) DirtyTracker() *checkpoint.DirtyTracker { return &d.tracker }
 
 const (
 {{- range .Dao.Fields}}
@@ -68,7 +68,7 @@ const (
 
 {{range .Dao.Fields}}
 func (d *{{$.Dao.Name}}) mark{{.Name}}Dirty() {
-	d.Tracker.MarkScope({{dirtyScope .}}, {{fieldMaskName $.Dao.Name .Name}})
+	d.tracker.MarkScope({{dirtyScope .}}, {{fieldMaskName $.Dao.Name .Name}})
 }
 {{end}}
 
@@ -162,14 +162,20 @@ func (d *{{.Dao.Name}}) Init() {
 {{- range .Dao.Fields}}
 {{- if eq .Kind 3}}
 {{- if isNested .TypeStr}}
-	d.{{.Name}}.SetNotify(d.mark{{.Name}}Dirty)
+	{{- if .IsPtr}}
+	if d.{{fieldVar .Name}} != nil {
+		d.{{fieldVar .Name}}.SetNotify(d.mark{{.Name}}Dirty)
+	}
+	{{- else}}
+	d.{{fieldVar .Name}}.SetNotify(d.mark{{.Name}}Dirty)
+	{{- end}}
 {{- end}}
 {{- end}}
 {{- if eq .Kind 2}}
 {{- if .IsPtr}}
 {{- if isNested .MapVal}}
-	if d.{{.Name}} != nil {
-		d.{{.Name}}.Range(func(key {{.MapKey}}, v {{mapValType .}}) bool {
+	if d.{{fieldVar .Name}} != nil {
+		d.{{fieldVar .Name}}.Range(func(key {{.MapKey}}, v {{mapValType .}}) bool {
 			if v != nil {
 				key, v := key, v
 				v.SetNotify(func() { d.mark{{.Name}}KeyDirty(key, v) })
@@ -183,7 +189,7 @@ func (d *{{.Dao.Name}}) Init() {
 {{- if eq .Kind 1}}
 {{- if .IsPtr}}
 {{- if isNested .SliceElem}}
-	for _, v := range d.{{.Name}} {
+	for _, v := range d.{{fieldVar .Name}} {
 		v.SetNotify(d.mark{{.Name}}Dirty)
 	}
 {{- end}}
@@ -192,16 +198,39 @@ func (d *{{.Dao.Name}}) Init() {
 {{- end}}
 }
 
-// --- Setters ---
+// --- Accessors ---
+{{range .Dao.Fields}}
+{{- if eq .Kind 0}}
+func (d *{{$.Dao.Name}}) Get{{.Name}}() {{.TypeStr}} { return d.{{fieldVar .Name}} }
+{{end}}
+{{- if eq .Kind 3}}
+{{- if .IsPtr}}
+func (d *{{$.Dao.Name}}) Get{{.Name}}() {{.TypeStr}} { return d.{{fieldVar .Name}} }
+{{- else}}
+func (d *{{$.Dao.Name}}) Get{{.Name}}() *{{.TypeStr}} { return &d.{{fieldVar .Name}} }
+{{- end}}
+{{end}}
+{{- if eq .Kind 1}}
+func (d *{{$.Dao.Name}}) Get{{.Name}}(idx int) ({{if .IsPtr}}*{{.SliceElem}}{{else}}{{.SliceElem}}{{end}}, bool) {
+	if idx < 0 || idx >= len(d.{{fieldVar .Name}}) {
+		var zero {{if .IsPtr}}*{{.SliceElem}}{{else}}{{.SliceElem}}{{end}}
+		return zero, false
+	}
+	return d.{{fieldVar .Name}}[idx], true
+}
+{{end}}
+{{end}}
+
+// --- Mutators ---
 {{range dirtyFields .Dao.Fields}}
 {{- if eq .Kind 0}}
 func (d *{{$.Dao.Name}}) Set{{.Name}}(v {{.TypeStr}}) {
-	if d.{{.Name}} != v {
+	if d.{{fieldVar .Name}} != v {
 		if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
-			old := d.{{.Name}}
-			_ = tx.RecordUndo(d, {{fieldMaskName $.Dao.Name .Name}}, func() error { d.{{.Name}} = old; return nil })
+			old := d.{{fieldVar .Name}}
+			_ = tx.RecordUndo(d, {{fieldMaskName $.Dao.Name .Name}}, func() error { d.{{fieldVar .Name}} = old; return nil })
 		}
-		d.{{.Name}} = v
+		d.{{fieldVar .Name}} = v
 		d.mark{{.Name}}Dirty()
 	}
 }
@@ -209,39 +238,51 @@ func (d *{{$.Dao.Name}}) Set{{.Name}}(v {{.TypeStr}}) {
 {{- if eq .Kind 3}}
 func (d *{{$.Dao.Name}}) Set{{.Name}}(v {{.TypeStr}}) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
-		old := d.{{.Name}}
+		old := d.{{fieldVar .Name}}
 		_ = tx.RecordUndo(d, {{fieldMaskName $.Dao.Name .Name}}, func() error {
-			d.{{.Name}} = old
+			d.{{fieldVar .Name}} = old
 {{- if isNested .TypeStr}}
-			d.{{.Name}}.SetNotify(d.mark{{.Name}}Dirty)
+			{{- if .IsPtr}}
+			if d.{{fieldVar .Name}} != nil {
+				d.{{fieldVar .Name}}.SetNotify(d.mark{{.Name}}Dirty)
+			}
+			{{- else}}
+			d.{{fieldVar .Name}}.SetNotify(d.mark{{.Name}}Dirty)
+			{{- end}}
 {{- end}}
 			return nil
 		})
 	}
-	d.{{.Name}} = v
+	d.{{fieldVar .Name}} = v
 {{- if isNested .TypeStr}}
-	d.{{.Name}}.SetNotify(d.mark{{.Name}}Dirty)
+	{{- if .IsPtr}}
+	if d.{{fieldVar .Name}} != nil {
+		d.{{fieldVar .Name}}.SetNotify(d.mark{{.Name}}Dirty)
+	}
+	{{- else}}
+	d.{{fieldVar .Name}}.SetNotify(d.mark{{.Name}}Dirty)
+	{{- end}}
 {{- end}}
 	d.mark{{.Name}}Dirty()
 }
 {{end}}
 {{- if eq .Kind 2}}
 func (d *{{$.Dao.Name}}) Get{{.Name}}(key {{.MapKey}}) ({{if .IsPtr}}*{{.MapVal}}{{else}}{{.MapVal}}{{end}}, bool) {
-	if d.{{.Name}} == nil {
+	if d.{{fieldVar .Name}} == nil {
 		var zero {{mapValType .}}
 		return zero, false
 	}
-	return d.{{.Name}}.Get(key)
+	return d.{{fieldVar .Name}}.Get(key)
 }
 
 func (d *{{$.Dao.Name}}) Set{{.Name}}(key {{.MapKey}}, val {{if .IsPtr}}*{{.MapVal}}{{else}}{{.MapVal}}{{end}}) {
-	if d.{{.Name}} == nil {
-		d.{{.Name}} = {{mapNewExpr . "0"}}
+	if d.{{fieldVar .Name}} == nil {
+		d.{{fieldVar .Name}} = {{mapNewExpr . "0"}}
 	}
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
-		old, existed := d.{{.Name}}.Get(key)
+		old, existed := d.{{fieldVar .Name}}.Get(key)
 		_ = tx.RecordUndoToken(d, {{fieldMaskName $.Dao.Name .Name}}, key, func() error {
-			if existed { d.{{.Name}}.Set(key, old) } else { d.{{.Name}}.Delete(key) }
+			if existed { d.{{fieldVar .Name}}.Set(key, old) } else { d.{{fieldVar .Name}}.Delete(key) }
 			d.Init()
 			return nil
 		})
@@ -253,53 +294,53 @@ func (d *{{$.Dao.Name}}) Set{{.Name}}(key {{.MapKey}}, val {{if .IsPtr}}*{{.MapV
 	}
 {{- end}}
 {{- end}}
-	d.{{.Name}}.Set(key, val)
+	d.{{fieldVar .Name}}.Set(key, val)
 	d.mark{{.Name}}KeyDirty(key, val)
 }
 
 func (d *{{$.Dao.Name}}) Del{{.Name}}(key {{.MapKey}}) {
-	if d.{{.Name}} == nil {
+	if d.{{fieldVar .Name}} == nil {
 		return
 	}
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
-		old, existed := d.{{.Name}}.Get(key)
+		old, existed := d.{{fieldVar .Name}}.Get(key)
 		_ = tx.RecordUndoToken(d, {{fieldMaskName $.Dao.Name .Name}}, key, func() error {
-			if existed { d.{{.Name}}.Set(key, old); d.Init() }
+			if existed { d.{{fieldVar .Name}}.Set(key, old); d.Init() }
 			return nil
 		})
 	}
 {{- if .IsPtr}}
 {{- if isNested .MapVal}}
-	if v, ok := d.{{.Name}}.Get(key); ok && v != nil {
+	if v, ok := d.{{fieldVar .Name}}.Get(key); ok && v != nil {
 		v.SetNotify(nil)
 	}
 {{- end}}
 {{- end}}
-	if d.{{.Name}}.Delete(key) {
+	if d.{{fieldVar .Name}}.Delete(key) {
 		d.mark{{.Name}}KeyDeleted(key)
 	}
 }
 
 func (d *{{$.Dao.Name}}) Range{{.Name}}(f func(key {{.MapKey}}, val {{if .IsPtr}}*{{.MapVal}}{{else}}{{.MapVal}}{{end}}) bool) {
-	if d.{{.Name}} == nil || f == nil {
+	if d.{{fieldVar .Name}} == nil || f == nil {
 		return
 	}
-	d.{{.Name}}.Range(f)
+	d.{{fieldVar .Name}}.Range(f)
 }
 
 func (d *{{$.Dao.Name}}) {{.Name}}Len() int {
-	if d.{{.Name}} == nil {
+	if d.{{fieldVar .Name}} == nil {
 		return 0
 	}
-	return d.{{.Name}}.Len()
+	return d.{{fieldVar .Name}}.Len()
 }
 {{end}}
 {{- if eq .Kind 1}}
 func (d *{{$.Dao.Name}}) Add{{.Name}}(v {{if .IsPtr}}*{{.SliceElem}}{{else}}{{.SliceElem}}{{end}}) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
-		old := d.{{.Name}}
+		old := d.{{fieldVar .Name}}
 		_ = tx.RecordUndo(d, {{fieldMaskName $.Dao.Name .Name}}, func() error {
-			d.{{.Name}} = old
+			d.{{fieldVar .Name}} = old
 			d.Init()
 			return nil
 		})
@@ -309,15 +350,15 @@ func (d *{{$.Dao.Name}}) Add{{.Name}}(v {{if .IsPtr}}*{{.SliceElem}}{{else}}{{.S
 	v.SetNotify(d.mark{{.Name}}Dirty)
 {{- end}}
 {{- end}}
-	d.{{.Name}} = append(d.{{.Name}}, v)
+	d.{{fieldVar .Name}} = append(d.{{fieldVar .Name}}, v)
 	d.mark{{.Name}}Dirty()
 }
 
 func (d *{{$.Dao.Name}}) Set{{.Name}}All(v {{.TypeStr}}) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
-		old := d.{{.Name}}
+		old := d.{{fieldVar .Name}}
 		_ = tx.RecordUndo(d, {{fieldMaskName $.Dao.Name .Name}}, func() error {
-			d.{{.Name}} = old
+			d.{{fieldVar .Name}} = old
 			d.Init()
 			return nil
 		})
@@ -329,12 +370,15 @@ func (d *{{$.Dao.Name}}) Set{{.Name}}All(v {{.TypeStr}}) {
 	}
 {{- end}}
 {{- end}}
-	d.{{.Name}} = v
+	d.{{fieldVar .Name}} = append({{.TypeStr}}(nil), v...)
 	d.mark{{.Name}}Dirty()
 }
 
 func (d *{{$.Dao.Name}}) Range{{.Name}}(f func(idx int, val {{if .IsPtr}}*{{.SliceElem}}{{else}}{{.SliceElem}}{{end}}) bool) {
-	for i, v := range d.{{.Name}} {
+	if f == nil {
+		return
+	}
+	for i, v := range d.{{fieldVar .Name}} {
 		if !f(i, v) {
 			break
 		}
@@ -342,7 +386,7 @@ func (d *{{$.Dao.Name}}) Range{{.Name}}(f func(idx int, val {{if .IsPtr}}*{{.Sli
 }
 
 func (d *{{$.Dao.Name}}) {{.Name}}Len() int {
-	return len(d.{{.Name}})
+	return len(d.{{fieldVar .Name}})
 }
 {{end}}
 {{- end}}
@@ -350,11 +394,11 @@ func (d *{{$.Dao.Name}}) {{.Name}}Len() int {
 {{range .Dao.Fields}}
 {{- if eq .Kind 2}}
 func (d *{{$.Dao.Name}}) {{mapHelperName $.Dao.Name .Name}}() {{rawMapType .}} {
-	if d.{{.Name}} == nil {
+	if d.{{fieldVar .Name}} == nil {
 		return nil
 	}
-	ret := make({{rawMapType .}}, d.{{.Name}}.Len())
-	d.{{.Name}}.Range(func(key {{.MapKey}}, val {{mapValType .}}) bool {
+	ret := make({{rawMapType .}}, d.{{fieldVar .Name}}.Len())
+	d.{{fieldVar .Name}}.Range(func(key {{.MapKey}}, val {{mapValType .}}) bool {
 		ret[key] = val
 		return true
 	})
@@ -362,7 +406,7 @@ func (d *{{$.Dao.Name}}) {{mapHelperName $.Dao.Name .Name}}() {{rawMapType .}} {
 }
 
 func (d *{{$.Dao.Name}}) set{{.Name}}RawMap(src {{rawMapType .}}) {
-	d.{{.Name}} = {{mapNewExpr . "len(src)"}}
+	d.{{fieldVar .Name}} = {{mapNewExpr . "len(src)"}}
 	for key, val := range src {
 {{- if .IsPtr}}
 {{- if isNested .MapVal}}
@@ -372,7 +416,7 @@ func (d *{{$.Dao.Name}}) set{{.Name}}RawMap(src {{rawMapType .}}) {
 		}
 {{- end}}
 {{- end}}
-		d.{{.Name}}.Set(key, val)
+		d.{{fieldVar .Name}}.Set(key, val)
 	}
 }
 {{end}}
@@ -399,7 +443,7 @@ func (d *{{.Dao.Name}}) CaptureRollbackState() ([]byte, error) {
 {{- if eq .Kind 2}}
 		{{.Name}}: d.{{mapHelperName $.Dao.Name .Name}}(),
 {{- else}}
-		{{.Name}}: d.{{.Name}},
+		{{.Name}}: d.{{fieldVar .Name}},
 {{- end}}
 {{- end}}
 	}
@@ -426,7 +470,7 @@ func (d *{{.Dao.Name}}) RestoreRollbackState(raw []byte) error {
 {{- if eq .Kind 2}}
 	d.set{{.Name}}RawMap(doc.{{.Name}})
 {{- else}}
-	d.{{.Name}} = doc.{{.Name}}
+	d.{{fieldVar .Name}} = doc.{{.Name}}
 {{- end}}
 {{- end}}
 	d.Init()
@@ -441,7 +485,7 @@ func (d *{{.Dao.Name}}) marshalCommitState() ([]byte, error) {
 {{- if eq .Kind 2}}
 		"{{bsonKey .Name}}": d.{{mapHelperName $.Dao.Name .Name}}(),
 {{- else}}
-		"{{bsonKey .Name}}": d.{{.Name}},
+		"{{bsonKey .Name}}": d.{{fieldVar .Name}},
 {{- end}}
 {{- end}}
 	}
@@ -449,12 +493,12 @@ func (d *{{.Dao.Name}}) marshalCommitState() ([]byte, error) {
 }
 
 func (d *{{.Dao.Name}}) PrepareCommit(tx *nest.RollbackTx) error {
-	if tx == nil || !d.Tracker.HasPersistDirty() { return nil }
+	if tx == nil || !d.tracker.HasPersistDirty() { return nil }
 	data, err := d.marshalCommitState()
 	if err != nil { return fmt.Errorf("prepare commit %s/%d: %w", d.CollName(), d.id, err) }
 	return tx.AddMutation(nest.EntityMutation{
-		EntityID: d.id, Database: d.DbName(), DatabaseScope: uint8(d.DbScope()), Resource: d.CollName(), Version: d.Tracker.Version() + 1,
-		Mask: d.Tracker.PersistDirtyMask(),
+		EntityID: d.id, Database: d.DbName(), DatabaseScope: uint8(d.DbScope()), Resource: d.CollName(), Version: d.tracker.Version() + 1,
+		Mask: d.tracker.PersistDirtyMask(),
 		Schema: {{.Dao.Name}}SchemaVersion, Codec: "bson-full-v1", Data: data,
 	})
 }
@@ -480,7 +524,7 @@ func (d *{{.Dao.Name}}) marshalPersistData(mask uint64) []byte {
 {{- if eq .Kind 2}}
 		"{{bsonKey .Name}}": d.{{mapHelperName $.Dao.Name .Name}}(),
 {{- else}}
-		"{{bsonKey .Name}}": d.{{.Name}},
+		"{{bsonKey .Name}}": d.{{fieldVar .Name}},
 {{- end}}
 {{- end}}
 	}
@@ -506,7 +550,7 @@ func (d *{{.Dao.Name}}) MarshalPersistPatch(mask uint64) checkpoint.PersistPatch
 			fullFields["{{bsonKey .Name}}"] = true
 		}
 {{- else}}
-		patch.Set["{{bsonKey .Name}}"] = d.{{.Name}}
+		patch.Set["{{bsonKey .Name}}"] = d.{{fieldVar .Name}}
 {{- end}}
 	}
 {{- end}}
@@ -526,7 +570,7 @@ func (d *{{.Dao.Name}}) MarshalSync(mask uint64) []byte {
 {{- if eq .Kind 2}}
 		doc["{{bsonKey .Name}}"] = d.{{mapHelperName $.Dao.Name .Name}}()
 {{- else}}
-		doc["{{bsonKey .Name}}"] = d.{{.Name}}
+		doc["{{bsonKey .Name}}"] = d.{{fieldVar .Name}}
 {{- end}}
 	}
 {{- end}}
@@ -557,7 +601,7 @@ func (d *{{.Dao.Name}}) ApplySync(raw []byte) error {
 {{- if eq .Kind 2}}
 		d.set{{.Name}}RawMap(wrap.V)
 {{- else}}
-		d.{{.Name}} = wrap.V
+		d.{{fieldVar .Name}} = wrap.V
 {{- end}}
 	}
 {{- end}}
@@ -583,7 +627,7 @@ func (d *{{.Dao.Name}}) Unmarshal(raw []byte) error {
 {{- if eq .Kind 2}}
 	d.set{{.Name}}RawMap(dd.{{.Name}})
 {{- else}}
-	d.{{.Name}} = dd.{{.Name}}
+	d.{{fieldVar .Name}} = dd.{{.Name}}
 {{- end}}
 {{- end}}
 	d.Init()
@@ -607,7 +651,7 @@ func (d *{{.Dao.Name}}) RestorePersisted(raw []byte, schemaVersion uint32, versi
 	if err := d.Unmarshal(raw); err != nil {
 		return err
 	}
-	d.Tracker.SetVersion(version)
+	d.tracker.SetVersion(version)
 	d.CleanDirty()
 	return nil
 }

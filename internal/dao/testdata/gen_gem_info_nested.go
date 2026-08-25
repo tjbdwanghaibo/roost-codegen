@@ -3,25 +3,38 @@ package testdata
 
 import (
 	"github.com/tjbdwanghaibo/cube-core/checkpoint"
+	"github.com/tjbdwanghaibo/cube-core/nest"
 )
 
 // GemInfo is a nested struct with dirty propagation.
 type GemInfo struct {
 	checkpoint.DirtyHook
-	ID    int32
-	Level int32
+	id    int32
+	level int32
 }
 
+func (s *GemInfo) GetID() int32 { return s.id }
+
+func (s *GemInfo) GetLevel() int32 { return s.level }
+
 func (s *GemInfo) SetID(v int32) {
-	if s.ID != v {
-		s.ID = v
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old := s.id
+		_ = tx.RecordUndo(s, uint64(0), func() error { s.id = old; return nil })
+	}
+	if s.id != v {
+		s.id = v
 		s.Mark()
 	}
 }
 
 func (s *GemInfo) SetLevel(v int32) {
-	if s.Level != v {
-		s.Level = v
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old := s.level
+		_ = tx.RecordUndo(s, uint64(1), func() error { s.level = old; return nil })
+	}
+	if s.level != v {
+		s.level = v
 		s.Mark()
 	}
 }

@@ -15,28 +15,80 @@ import (
 type {{.Nested.Name}} struct {
 	checkpoint.DirtyHook
 {{- range .Nested.Fields}}
-	{{.Name}} {{fieldType .}}
+	{{fieldVar .Name}} {{fieldType .}}
 {{- end}}
 }
+{{range .Nested.Fields}}
+{{- if eq .Kind 0}}
+func (s *{{$.Nested.Name}}) Get{{.Name}}() {{.TypeStr}} { return s.{{fieldVar .Name}} }
+{{end}}
+{{- if eq .Kind 3}}
+{{- if .IsPtr}}
+func (s *{{$.Nested.Name}}) Get{{.Name}}() {{.TypeStr}} { return s.{{fieldVar .Name}} }
+{{- else}}
+func (s *{{$.Nested.Name}}) Get{{.Name}}() *{{.TypeStr}} { return &s.{{fieldVar .Name}} }
+{{- end}}
+{{end}}
+{{- if eq .Kind 1}}
+func (s *{{$.Nested.Name}}) Get{{.Name}}(idx int) ({{if .IsPtr}}*{{.SliceElem}}{{else}}{{.SliceElem}}{{end}}, bool) {
+	if idx < 0 || idx >= len(s.{{fieldVar .Name}}) {
+		var zero {{if .IsPtr}}*{{.SliceElem}}{{else}}{{.SliceElem}}{{end}}
+		return zero, false
+	}
+	return s.{{fieldVar .Name}}[idx], true
+}
+
+func (s *{{$.Nested.Name}}) Range{{.Name}}(f func(idx int, val {{if .IsPtr}}*{{.SliceElem}}{{else}}{{.SliceElem}}{{end}}) bool) {
+	if f == nil { return }
+	for idx, val := range s.{{fieldVar .Name}} {
+		if !f(idx, val) { return }
+	}
+}
+
+func (s *{{$.Nested.Name}}) {{.Name}}Len() int { return len(s.{{fieldVar .Name}}) }
+{{end}}
+{{- if eq .Kind 2}}
+func (s *{{$.Nested.Name}}) Get{{.Name}}(key {{.MapKey}}) ({{mapValType .}}, bool) {
+	if s.{{fieldVar .Name}} == nil {
+		var zero {{mapValType .}}
+		return zero, false
+	}
+	return s.{{fieldVar .Name}}.Get(key)
+}
+
+func (s *{{$.Nested.Name}}) Range{{.Name}}(f func(key {{.MapKey}}, val {{mapValType .}}) bool) {
+	if s.{{fieldVar .Name}} == nil || f == nil { return }
+	s.{{fieldVar .Name}}.Range(f)
+}
+
+func (s *{{$.Nested.Name}}) {{.Name}}Len() int {
+	if s.{{fieldVar .Name}} == nil { return 0 }
+	return s.{{fieldVar .Name}}.Len()
+}
+{{end}}
+{{end}}
 {{range $idx, $field := .Nested.Fields}}
 func (s *{{$.Nested.Name}}) Set{{.Name}}(v {{if eq .Kind 2}}{{rawMapType .}}{{else}}{{.TypeStr}}{{end}}) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
-		old := s.{{.Name}}
-		_ = tx.RecordUndo(s, uint64({{$idx}}), func() error { s.{{.Name}} = old; return nil })
+		old := s.{{fieldVar .Name}}
+		_ = tx.RecordUndo(s, uint64({{$idx}}), func() error { s.{{fieldVar .Name}} = old; return nil })
 	}
 {{- if eq .Kind 0}}
-	if s.{{.Name}} != v {
-		s.{{.Name}} = v
+	if s.{{fieldVar .Name}} != v {
+		s.{{fieldVar .Name}} = v
 		s.Mark()
 	}
 {{- else if eq .Kind 2}}
-	s.{{.Name}} = {{mapNewExpr . "len(v)"}}
+	s.{{fieldVar .Name}} = {{mapNewExpr . "len(v)"}}
 	for key, val := range v {
-		s.{{.Name}}.Set(key, val)
+		s.{{fieldVar .Name}}.Set(key, val)
 	}
 	s.Mark()
+{{- else if eq .Kind 1}}
+	s.{{fieldVar .Name}} = append({{.TypeStr}}(nil), v...)
+	s.Mark()
 {{- else}}
-	s.{{.Name}} = v
+	s.{{fieldVar .Name}} = v
 	s.Mark()
 {{- end}}
 }

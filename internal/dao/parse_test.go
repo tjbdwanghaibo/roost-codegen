@@ -1,6 +1,9 @@
 package dao
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,7 +177,6 @@ func TestGenerateDao(t *testing.T) {
 	checks := []string{
 		"package testdata",
 		"type HeroDao struct {",
-		"Tracker",
 		"checkpoint.DirtyTracker",
 		"persistPatchSet",
 		"map[string]any",
@@ -200,9 +202,13 @@ func TestGenerateDao(t *testing.T) {
 		"func (d *HeroDao) RestoreRollbackState(raw []byte) error",
 		"func (d *HeroDao) marshalCommitState() ([]byte, error)",
 		"func (d *HeroDao) PrepareCommit(tx *nest.RollbackTx) error",
-		"!d.Tracker.HasPersistDirty()",
+		"!d.tracker.HasPersistDirty()",
 		"Database: d.DbName()",
-		"Version: d.Tracker.Version() + 1",
+		"Version: d.tracker.Version() + 1",
+		"func (d *HeroDao) GetName() string",
+		"func (d *HeroDao) GetLevel() int32",
+		"func (d *HeroDao) GetFriends(idx int) (int64, bool)",
+		"func (d *HeroDao) GetPos() *Position",
 		"func (d *HeroDao) SetName(v string)",
 		"func (d *HeroDao) SetLevel(v int32)",
 		"func (d *HeroDao) SetItems(key int64, val int32)",
@@ -213,11 +219,11 @@ func TestGenerateDao(t *testing.T) {
 		"d.recordPersistPatchSet(\"items\", path, val)",
 		"d.recordPersistPatchUnset(\"items\", path)",
 		"*fmap.SmallSafeMap[int64, int32]",
-		"d.Items = fmap.NewSmallSafeMap[int64, int32](0)",
+		"d.items = fmap.NewSmallSafeMap[int64, int32](0)",
 		`"items":    d.heroDaoItemsRawMap()`,
 		"func (d *HeroDao) AddFriends(v int64)",
 		"func (d *HeroDao) SetPos(v Position)",
-		"d.Pos.SetNotify(d.markPosDirty)",
+		"d.pos.SetNotify(d.markPosDirty)",
 		"func (d *HeroDao) SetEquips(key int64, val *EquipInfo)",
 		"*fmap.SmallSafeMap[int64, *EquipInfo]",
 		"val.SetNotify(func() { d.markEquipsKeyDirty(key, val) })",
@@ -236,10 +242,11 @@ func TestGenerateDao(t *testing.T) {
 			t.Errorf("generated DAO code missing: %q", check)
 		}
 	}
+	assertStructFieldsUnexported(t, outFile, "HeroDao")
 
 	// LoginAt should be in Marshal and have a setter because persist-only
 	// fields still need to mark persist dirty.
-	if !strings.Contains(s, `"login_at": d.LoginAt`) {
+	if !strings.Contains(s, `"login_at": d.loginAt`) {
 		t.Error("LoginAt should appear in Marshal (persist field)")
 	}
 	if !strings.Contains(s, "func (d *HeroDao) SetLoginAt") {
@@ -305,8 +312,10 @@ func TestGenerateNested(t *testing.T) {
 		"package testdata",
 		"type Position struct {",
 		"checkpoint.DirtyHook",
-		"X int32",
-		"Y int32",
+		"x int32",
+		"y int32",
+		"func (s *Position) GetX() int32",
+		"func (s *Position) GetY() int32",
 		"func (s *Position) SetX(v int32)",
 		"func (s *Position) SetY(v int32)",
 		"s.Mark()",
@@ -315,6 +324,54 @@ func TestGenerateNested(t *testing.T) {
 		if !strings.Contains(s, check) {
 			t.Errorf("generated nested code missing: %q", check)
 		}
+	}
+	assertStructFieldsUnexported(t, outFile, "Position")
+}
+
+func TestGenerateNestedPointerGetterDoesNotAddPointerLevel(t *testing.T) {
+	outFile := filepath.Join(t.TempDir(), "gen_pointer_holder_nested.go")
+	nested := NestedDef{Name: "PointerHolder", Fields: []FieldDef{{Name: "Child", TypeStr: "*Position", Kind: KindStruct, IsPtr: true}}}
+	if _, err := generateNested(nested, "testdata", outFile, true); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(content)
+	if !strings.Contains(source, "func (s *PointerHolder) GetChild() *Position { return s.child }") {
+		t.Fatalf("pointer getter must return the stored pointer without producing **Position:\n%s", source)
+	}
+	assertStructFieldsUnexported(t, outFile, "PointerHolder")
+}
+
+func TestFieldVarNamePreservesInitialisms(t *testing.T) {
+	for input, want := range map[string]string{
+		"Name": "name", "ID": "id", "URLValue": "urlValue", "X": "x",
+	} {
+		if got := fieldVarName(input); got != want {
+			t.Errorf("fieldVarName(%q)=%q want %q", input, got, want)
+		}
+	}
+}
+
+func TestValidateGeneratedStorageFieldsRejectsCollisions(t *testing.T) {
+	tests := []struct {
+		name     string
+		fields   []FieldDef
+		reserved []string
+		want     string
+	}{
+		{name: "framework", fields: []FieldDef{{Name: "ID"}}, reserved: []string{"id"}, want: `private storage name "id"`},
+		{name: "case folding", fields: []FieldDef{{Name: "URL"}, {Name: "Url"}}, want: `conflicts with field URL`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateGeneratedStorageFields("CollisionDao", test.fields, test.reserved...)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateGeneratedStorageFields() error=%v, want substring %q", err, test.want)
+			}
+		})
 	}
 }
 
@@ -446,4 +503,38 @@ func fieldNames(fields []FieldDef) []string {
 		names = append(names, f.Name)
 	}
 	return names
+}
+
+func assertStructFieldsUnexported(t *testing.T, filename, typeName string) {
+	t.Helper()
+
+	file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
+	if err != nil {
+		t.Fatalf("parse generated file %s: %v", filename, err)
+	}
+	for _, declaration := range file.Decls {
+		generic, ok := declaration.(*ast.GenDecl)
+		if !ok || generic.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range generic.Specs {
+			typeSpec, ok := spec.(*ast.TypeSpec)
+			if !ok || typeSpec.Name.Name != typeName {
+				continue
+			}
+			structure, ok := typeSpec.Type.(*ast.StructType)
+			if !ok {
+				t.Fatalf("generated %s is not a struct", typeName)
+			}
+			for _, field := range structure.Fields.List {
+				for _, name := range field.Names {
+					if ast.IsExported(name.Name) {
+						t.Errorf("generated %s exposes storage field %s; reads must use methods", typeName, name.Name)
+					}
+				}
+			}
+			return
+		}
+	}
+	t.Fatalf("generated type %s not found", typeName)
 }
