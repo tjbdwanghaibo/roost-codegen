@@ -35,6 +35,52 @@ type HeroDao struct {
 	}
 }
 
+func TestParseRejectsMarkerBindingMultipleStructs(t *testing.T) {
+	// Regression: one marker above a grouped type declaration used to bind
+	// silently to every struct in the group — several types writing the same
+	// collection with zero warning.
+	_, err := parseSource(t, `package def
+
+//cube:dao coll=heroes db=game
+type (
+	AlphaDao struct{ Name string }
+	BetaDao  struct{ Name string }
+)
+`)
+	if err == nil || !strings.Contains(err.Error(), "binds to multiple structs") {
+		t.Fatalf("err=%v, want multi-bind error", err)
+	}
+}
+
+func TestRunSweepsOrphansWhenAllDefinitionsRemoved(t *testing.T) {
+	// Regression: deleting the last definition used to return early before
+	// the orphan sweep, leaving the final generated files behind forever —
+	// and generate --check could not see them either.
+	defDir := t.TempDir()
+	outDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(defDir, "def.go"), []byte(`package def
+
+//cube:dao coll=heroes db=game
+type HeroDao struct {
+	Name string
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"-def", defDir, "-out", outDir, "-pkg", "out"}, os.Stdout); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(defDir, "def.go"), []byte("package def\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"-def", defDir, "-out", outDir, "-pkg", "out"}, os.Stdout); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "gen_hero_dao.go")); !os.IsNotExist(err) {
+		t.Fatalf("last generated file must be swept when all definitions are gone: %v", err)
+	}
+}
+
 func TestParseAcceptsMarkerAboveDocComment(t *testing.T) {
 	// Doc comments between marker and struct are ordinary Go practice and
 	// must not unbind the marker.

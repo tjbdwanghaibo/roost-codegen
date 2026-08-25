@@ -65,6 +65,32 @@ slice 使用 `Get<Field>(index)` / `Range<Field>` / `<Field>Len`，读取 map �
 从而不能通过字段赋值绕过 dirty、rollback 与同步语义。这是有意的源码不兼容变更，
 升级后应重新生成 DAO 并把直接字段访问迁移到方法调用。
 
+### DAO 标记与 dao tag 语义
+
+`//cube:dao coll=<collection> db=<database> [dbscope=global|sid]` 必须紧邻 struct
+（相邻 1–2 行，或位于该 struct 的 doc 注释组内）。绑定失败、缺参数、一个标记命中
+多个 struct（分组 `type (...)` 声明只放一个标记）都会直接报错而不是静默跳过。
+
+字段级 `dao:"..."` tag 语义：
+
+| 写法 | 含义 |
+| --- | --- |
+| 无 tag | 默认 persist + sync 全开 |
+| `dao:"-"` | 完全排除该字段 |
+| `dao:"persist"` / `dao:"sync"` | 只开列出的能力，未列出的关闭 |
+| `dao:"nopersist,nosync,..."` | 显式关闭 |
+| `map=small\|fast\|sharded` | map 存储实现选择，必须与 persist/sync 意图同写 |
+
+**tag 一旦出现就必须表明 persist/sync 意图**：`dao:"map=fast"` 这类只写辅助选项的
+tag、未知选项、未知 map 值、persist 与 nopersist 冲突均为解析错误。
+
+**从 v1.4 升级**：v1.4 中 `dao:"map=fast"` 会静默关闭 persist 与 sync（数据丢失
+陷阱），v1.5 起直接报错——按原意图改写为 `dao:"nopersist,nosync,map=fast"` 或
+`dao:"persist,sync,map=fast"`。另外 `HeroDao` 的产物文件名从
+`gen_hero_dao_dao.go` 修正为 `gen_hero_dao.go`，旧文件会被孤儿回收自动清理；
+定义删除或改名后，对应的旧生成文件也会在下次生成时自动移除（仅限带
+`DO NOT EDIT` 头的生成文件，手写文件不受影响）。
+
 新项目的 Nest handler 使用显式 capability 标记：
 
 ```go

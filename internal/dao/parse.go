@@ -206,6 +206,12 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {
 				if !binds(m.line) {
 					continue
 				}
+				// A marker can never intend two structs: a grouped type
+				// declaration with one marker on the group would silently
+				// write every struct into the same collection.
+				if m.consumed {
+					return fmt.Errorf("line %d: //cube:dao marker binds to multiple structs; grouped type declarations need one marker directly above each struct", m.line)
+				}
 				m.consumed = true
 
 				if m.params["coll"] == "" || m.params["db"] == "" {
@@ -232,6 +238,9 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {
 				m := &redisMarkers[i]
 				if !binds(m.line) {
 					continue
+				}
+				if m.consumed {
+					return fmt.Errorf("line %d: //cube:redisdao marker binds to multiple structs; grouped type declarations need one marker directly above each struct", m.line)
 				}
 				m.consumed = true
 

@@ -2,6 +2,8 @@
 package testdata
 
 import (
+	"fmt"
+
 	"github.com/tjbdwanghaibo/cube-core/checkpoint"
 	"github.com/tjbdwanghaibo/cube-core/nest"
 )
@@ -20,7 +22,11 @@ func (s *Position) GetY() int32 { return s.y }
 func (s *Position) SetX(v int32) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := s.x
-		_ = tx.RecordUndo(s, uint64(0), func() error { s.x = old; return nil })
+		if err := tx.RecordUndo(s, uint64(0), func() error { s.x = old; return nil }); err != nil {
+			// A mutation without undo coverage silently breaks rollback;
+			// failing loudly matches the generated DAO setters.
+			panic(fmt.Errorf("Position: record undo: %w", err))
+		}
 	}
 	if s.x != v {
 		s.x = v
@@ -31,7 +37,11 @@ func (s *Position) SetX(v int32) {
 func (s *Position) SetY(v int32) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := s.y
-		_ = tx.RecordUndo(s, uint64(1), func() error { s.y = old; return nil })
+		if err := tx.RecordUndo(s, uint64(1), func() error { s.y = old; return nil }); err != nil {
+			// A mutation without undo coverage silently breaks rollback;
+			// failing loudly matches the generated DAO setters.
+			panic(fmt.Errorf("Position: record undo: %w", err))
+		}
 	}
 	if s.y != v {
 		s.y = v

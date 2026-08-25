@@ -22,11 +22,11 @@ func TestParseDefDir(t *testing.T) {
 	}
 
 	// Should find 1 DAO
-	if len(defs.Daos) != 1 {
-		t.Fatalf("expected 1 dao, got %d", len(defs.Daos))
+	if len(defs.Daos) != 2 {
+		t.Fatalf("expected 2 daos, got %d", len(defs.Daos))
 	}
-	if len(defs.RedisDaos) != 1 {
-		t.Fatalf("expected 1 redis dao, got %d", len(defs.RedisDaos))
+	if len(defs.RedisDaos) != 2 {
+		t.Fatalf("expected 2 redis daos, got %d", len(defs.RedisDaos))
 	}
 
 	dao := defs.Daos[0]
@@ -387,8 +387,8 @@ func TestGenerateRedisDao(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(defs.RedisDaos) != 1 {
-		t.Fatalf("expected 1 redis dao, got %d", len(defs.RedisDaos))
+	if len(defs.RedisDaos) != 2 {
+		t.Fatalf("expected 2 redis daos, got %d", len(defs.RedisDaos))
 	}
 
 	outDir := t.TempDir()

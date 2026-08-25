@@ -2,6 +2,8 @@
 package testdata
 
 import (
+	"fmt"
+
 	"github.com/tjbdwanghaibo/cube-core/checkpoint"
 	fmap "github.com/tjbdwanghaibo/cube-core/map"
 	"github.com/tjbdwanghaibo/cube-core/nest"
@@ -44,7 +46,11 @@ func (s *EquipInfo) GemsLen() int {
 func (s *EquipInfo) SetLevel(v int32) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := s.level
-		_ = tx.RecordUndo(s, uint64(0), func() error { s.level = old; return nil })
+		if err := tx.RecordUndo(s, uint64(0), func() error { s.level = old; return nil }); err != nil {
+			// A mutation without undo coverage silently breaks rollback;
+			// failing loudly matches the generated DAO setters.
+			panic(fmt.Errorf("EquipInfo: record undo: %w", err))
+		}
 	}
 	if s.level != v {
 		s.level = v
@@ -55,7 +61,11 @@ func (s *EquipInfo) SetLevel(v int32) {
 func (s *EquipInfo) SetStar(v int32) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := s.star
-		_ = tx.RecordUndo(s, uint64(1), func() error { s.star = old; return nil })
+		if err := tx.RecordUndo(s, uint64(1), func() error { s.star = old; return nil }); err != nil {
+			// A mutation without undo coverage silently breaks rollback;
+			// failing loudly matches the generated DAO setters.
+			panic(fmt.Errorf("EquipInfo: record undo: %w", err))
+		}
 	}
 	if s.star != v {
 		s.star = v
@@ -66,7 +76,11 @@ func (s *EquipInfo) SetStar(v int32) {
 func (s *EquipInfo) SetGems(v map[int32]*GemInfo) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := s.gems
-		_ = tx.RecordUndo(s, uint64(2), func() error { s.gems = old; return nil })
+		if err := tx.RecordUndo(s, uint64(2), func() error { s.gems = old; return nil }); err != nil {
+			// A mutation without undo coverage silently breaks rollback;
+			// failing loudly matches the generated DAO setters.
+			panic(fmt.Errorf("EquipInfo: record undo: %w", err))
+		}
 	}
 	s.gems = fmap.NewSmallSafeMap[int32, *GemInfo](len(v))
 	for key, val := range v {

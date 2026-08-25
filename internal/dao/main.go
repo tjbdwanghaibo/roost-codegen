@@ -63,6 +63,17 @@ func Run(args []string, stdout io.Writer) error {
 	}
 
 	if len(defs.Daos) == 0 && len(defs.RedisDaos) == 0 && len(defs.Nested) == 0 {
+		// Deleting the last definition must still retire its outputs: an
+		// orphan compiles and registers, silently diverging from an empty
+		// definition set. Generated files are always reproducible, and the
+		// header check keeps hand-written files safe.
+		removed, err := removeOrphanGenerated(absOutDir, nil)
+		if err != nil {
+			return err
+		}
+		for _, name := range removed {
+			_, _ = fmt.Fprintf(stdout, "removed orphan: %s\n", filepath.Join(absOutDir, name))
+		}
 		_, _ = fmt.Fprintf(stdout, "no markers found in %s\n", absDefDir)
 		return nil
 	}
