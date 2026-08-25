@@ -131,6 +131,7 @@ func runGenerate(args []string, stdout, stderr io.Writer) error {
 	changed := fs.Bool("changed", false, "only generators affected by git changes")
 	check := fs.Bool("check", false, "verify in a temporary copy")
 	dry := fs.Bool("dry-run", false, "print generation plan")
+	force := fs.Bool("force", false, "rewrite outputs even when content is unchanged")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -138,7 +139,7 @@ func runGenerate(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return Generate(root, GenerateOptions{Changed: *changed, Check: *check, DryRun: *dry, Stdout: stdout})
+	return Generate(root, GenerateOptions{Changed: *changed, Check: *check, DryRun: *dry, Force: *force, Stdout: stdout})
 }
 
 func runAdd(args []string, stdout, stderr io.Writer) error {

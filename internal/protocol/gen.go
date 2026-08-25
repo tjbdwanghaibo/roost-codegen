@@ -2,24 +2,17 @@ package protocol
 
 import (
 	"bytes"
-	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-codegen/internal/genutil"
 	"go/format"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 )
 
 func writeIfChanged(path string, content []byte, force bool) (bool, error) {
-	if !force {
-		existing, err := os.ReadFile(path)
-		if err == nil && fmt.Sprintf("%x", md5.Sum(existing)) == fmt.Sprintf("%x", md5.Sum(content)) {
-			return false, nil
-		}
-	}
-	return true, os.WriteFile(path, content, 0644)
+	return genutil.WriteIfChanged(path, content, force)
 }
 
 func generateProto(defs *Definitions) ([]byte, error) {

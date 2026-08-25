@@ -105,26 +105,38 @@ func parseDefDir(dir string) (*Definitions, error) {
 			return nil, fmt.Errorf("parse %s: %w", entry.Name(), err)
 		}
 
-		extractDefs(fset, f, defs)
+		if err := extractDefs(fset, f, defs); err != nil {
+			return nil, fmt.Errorf("%s: %w", entry.Name(), err)
+		}
 	}
 
 	return defs, nil
 }
 
-func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) {
+func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {
 	// Collect all struct definitions in the file
 	allStructs := make(map[string]*ast.StructType)
 
 	// Collect DAO markers: line → params
 	type daoMarker struct {
-		line   int
-		params map[string]string
+		line     int
+		params   map[string]string
+		consumed bool
 	}
 	var markers []daoMarker
 	var redisMarkers []daoMarker
 
 	for _, cg := range f.Comments {
 		for _, c := range cg.List {
+			// A marker prefix without valid parameters is a mistake the
+			// author must hear about: a silently ignored marker means a DAO
+			// that silently does not persist.
+			if rest, ok := strings.CutPrefix(c.Text, "//cube:dao"); ok && (rest == "" || strings.TrimSpace(rest) == "") {
+				return fmt.Errorf("line %d: //cube:dao marker is missing parameters (want e.g. //cube:dao coll=heroes db=game)", fset.Position(c.Pos()).Line)
+			}
+			if rest, ok := strings.CutPrefix(c.Text, "//cube:redisdao"); ok && (rest == "" || strings.TrimSpace(rest) == "") {
+				return fmt.Errorf("line %d: //cube:redisdao marker is missing parameters (want e.g. //cube:redisdao mode=ref-hmap key=... prefix=...)", fset.Position(c.Pos()).Line)
+			}
 			if m := daoMarkerRe.FindStringSubmatch(c.Text); m != nil {
 				markers = append(markers, daoMarker{
 					line:   fset.Position(c.Pos()).Line,
@@ -176,13 +188,33 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) {
 			}
 
 			structLine := fset.Position(typeSpec.Pos()).Line
+			// A marker binds when directly adjacent (the historical 1-2 line
+			// rule) or anywhere inside the declaration's doc comment group,
+			// so ordinary doc comments between marker and struct are legal.
+			docStart := structLine
+			if typeSpec.Doc != nil {
+				docStart = fset.Position(typeSpec.Doc.Pos()).Line
+			} else if genDecl.Doc != nil {
+				docStart = fset.Position(genDecl.Doc.Pos()).Line
+			}
+			binds := func(line int) bool {
+				return line == structLine-1 || line == structLine-2 || (line >= docStart && line < structLine)
+			}
 
-			for _, m := range markers {
-				if m.line != structLine-1 && m.line != structLine-2 {
+			for i := range markers {
+				m := &markers[i]
+				if !binds(m.line) {
 					continue
 				}
+				m.consumed = true
 
-				fields := extractFieldDefs(structType, defs)
+				if m.params["coll"] == "" || m.params["db"] == "" {
+					return fmt.Errorf("line %d: //cube:dao on %s requires coll= and db=", m.line, typeSpec.Name.Name)
+				}
+				fields, err := extractFieldDefs(structType, defs)
+				if err != nil {
+					return fmt.Errorf("dao %s: %w", typeSpec.Name.Name, err)
+				}
 				dbScope := m.params["dbscope"]
 				if dbScope == "" {
 					dbScope = "global"
@@ -196,12 +228,20 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) {
 				})
 				break
 			}
-			for _, m := range redisMarkers {
-				if m.line != structLine-1 && m.line != structLine-2 {
+			for i := range redisMarkers {
+				m := &redisMarkers[i]
+				if !binds(m.line) {
 					continue
 				}
+				m.consumed = true
 
-				fields := extractFieldDefs(structType, defs)
+				if m.params["key"] == "" || m.params["prefix"] == "" {
+					return fmt.Errorf("line %d: //cube:redisdao on %s requires key= and prefix=", m.line, typeSpec.Name.Name)
+				}
+				fields, err := extractFieldDefs(structType, defs)
+				if err != nil {
+					return fmt.Errorf("redis dao %s: %w", typeSpec.Name.Name, err)
+				}
 				keyType := m.params["key_type"]
 				if keyType == "" {
 					keyType = resolveFieldPathType(structType, allStructs, m.params["key"])
@@ -223,6 +263,19 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) {
 				})
 				break
 			}
+		}
+	}
+
+	// An unbound marker is never intent-free: it marks a struct that will
+	// silently not persist. Fail instead of generating a partial result.
+	for _, m := range markers {
+		if !m.consumed {
+			return fmt.Errorf("line %d: //cube:dao marker is not attached to a struct (it must be adjacent to, or inside the doc comment of, a struct type declaration)", m.line)
+		}
+	}
+	for _, m := range redisMarkers {
+		if !m.consumed {
+			return fmt.Errorf("line %d: //cube:redisdao marker is not attached to a struct (it must be adjacent to, or inside the doc comment of, a struct type declaration)", m.line)
 		}
 	}
 
@@ -250,7 +303,10 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) {
 			continue
 		}
 		nestedNames[name] = true
-		nestedFields := extractFieldDefs(st, defs)
+		nestedFields, err := extractFieldDefs(st, defs)
+		if err != nil {
+			return fmt.Errorf("nested struct %s: %w", name, err)
+		}
 		defs.Nested = append(defs.Nested, NestedDef{
 			Name:   name,
 			Fields: nestedFields,
@@ -261,6 +317,7 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) {
 			}
 		}
 	}
+	return nil
 }
 
 // resolveNestedName returns the struct type name if the field references a nested struct.
@@ -293,7 +350,7 @@ func stripPtr(s string) string {
 	return s
 }
 
-func extractFieldDefs(st *ast.StructType, defs *Definitions) []FieldDef {
+func extractFieldDefs(st *ast.StructType, defs *Definitions) ([]FieldDef, error) {
 	var fields []FieldDef
 
 	for _, field := range st.Fields.List {
@@ -308,7 +365,10 @@ func extractFieldDefs(st *ast.StructType, defs *Definitions) []FieldDef {
 		}
 
 		typeStr := exprString(field.Type)
-		tag := parseDaoTag(field.Tag)
+		tag, err := parseDaoTag(field.Tag)
+		if err != nil {
+			return nil, fmt.Errorf("field %s: %w", name, err)
+		}
 
 		if tag.Skip {
 			continue
@@ -320,17 +380,23 @@ func extractFieldDefs(st *ast.StructType, defs *Definitions) []FieldDef {
 			Tag:     tag,
 		}
 
-		classifyField(&fd, field.Type)
+		if err := classifyField(&fd, field.Type); err != nil {
+			return nil, fmt.Errorf("field %s: %w", name, err)
+		}
 		if fd.Kind == KindMap && fd.Tag.Map == "" {
 			fd.Tag.Map = "small"
 		}
 		fields = append(fields, fd)
 	}
 
-	return fields
+	return fields, nil
 }
 
-func classifyField(fd *FieldDef, expr ast.Expr) {
+// classifyField maps the field's syntax to a generation kind. Shapes the
+// templates cannot generate correct code for are rejected here: format.Source
+// only guarantees syntax, so anything that slips through would surface as a
+// compile error in the downstream project instead of at generation time.
+func classifyField(fd *FieldDef, expr ast.Expr) error {
 	switch t := expr.(type) {
 	case *ast.MapType:
 		fd.Kind = KindMap
@@ -343,15 +409,16 @@ func classifyField(fd *FieldDef, expr ast.Expr) {
 			fd.MapVal = exprString(val)
 		}
 	case *ast.ArrayType:
-		if t.Len == nil { // slice
-			fd.Kind = KindSlice
-			elem := t.Elt
-			if star, ok := elem.(*ast.StarExpr); ok {
-				fd.IsPtr = true
-				fd.SliceElem = exprString(star.X)
-			} else {
-				fd.SliceElem = exprString(elem)
-			}
+		if t.Len != nil {
+			return fmt.Errorf("unsupported type %s: fixed-size arrays are not supported, use a slice or exclude the field with dao:\"-\"", exprString(expr))
+		}
+		fd.Kind = KindSlice
+		elem := t.Elt
+		if star, ok := elem.(*ast.StarExpr); ok {
+			fd.IsPtr = true
+			fd.SliceElem = exprString(star.X)
+		} else {
+			fd.SliceElem = exprString(elem)
 		}
 	case *ast.Ident:
 		if isBasicType(t.Name) {
@@ -361,51 +428,81 @@ func classifyField(fd *FieldDef, expr ast.Expr) {
 		}
 	case *ast.StarExpr:
 		fd.IsPtr = true
-		if ident, ok := t.X.(*ast.Ident); ok {
-			if isBasicType(ident.Name) {
-				fd.Kind = KindBasic
-			} else {
-				fd.Kind = KindStruct
-			}
+		ident, ok := t.X.(*ast.Ident)
+		if !ok {
+			return fmt.Errorf("unsupported type %s: only pointers to named local types are supported, exclude the field with dao:\"-\" if it must stay", exprString(expr))
+		}
+		if isBasicType(ident.Name) {
+			fd.Kind = KindBasic
+		} else {
+			fd.Kind = KindStruct
 		}
 	case *ast.SelectorExpr:
 		fd.Kind = KindStruct
 	default:
-		fd.Kind = KindBasic
+		return fmt.Errorf("unsupported type %s: exclude the field with dao:\"-\" if it must stay", exprString(expr))
 	}
+	return nil
 }
 
-func parseDaoTag(tag *ast.BasicLit) DaoTag {
+var daoTagRe = regexp.MustCompile(`dao:"([^"]*)"`)
+
+// parseDaoTag interprets the field's dao tag. No tag keeps the safe default
+// (persist and sync both on). A tag that is present must state persist/sync
+// intent explicitly: the historical behavior of zeroing both when the tag
+// only carried auxiliary options (e.g. dao:"map=fast") silently dropped
+// persistence, which is a data-loss trap, so it is a hard error now.
+func parseDaoTag(tag *ast.BasicLit) (DaoTag, error) {
 	if tag == nil {
-		return DaoTag{Persist: true, Sync: true} // default
+		return DaoTag{Persist: true, Sync: true}, nil // default
 	}
 
 	raw := strings.Trim(tag.Value, "`")
-	re := regexp.MustCompile(`dao:"([^"]*)"`)
-	m := re.FindStringSubmatch(raw)
+	m := daoTagRe.FindStringSubmatch(raw)
 	if m == nil {
-		return DaoTag{Persist: true, Sync: true} // no dao tag = default
+		return DaoTag{Persist: true, Sync: true}, nil // no dao tag = default
 	}
 
 	val := m[1]
 	if val == "-" {
-		return DaoTag{Skip: true}
+		return DaoTag{Skip: true}, nil
+	}
+	if strings.TrimSpace(val) == "" {
+		return DaoTag{}, fmt.Errorf("dao tag %q does not state persist/sync intent; add persist/sync (or nopersist,nosync to disable both explicitly)", val)
 	}
 
 	parts := strings.Split(val, ",")
 	dt := DaoTag{}
+	var noPersist, noSync bool
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
-		switch p {
-		case "persist":
+		switch {
+		case p == "persist":
 			dt.Persist = true
-		case "sync":
+		case p == "nopersist":
+			noPersist = true
+		case p == "sync":
 			dt.Sync = true
-		case "map=small", "map=fast", "map=sharded":
+		case p == "nosync":
+			noSync = true
+		case p == "map=small" || p == "map=fast" || p == "map=sharded":
 			dt.Map = strings.TrimPrefix(p, "map=")
+		case strings.HasPrefix(p, "map="):
+			return DaoTag{}, fmt.Errorf("dao tag has unknown map mode %q (valid: small, fast, sharded)", p)
+		default:
+			return DaoTag{}, fmt.Errorf("dao tag has unknown option %q (valid: persist, nopersist, sync, nosync, map=small|fast|sharded, -)", p)
 		}
 	}
-	return dt
+	if dt.Persist && noPersist {
+		return DaoTag{}, fmt.Errorf("dao tag states both persist and nopersist")
+	}
+	if dt.Sync && noSync {
+		return DaoTag{}, fmt.Errorf("dao tag states both sync and nosync")
+	}
+	if !dt.Persist && !noPersist && !dt.Sync && !noSync {
+		return DaoTag{}, fmt.Errorf("dao tag %q does not state persist/sync intent; add persist/sync (or nopersist,nosync to disable both explicitly)", val)
+	}
+	return dt, nil
 }
 
 func parseKV(s string) map[string]string {

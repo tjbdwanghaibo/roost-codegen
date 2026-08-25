@@ -222,13 +222,28 @@ func (d *{{$.Dao.Name}}) Get{{.Name}}(idx int) ({{if .IsPtr}}*{{.SliceElem}}{{el
 {{end}}
 
 // --- Mutators ---
+
+// recordUndo / recordUndoToken register the inverse operation and panic when
+// registration fails: continuing would let the mutation escape rollback
+// coverage, silently breaking the transaction guarantee.
+func (d *{{.Dao.Name}}) recordUndo(tx *nest.RollbackTx, field uint64, fn func() error) {
+	if err := tx.RecordUndo(d, field, fn); err != nil {
+		panic(fmt.Errorf("{{.Dao.Name}}: record undo: %w", err))
+	}
+}
+
+func (d *{{.Dao.Name}}) recordUndoToken(tx *nest.RollbackTx, field uint64, token any, fn func() error) {
+	if err := tx.RecordUndoToken(d, field, token, fn); err != nil {
+		panic(fmt.Errorf("{{.Dao.Name}}: record undo: %w", err))
+	}
+}
 {{range dirtyFields .Dao.Fields}}
 {{- if eq .Kind 0}}
 func (d *{{$.Dao.Name}}) Set{{.Name}}(v {{.TypeStr}}) {
 	if d.{{fieldVar .Name}} != v {
 		if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 			old := d.{{fieldVar .Name}}
-			_ = tx.RecordUndo(d, {{fieldMaskName $.Dao.Name .Name}}, func() error { d.{{fieldVar .Name}} = old; return nil })
+			d.recordUndo(tx, {{fieldMaskName $.Dao.Name .Name}}, func() error { d.{{fieldVar .Name}} = old; return nil })
 		}
 		d.{{fieldVar .Name}} = v
 		d.mark{{.Name}}Dirty()
@@ -239,7 +254,7 @@ func (d *{{$.Dao.Name}}) Set{{.Name}}(v {{.TypeStr}}) {
 func (d *{{$.Dao.Name}}) Set{{.Name}}(v {{.TypeStr}}) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := d.{{fieldVar .Name}}
-		_ = tx.RecordUndo(d, {{fieldMaskName $.Dao.Name .Name}}, func() error {
+		d.recordUndo(tx, {{fieldMaskName $.Dao.Name .Name}}, func() error {
 			d.{{fieldVar .Name}} = old
 {{- if isNested .TypeStr}}
 			{{- if .IsPtr}}
@@ -281,7 +296,7 @@ func (d *{{$.Dao.Name}}) Set{{.Name}}(key {{.MapKey}}, val {{if .IsPtr}}*{{.MapV
 	}
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old, existed := d.{{fieldVar .Name}}.Get(key)
-		_ = tx.RecordUndoToken(d, {{fieldMaskName $.Dao.Name .Name}}, key, func() error {
+		d.recordUndoToken(tx, {{fieldMaskName $.Dao.Name .Name}}, key, func() error {
 			if existed { d.{{fieldVar .Name}}.Set(key, old) } else { d.{{fieldVar .Name}}.Delete(key) }
 			d.Init()
 			return nil
@@ -304,7 +319,7 @@ func (d *{{$.Dao.Name}}) Del{{.Name}}(key {{.MapKey}}) {
 	}
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old, existed := d.{{fieldVar .Name}}.Get(key)
-		_ = tx.RecordUndoToken(d, {{fieldMaskName $.Dao.Name .Name}}, key, func() error {
+		d.recordUndoToken(tx, {{fieldMaskName $.Dao.Name .Name}}, key, func() error {
 			if existed { d.{{fieldVar .Name}}.Set(key, old); d.Init() }
 			return nil
 		})
@@ -339,7 +354,7 @@ func (d *{{$.Dao.Name}}) {{.Name}}Len() int {
 func (d *{{$.Dao.Name}}) Add{{.Name}}(v {{if .IsPtr}}*{{.SliceElem}}{{else}}{{.SliceElem}}{{end}}) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := d.{{fieldVar .Name}}
-		_ = tx.RecordUndo(d, {{fieldMaskName $.Dao.Name .Name}}, func() error {
+		d.recordUndo(tx, {{fieldMaskName $.Dao.Name .Name}}, func() error {
 			d.{{fieldVar .Name}} = old
 			d.Init()
 			return nil
@@ -357,7 +372,7 @@ func (d *{{$.Dao.Name}}) Add{{.Name}}(v {{if .IsPtr}}*{{.SliceElem}}{{else}}{{.S
 func (d *{{$.Dao.Name}}) Set{{.Name}}All(v {{.TypeStr}}) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := d.{{fieldVar .Name}}
-		_ = tx.RecordUndo(d, {{fieldMaskName $.Dao.Name .Name}}, func() error {
+		d.recordUndo(tx, {{fieldMaskName $.Dao.Name .Name}}, func() error {
 			d.{{fieldVar .Name}} = old
 			d.Init()
 			return nil
@@ -528,7 +543,14 @@ func (d *{{.Dao.Name}}) marshalPersistData(mask uint64) []byte {
 {{- end}}
 {{- end}}
 	}
-	data, _ := bson.Marshal(doc)
+	data, err := bson.Marshal(doc)
+	if err != nil {
+		// The interface has no error slot and a nil payload would be
+		// persisted as silent data loss; a marshal failure here is a
+		// programming error (unserializable state), so fail loudly and let
+		// WAL/checkpoint recovery own the aftermath.
+		panic(fmt.Errorf("{{.Dao.Name}}: marshal persist data: %w", err))
+	}
 	return data
 }
 
@@ -577,7 +599,12 @@ func (d *{{.Dao.Name}}) MarshalSync(mask uint64) []byte {
 	if len(doc) == 1 {
 		return nil
 	}
-	data, _ := bson.Marshal(doc)
+	data, err := bson.Marshal(doc)
+	if err != nil {
+		// nil already means "nothing to sync"; returning it on failure would
+		// silently drop a sync payload. See marshalPersistData.
+		panic(fmt.Errorf("{{.Dao.Name}}: marshal sync data: %w", err))
+	}
 	return data
 }
 

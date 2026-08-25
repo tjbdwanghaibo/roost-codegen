@@ -238,11 +238,26 @@ func (d *HeroDao) GetPos() *Position { return &d.pos }
 
 // --- Mutators ---
 
+// recordUndo / recordUndoToken register the inverse operation and panic when
+// registration fails: continuing would let the mutation escape rollback
+// coverage, silently breaking the transaction guarantee.
+func (d *HeroDao) recordUndo(tx *nest.RollbackTx, field uint64, fn func() error) {
+	if err := tx.RecordUndo(d, field, fn); err != nil {
+		panic(fmt.Errorf("HeroDao: record undo: %w", err))
+	}
+}
+
+func (d *HeroDao) recordUndoToken(tx *nest.RollbackTx, field uint64, token any, fn func() error) {
+	if err := tx.RecordUndoToken(d, field, token, fn); err != nil {
+		panic(fmt.Errorf("HeroDao: record undo: %w", err))
+	}
+}
+
 func (d *HeroDao) SetName(v string) {
 	if d.name != v {
 		if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 			old := d.name
-			_ = tx.RecordUndo(d, heroDaoFieldName, func() error { d.name = old; return nil })
+			d.recordUndo(tx, heroDaoFieldName, func() error { d.name = old; return nil })
 		}
 		d.name = v
 		d.markNameDirty()
@@ -253,7 +268,7 @@ func (d *HeroDao) SetLevel(v int32) {
 	if d.level != v {
 		if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 			old := d.level
-			_ = tx.RecordUndo(d, heroDaoFieldLevel, func() error { d.level = old; return nil })
+			d.recordUndo(tx, heroDaoFieldLevel, func() error { d.level = old; return nil })
 		}
 		d.level = v
 		d.markLevelDirty()
@@ -264,7 +279,7 @@ func (d *HeroDao) SetExp(v int64) {
 	if d.exp != v {
 		if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 			old := d.exp
-			_ = tx.RecordUndo(d, heroDaoFieldExp, func() error { d.exp = old; return nil })
+			d.recordUndo(tx, heroDaoFieldExp, func() error { d.exp = old; return nil })
 		}
 		d.exp = v
 		d.markExpDirty()
@@ -275,7 +290,7 @@ func (d *HeroDao) SetLoginAt(v int64) {
 	if d.loginAt != v {
 		if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 			old := d.loginAt
-			_ = tx.RecordUndo(d, heroDaoFieldLoginAt, func() error { d.loginAt = old; return nil })
+			d.recordUndo(tx, heroDaoFieldLoginAt, func() error { d.loginAt = old; return nil })
 		}
 		d.loginAt = v
 		d.markLoginAtDirty()
@@ -296,7 +311,7 @@ func (d *HeroDao) SetItems(key int64, val int32) {
 	}
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old, existed := d.items.Get(key)
-		_ = tx.RecordUndoToken(d, heroDaoFieldItems, key, func() error {
+		d.recordUndoToken(tx, heroDaoFieldItems, key, func() error {
 			if existed {
 				d.items.Set(key, old)
 			} else {
@@ -316,7 +331,7 @@ func (d *HeroDao) DelItems(key int64) {
 	}
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old, existed := d.items.Get(key)
-		_ = tx.RecordUndoToken(d, heroDaoFieldItems, key, func() error {
+		d.recordUndoToken(tx, heroDaoFieldItems, key, func() error {
 			if existed {
 				d.items.Set(key, old)
 				d.Init()
@@ -346,7 +361,7 @@ func (d *HeroDao) ItemsLen() int {
 func (d *HeroDao) AddFriends(v int64) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := d.friends
-		_ = tx.RecordUndo(d, heroDaoFieldFriends, func() error {
+		d.recordUndo(tx, heroDaoFieldFriends, func() error {
 			d.friends = old
 			d.Init()
 			return nil
@@ -359,7 +374,7 @@ func (d *HeroDao) AddFriends(v int64) {
 func (d *HeroDao) SetFriendsAll(v []int64) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := d.friends
-		_ = tx.RecordUndo(d, heroDaoFieldFriends, func() error {
+		d.recordUndo(tx, heroDaoFieldFriends, func() error {
 			d.friends = old
 			d.Init()
 			return nil
@@ -387,7 +402,7 @@ func (d *HeroDao) FriendsLen() int {
 func (d *HeroDao) SetPos(v Position) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := d.pos
-		_ = tx.RecordUndo(d, heroDaoFieldPos, func() error {
+		d.recordUndo(tx, heroDaoFieldPos, func() error {
 			d.pos = old
 			d.pos.SetNotify(d.markPosDirty)
 			return nil
@@ -412,7 +427,7 @@ func (d *HeroDao) SetEquips(key int64, val *EquipInfo) {
 	}
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old, existed := d.equips.Get(key)
-		_ = tx.RecordUndoToken(d, heroDaoFieldEquips, key, func() error {
+		d.recordUndoToken(tx, heroDaoFieldEquips, key, func() error {
 			if existed {
 				d.equips.Set(key, old)
 			} else {
@@ -435,7 +450,7 @@ func (d *HeroDao) DelEquips(key int64) {
 	}
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old, existed := d.equips.Get(key)
-		_ = tx.RecordUndoToken(d, heroDaoFieldEquips, key, func() error {
+		d.recordUndoToken(tx, heroDaoFieldEquips, key, func() error {
 			if existed {
 				d.equips.Set(key, old)
 				d.Init()
@@ -633,7 +648,14 @@ func (d *HeroDao) marshalPersistData(mask uint64) []byte {
 		"pos":      d.pos,
 		"equips":   d.heroDaoEquipsRawMap(),
 	}
-	data, _ := bson.Marshal(doc)
+	data, err := bson.Marshal(doc)
+	if err != nil {
+		// The interface has no error slot and a nil payload would be
+		// persisted as silent data loss; a marshal failure here is a
+		// programming error (unserializable state), so fail loudly and let
+		// WAL/checkpoint recovery own the aftermath.
+		panic(fmt.Errorf("HeroDao: marshal persist data: %w", err))
+	}
 	return data
 }
 
@@ -712,7 +734,12 @@ func (d *HeroDao) MarshalSync(mask uint64) []byte {
 	if len(doc) == 1 {
 		return nil
 	}
-	data, _ := bson.Marshal(doc)
+	data, err := bson.Marshal(doc)
+	if err != nil {
+		// nil already means "nothing to sync"; returning it on failure would
+		// silently drop a sync payload. See marshalPersistData.
+		panic(fmt.Errorf("HeroDao: marshal sync data: %w", err))
+	}
 	return data
 }
 

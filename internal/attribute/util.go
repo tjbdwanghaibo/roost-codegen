@@ -1,11 +1,10 @@
 package attribute
 
 import (
-	"crypto/md5"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-codegen/internal/genutil"
 	"go/ast"
 	"go/format"
-	"os"
 	"strconv"
 	"strings"
 	"unicode"
@@ -159,11 +158,5 @@ func formatGo(content []byte) ([]byte, error) {
 }
 
 func writeIfChanged(path string, content []byte, force bool) (bool, error) {
-	if !force {
-		existing, err := os.ReadFile(path)
-		if err == nil && fmt.Sprintf("%x", md5.Sum(existing)) == fmt.Sprintf("%x", md5.Sum(content)) {
-			return false, nil
-		}
-	}
-	return true, os.WriteFile(path, content, 0644)
+	return genutil.WriteIfChanged(path, content, force)
 }

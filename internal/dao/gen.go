@@ -2,10 +2,9 @@ package dao
 
 import (
 	"bytes"
-	"crypto/md5"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-codegen/internal/genutil"
 	"go/format"
-	"os"
 	"strconv"
 	"strings"
 	"text/template"
@@ -133,15 +132,7 @@ func generateRedisDao(dao RedisDaoDef, pkg string, outFile string, force bool) (
 }
 
 func writeIfChanged(content []byte, outFile string, force bool) (bool, error) {
-	if !force {
-		existing, err := os.ReadFile(outFile)
-		if err == nil {
-			if fmt.Sprintf("%x", md5.Sum(existing)) == fmt.Sprintf("%x", md5.Sum(content)) {
-				return false, nil
-			}
-		}
-	}
-	return true, os.WriteFile(outFile, content, 0644)
+	return genutil.WriteIfChanged(outFile, content, force)
 }
 
 func funcMap(defs *Definitions) template.FuncMap {

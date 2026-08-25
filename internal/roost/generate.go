@@ -26,7 +26,12 @@ type GenerateOptions struct {
 	Changed bool
 	Check   bool
 	DryRun  bool
-	Stdout  io.Writer
+	// Force makes every generator rewrite its outputs even when the content
+	// is unchanged. The default relies on content-hash short-circuiting, so
+	// an idempotent regeneration leaves file mtimes alone and incremental
+	// builds stay warm.
+	Force  bool
+	Stdout io.Writer
 }
 
 type generator struct {
@@ -36,11 +41,20 @@ type generator struct {
 	Run      func(io.Writer) error
 }
 
-func generatorsFor(m Manifest) []generator {
+func forceArg(args []string, force bool) []string {
+	if force {
+		return append(args, "-force")
+	}
+	return args
+}
+
+func generatorsFor(m Manifest, force bool) []generator {
 	return []generator{
-		{Feature: "dao", Name: "dao", Prefixes: []string{"db/def/"}, Run: func(w io.Writer) error { return dao.Run([]string{"-def", "./db/def", "-out", "./db", "-force"}, w) }},
+		{Feature: "dao", Name: "dao", Prefixes: []string{"db/def/"}, Run: func(w io.Writer) error {
+			return dao.Run(forceArg([]string{"-def", "./db/def", "-out", "./db"}, force), w)
+		}},
 		{Feature: "event", Name: "event", Prefixes: []string{"event/def/"}, Run: func(w io.Writer) error {
-			args := []string{"-def", "./event/def", "-out", "./event", "-force"}
+			args := forceArg([]string{"-def", "./event/def", "-out", "./event"}, force)
 			if info, err := os.Stat("./game"); err == nil && info.IsDir() {
 				args = append(args, "-game", "./game")
 			}
@@ -50,13 +64,16 @@ func generatorsFor(m Manifest) []generator {
 			return codeerr.Run([]string{"-root", ".", "-out", "docs/generated/errcode.csv"}, w)
 		}},
 		{Feature: "protocol", Name: "protocol", Prefixes: []string{"protocol/def/"}, Run: func(w io.Writer) error {
-			return protocol.Run([]string{"-def", "./protocol/def", "-bind", "", "-handlers", "", "-robot-protocol", "", "-force"}, w)
+			return protocol.Run(forceArg([]string{"-def", "./protocol/def", "-bind", "", "-handlers", "", "-robot-protocol", ""}, force), w)
 		}},
-		{Feature: "entity", Name: "entity", Prefixes: []string{"game/entities/", "game/components/"}, Run: func(w io.Writer) error { return entity.Run([]string{"-dir", "./game", "-force"}, w) }},
-		{Feature: "nest", Name: "nest", Prefixes: []string{"game/entities/", "game/components/", "game/handler/"}, Run: func(w io.Writer) error { return nest.Run([]string{"-dir", "./game", "-force"}, w) }},
+		{Feature: "entity", Name: "entity", Prefixes: []string{"game/entities/", "game/components/"}, Run: func(w io.Writer) error { return entity.Run(forceArg([]string{"-dir", "./game"}, force), w) }},
+		{Feature: "nest", Name: "nest", Prefixes: []string{"game/entities/", "game/components/", "game/handler/"}, Run: func(w io.Writer) error { return nest.Run(forceArg([]string{"-dir", "./game"}, force), w) }},
 		{Feature: "attribute", Name: "attribute", Prefixes: []string{"game/gameplay/attribute/"}, Run: func(w io.Writer) error {
-			return attribute.Run([]string{"-dir", "./game/gameplay/attribute", "-force"}, w)
+			return attribute.Run(forceArg([]string{"-dir", "./game/gameplay/attribute"}, force), w)
 		}},
+		// tablegen keeps its historical unconditional -force: its outputs use
+		// exists-refuses-overwrite semantics rather than content hashing, so
+		// dropping force would fail every regeneration after a schema change.
 		{Feature: "config", Name: "config-template", Prefixes: []string{"configs/schema/"}, Run: func(w io.Writer) error {
 			return tablegen.Run([]string{"-meta", "./configs/schema", "-csv-template", "./configs/table_template", "-force"}, w)
 		}},
@@ -71,7 +88,7 @@ func generatorsFor(m Manifest) []generator {
 		{Feature: "config", Name: "config-go", Prefixes: []string{"configs/schema/"}, Run: func(w io.Writer) error {
 			return tablegen.Run([]string{"-meta", "./configs/schema", "-out", "./configs/generated", "-force"}, w)
 		}},
-		{Feature: "webroute", Name: "webroute", Prefixes: []string{"service/"}, Run: func(w io.Writer) error { return webroute.Run([]string{"-dir", "./service", "-force"}, w) }},
+		{Feature: "webroute", Name: "webroute", Prefixes: []string{"service/"}, Run: func(w io.Writer) error { return webroute.Run(forceArg([]string{"-dir", "./service"}, force), w) }},
 	}
 }
 
@@ -86,7 +103,7 @@ func Generate(root string, options GenerateOptions) error {
 	if options.Check {
 		return checkGenerated(root, manifest, options.Stdout)
 	}
-	selected := generatorsFor(manifest)
+	selected := generatorsFor(manifest, options.Force)
 	if options.Changed {
 		changed, err := gitChanged(root)
 		if err != nil {
@@ -135,7 +152,9 @@ func checkGenerated(root string, manifest Manifest, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := runGenerators(tmp, manifest, generatorsFor(manifest), GenerateOptions{Stdout: io.Discard}); err != nil {
+	// The staleness check compares content snapshots, so hash-short-circuited
+	// writes and forced writes produce the same verdict; skip force here.
+	if err := runGenerators(tmp, manifest, generatorsFor(manifest, false), GenerateOptions{Stdout: io.Discard}); err != nil {
 		return err
 	}
 	after, err := snapshotGenerated(tmp)
