@@ -13,13 +13,35 @@ roost 框架的项目脚手架与代码生成工具链：用源码里的标记�
 | `entity` | `//cube:entity entityKind=...` | `<entity>_gen_wire.go` | Entity 工厂、组件/DAO 装配、Snapshot、hook 接线 |
 | `nest` | `//roost:nest target=... [sync] [rollback=state\|undo] [durability=memory\|async\|strict]` | `<source>_nest_gen.go`、`sender/`、`syncsender/`、`game/bootstrap/nest.go` | handler 的 invoke 包装、显式注册与可注入的类型化 Sender |
 | `eventgen` | `event/def` 下 `Event` 前缀 struct + game 目录中 `DealEventXXX` 方法 | `event_def_gen.go`、`event_type_gen.go`、`event_type_impl_gen.go`、`<receiver>_event_gen.go` | 事件类型常量、`Type()` 实现与订阅分发代码 |
-| `tablegen` | `configs/schema` 下 `//cube:table`、`//cube:object` | Go 访问代码（`configs/generated`）、CSV 模板、CSV→JSON 数据 | 配置表 schema、策划填表模板与运行时数据的一致性 |
+| `tablegen` | `configs/schema` 下 `//cube:table`、`//cube:object`（Go 元数据先行） | Go 访问代码（`configs/generated`）、CSV 模板、CSV→JSON 数据 | 配置表 schema、策划填表模板与运行时数据的一致性 |
+| `cfggen` | 一个 YAML schema 文件（**meta 文件先行**，类似简化版 Luban）：表/对象/bean、字段类型、key/index/ref | 单文件 Go 绑定（行 struct 带 `cfg` tag、`RegisterGeneratedConfigData`、类型化访问器） | 配置定义零手写 Go：只写 meta + 一行注册；ref 在生成期查表存在性与类型一致、运行期由 configdata 查悬空引用 |
 | `attribute` | `//cube:attribute` | `gen_<profile>_attribute.go` | 属性 profile 的计算/聚合代码 |
 | `webroute` | `//cube:web` | 路由注册代码 | HTTP 路由注册不再手写 |
 | `errcode` | 扫描 `errcode.Define(code, name, msg)` 调用 | `docs/generated/errcode.csv` | 错误码清单导出与查重 |
 | `roost id` | 扫描各类标记中的 `id=/kind=/type=/code=` | —（校验命令） | 按 `roost.yaml` 声明的 ID 空间检查冲突、分配下一个可用 ID |
 
 所有生成器都可以独立运行（`cmd/<name>`），也可以由 `roost generate` 按依赖顺序统一编排：DAO → Event → Errcode → Protocol → Entity → Nest → Attribute → Config → WebRoute。
+
+### cfggen 速览（meta 文件先行）
+
+```yaml
+# configs/schema/cfg.yaml —— 唯一手写的配置定义
+package: cfg
+tables:
+  - name: monster
+    key: id
+    fields:
+      - { name: id,       type: int32 }
+      - { name: name,     type: string }
+      - { name: scene_id, type: int32, index: true }
+      - { name: drop_id,  type: int32, ref: drop }
+```
+
+```bash
+go run github.com/tjbdwanghaibo/roost-codegen/cmd/cfggen -meta ./configs/schema/cfg.yaml -out ./cfg
+```
+
+业务侧接线只剩一行：`cfg.MustRegisterGeneratedConfigData(reg)`；读取用生成的 `cfg.MonsterTableFrom(snap)`，二级索引生成强类型访问器 `cfg.MonsterBySceneID(snap, 7)`（参数类型来自字段，不传索引名和字符串值）。运行期的悬空引用校验、原子热更、回滚由 cube-core/configdata 承担（`RegisterAutoTable` + `cfg` tag）。接真正 Luban 的方式见 cube-core `examples/lubanreal`（官方 luban CLI 真实生成的端到端示例）。
 
 ## 快速启动
 
