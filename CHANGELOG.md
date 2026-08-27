@@ -4,7 +4,8 @@
 
 ## [Unreleased]
 
-（暂无未发布变更。）
+### Docs
+- `docs/PROJECT_GENERATOR.zh-CN.md`：补充 **features 完整清单**（13 个开关：脚手架目录、驱动的生成器、bootstrap 接线、版本约束，标注 `project new` 默认七项）与 **Kit Mod 完整表**（14 个 Mod 含自动依赖列——原清单缺 `checkpoint`/`nestwal`/`nest`/`saga`，且 `remote_entity` 依赖不全）；明确 features（编译期生成开关）与 mods（运行时装配）的维度区别及默认值/校验约束；示例同步补默认 feature `errcode`；README 加清单入口。
 
 ## [1.6.0] - 2026-08
 

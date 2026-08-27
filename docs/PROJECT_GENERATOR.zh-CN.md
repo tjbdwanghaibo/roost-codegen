@@ -79,8 +79,10 @@ PATH 的目录就是 `D:\Program Files\Go\bin\bin`。关闭并重新打开 Power
       -module github.com/acme/planet \
       -services game,gate \
       -mods configdata,etcd,redis,mongo,nats,sync,remote_entity \
-      -features protocol,config,entity,nest,event,dao \
+      -features protocol,config,entity,nest,event,dao,errcode \
       -out D:/work/planet
+
+features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节的 Mod 表。
 
 固定依赖版本：
 
@@ -147,6 +149,7 @@ PATH 的目录就是 `D:\Program Files\Go\bin\bin`。关闭并重新打开 Power
       - nest
       - event
       - dao
+      - errcode
 
 修改清单后执行：
 
@@ -155,20 +158,48 @@ PATH 的目录就是 `D:\Program Files\Go\bin\bin`。关闭并重新打开 Power
 
 sync 会重新生成 App 装配、Makefile、CI、Docker Compose 和使用说明，不覆盖已经存在的 Service 实现与业务配置。
 
+### features 完整清单
+
+features 是项目级**代码生成开关**，与 mods 是两个维度：features 决定"生成哪些目录骨架、`make generate` 跑哪些生成器、bootstrap 里接什么线"（编译期形态）；mods 决定"进程运行时装配哪些 Kit Mod"。未知 feature 在加载 roost.yaml 时直接报错。
+
+| feature | 脚手架目录 | 驱动的生成器 / bootstrap 接线 |
+| --- | --- | --- |
+| `protocol` ✦ | `protocol/def/` | protocol 生成器（消息注册、bind、handlers、robot-protocol） |
+| `config` ✦ | `configs/schema/`、`configs/generated/`、`configs/data/`（含 `_manifest.json`） | tablegen 三连：`config-template`（meta → CSV 模板）、`config-data`（CSV → JSON）、`config-go`（meta → struct + 注册 + 类型化访问器）；与 `configdata` mod 同时存在时 bootstrap 自动调 `RegisterGeneratedConfigData` |
+| `entity` ✦ | `game/entities/` | entity 生成器（`-dir ./game`） |
+| `nest` ✦ | `game/handler/`、`game/bootstrap/register.go` | nest 生成器；bootstrap 里插入 `gamebootstrap.RegisterNestHandlers()` |
+| `event` ✦ | `event/def/`、`event/` | event 生成器（存在 `./game` 目录时联动） |
+| `dao` ✦ | `db/def/`、`db/` | dao 生成器 |
+| `errcode` ✦ | — | errcode 扫描器，产出 `docs/generated/errcode.csv` |
+| `attribute` | `game/gameplay/attribute/` | attribute 生成器 |
+| `webroute` | `service/web/` | webroute 生成器（`-dir ./service`） |
+| `saga` | — | 无独立生成器——由 `make new-saga`（`roost add saga`）**自动追加**的标记；saga 骨架由 add 命令生成，bootstrap 聚合各 `Definitions()`。要求至少一个 Service 挂 `saga` mod，且 core/kit >= v1.4.0 |
+| `replication-quic` / `replication-kcp` / `replication-udp` | `internal/transport/generated.go` | 生成 `NewQUIC()` / `NewKCP()` / `NewUDP()`（AsyncTransport 组装）与 `NewRoomSink` 房间下发接线（见第 16 节）；三者可并选，要求 kit >= v1.1.0 |
+
+✦ = `roost project new` 不传 `-features` 时的默认七项：`protocol, config, entity, nest, event, dao, errcode`。
+
 ## 5. Kit Mod 自动装配
 
-支持的 Mod：
+支持的 Mod（`->` 后为自动补齐的依赖，声明时无需手写）：
 
-- lock：进程内实体锁管理。
-- ops：health、ready、metrics 和 admin HTTP。
-- statslog：运行时、Entity 和 Nest 周期统计。
-- configdata：不可变配置快照加载和热更。
-- etcd：注册发现、watch、选主和本地镜像。
-- redis：Redis、pipeline、pub/sub 和分布式锁。
-- mongo：Mongo client、collection、session 和索引策略。
-- nats：NATS、JetStream、RPC 和 Bus。
-- sync：NATS 或 JetStream 同步 Bus；自动补充 nats。
-- remote_entity：远程 Entity、版本锁和同步重试；自动补充 redis。
+| mod | 自动依赖 | 说明 |
+| --- | --- | --- |
+| `lock` | — | 进程内实体锁管理 |
+| `ops` | — | health、ready、metrics 和 admin HTTP |
+| `statslog` | — | 运行时、Entity 和 Nest 周期统计 |
+| `configdata` | — | 不可变配置快照加载和热更（与 `config` feature 配合成完整配置管线） |
+| `etcd` | — | 注册发现、watch、选主和本地镜像 |
+| `redis` | — | Redis、pipeline、pub/sub 和分布式锁 |
+| `mongo` | — | Mongo client、collection、session 和索引策略 |
+| `nats` | — | NATS、JetStream、RPC 和 Bus |
+| `sync` | `nats` | NATS 或 JetStream 同步 Bus |
+| `remote_entity` | `redis`、`mongo`、`sync` | 跨服实体所有权、原子事务、快照分发与版本锁 |
+| `checkpoint` | `mongo`、`redis` | 实体快照异步落库 + Redis 快照 WAL |
+| `nestwal` | `checkpoint`、`nats` | Nest 事务 WAL + effect outbox |
+| `nest` | `nestwal` | 实例级 Nest 引擎装配 |
+| `saga` | `nestwal` | saga 引擎（要求 core/kit >= v1.4.0） |
+
+默认值：`shared_mods = lock, ops, statslog`；`roost project new` 不传 `-mods` 时每个 Service 默认 `configdata, etcd, redis, mongo, nats, sync, remote_entity, checkpoint, nestwal, nest`（即除 `saga` 外全量）。约束：Service 的 mods 不得与 shared_mods 重复（校验期拒绝）；依赖由生成器拓扑展开并检测环。
 
 Core 会根据 DependsOn 排序生命周期。生成器负责补齐必需依赖，不复制 Kit 内部的连接、重试、health 或 shutdown 逻辑。
 

@@ -68,6 +68,8 @@ Windows 下使用仓库内脚本（不修改现有 `GOBIN`/`GOPATH`，只把 `go
     roost project new planet -services game,gate \
       -mods configdata,etcd,redis,mongo,nats,sync,remote_entity
 
+`-features`（生成哪些代码：13 个开关）与 `-mods`（运行时装配哪些 Kit Mod：14 个，依赖自动展开）的完整清单见 [docs/PROJECT_GENERATOR.zh-CN.md](docs/PROJECT_GENERATOR.zh-CN.md) 第 4、5 节。
+
 生产项目不要在 Makefile 或 CI 中使用 `@latest`；落盘后必须固定版本。
 
 ### 2. 写一个带 dao 标记的 struct
