@@ -198,6 +198,9 @@ func hasReplicationFeature(m Manifest) bool {
 }
 
 func versionAtLeast(version string, major, minor, patch int) bool {
+	if version == "latest" {
+		return true
+	}
 	var gotMajor, gotMinor, gotPatch int
 	if _, err := fmt.Sscanf(strings.TrimPrefix(version, "v"), "%d.%d.%d", &gotMajor, &gotMinor, &gotPatch); err != nil {
 		return false
