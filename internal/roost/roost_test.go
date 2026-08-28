@@ -42,6 +42,8 @@ func TestNewProjectSyncPreservesBusinessFiles(t *testing.T) {
 	for _, rel := range []string{
 		"roost.yaml",
 		"Makefile",
+		"docs/QUICKSTART.zh-CN.md",
+		"docs/ROOST_YAML.zh-CN.md",
 		"internal/bootstrap/generated.go",
 		"internal/service/game/service.go",
 		"configs/generated/gen_table_config.go",
@@ -446,7 +448,7 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 		t.Fatal(err)
 	}
 	deps, ok := plan["internal/frameworkdeps/generated.go"]
-	if !ok || !strings.Contains(string(deps.Body), "github.com/tjbdwanghaibo/roost-skill/skillv2") {
+	if !ok || !strings.Contains(string(deps.Body), "github.com/tjbdwanghaibo/roost-skill/skill") || strings.Contains(string(deps.Body), "/skillv2") {
 		t.Fatalf("generated project does not pin the skill module: %q", deps.Body)
 	}
 	makefile := string(plan["Makefile"].Body)
@@ -469,6 +471,46 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 	ci := string(plan[".github/workflows/ci.yml"].Body)
 	if !strings.Contains(ci, "make deps-update") {
 		t.Fatalf("generated CI does not test the latest framework set:\n%s", ci)
+	}
+}
+
+func TestGeneratedBeginnerAndManifestDocumentationIsComplete(t *testing.T) {
+	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"configdata"}, nil)
+	plan, err := renderProject(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestGuide := string(plan["docs/ROOST_YAML.zh-CN.md"].Body)
+	for _, want := range []string{
+		"schema", "project.name", "project.module", "versions.core", "versions.kit",
+		"versions.skill", "versions.codegen", "shared_mods", "services.<name>.mods",
+		"features", "sagas", "ids", "groups", "min", "max", "完整示例",
+		"Feature 和 Mod 必须分别理解", "roost id next protocol -group game",
+		minimumVersions.Core, minimumVersions.Kit, minimumVersions.Skill, minimumVersions.Codegen,
+	} {
+		if !strings.Contains(manifestGuide, want) {
+			t.Errorf("manifest guide missing %q:\n%s", want, manifestGuide)
+		}
+	}
+	for mod := range modCatalog {
+		if !strings.Contains(manifestGuide, "| "+mod+" |") {
+			t.Errorf("manifest guide missing mod %q", mod)
+		}
+	}
+	for feature := range knownFeatures {
+		if !strings.Contains(manifestGuide, "| "+feature+" |") {
+			t.Errorf("manifest guide missing feature %q", feature)
+		}
+	}
+	quickstart := string(plan["docs/QUICKSTART.zh-CN.md"].Body)
+	for _, want := range []string{
+		"零基础快速开始", "Go 1.25", "Service", "Mod", "Feature", "Generated file",
+		"make deps-update", "make generate", "make doctor", "make run SERVICE=game",
+		"roost add protocol", "常见问题", "ROOST_YAML.zh-CN.md",
+	} {
+		if !strings.Contains(quickstart, want) {
+			t.Errorf("beginner guide missing %q:\n%s", want, quickstart)
+		}
 	}
 }
 

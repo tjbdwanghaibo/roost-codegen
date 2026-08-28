@@ -25,7 +25,7 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 var minimumVersions = VersionSpec{
 	Core:    "v1.8.0",
 	Kit:     "v1.8.0",
-	Skill:   "v1.7.0",
+	Skill:   "v1.9.0",
 	Codegen: "v1.7.0",
 }
 

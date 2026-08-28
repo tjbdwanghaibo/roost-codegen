@@ -114,6 +114,10 @@ go run github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest project upgrade -
     roost project new planet -services game,gate \
       -mods configdata,etcd,redis,mongo,nats,sync,remote_entity
 
+完全新手建议先使用 `-mods configdata` 创建轻量项目。生成结果内含
+`docs/QUICKSTART.zh-CN.md` 零基础教程和 `docs/ROOST_YAML.zh-CN.md` 全字段参考，
+不需要先理解全部 MongoDB、Redis、NATS、Nest WAL 和跨服能力。
+
 `-features`（生成哪些代码：13 个开关）与 `-mods`（运行时装配哪些 Kit Mod：14 个，依赖自动展开）的完整清单见 [docs/PROJECT_GENERATOR.zh-CN.md](docs/PROJECT_GENERATOR.zh-CN.md) 第 4、5 节。
 
 新项目的 `roost.yaml` 默认将 core、kit、skill、codegen 都声明为 `latest`。`project new/sync/deps` 会把 core、kit、skill 作为三个直接依赖一次性执行 `go get ...@latest`，再 `go mod tidy`；因此 kit/skill 的旧下限不会把底层 core 降级。Go 不允许在 `go.mod` 的 `require` 中写查询值 `latest`，所以落盘的是本次解析出的具体版本与 `go.sum`，策略仍保存在 `roost.yaml`。CI 会重新解析最新版本，发布构建则使用该次已经解析并测试过的具体依赖图。

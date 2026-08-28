@@ -50,6 +50,31 @@ make codegen-up   # go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@
 
 `project-upgrade` 使用最新 codegen 更新全部受控工程模板，并把 core、kit、skill、codegen 四个策略设为 `latest`。`roost-up` 更新完整项目依赖图，适合主动升级窗口；更新后必须检查 `go.mod/go.sum` 并执行 `make ci`。`codegen-up` 更新 GOPATH/GOBIN 中安装的 CLI，不修改业务 module。
 
+### 纯新手第一次使用
+
+默认项目启用的基础设施较完整。第一次只想理解目录和生成流程时，建议显式选择
+`configdata`，避免一开始就要求 MongoDB、Redis、NATS 和 etcd：
+
+    roost project new hello_roost \
+      -module example.com/hello_roost \
+      -mods configdata \
+      -features protocol,config,entity,nest,event,dao,errcode
+    cd hello_roost
+    make deps-update
+    make generate
+    make doctor
+    make test
+    make run SERVICE=game
+
+每个新项目都会生成：
+
+- `docs/QUICKSTART.zh-CN.md`：环境、概念、第一次运行、第一次业务改动和常见错误；
+- `docs/ROOST_YAML.zh-CN.md`：清单全部字段、嵌套字段、规则和完整例子；
+- `docs/USAGE.zh-CN.md`：当前项目实际启用的 Service、Mod 和日常命令。
+
+初学者最容易混淆的是：Service 是进程入口，Mod 是运行时基础设施，Feature 是生成期开关，
+带生成标识的文件不能手改。生成器负责重复接线，不会生成完整玩法和权限规则。
+
 ### Windows 安装与 PATH
 
 在 roost-codegen 仓库中可以运行可重复执行的安装脚本。脚本读取当前
@@ -114,7 +139,7 @@ features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节
     roost project new planet \
       -roost-core-version v1.8.0 \
       -roost-kit-version v1.8.0 \
-      -roost-skill-version v1.7.0 \
+      -roost-skill-version v1.9.0 \
       -codegen-version v1.7.0
 
 默认生成：
@@ -138,6 +163,9 @@ features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节
       .github/workflows/ci.yml
 
 ## 4. roost.yaml
+
+新项目内的 `docs/ROOST_YAML.zh-CN.md` 是随 codegen 版本生成的字段级权威说明。
+下面给出仓库级总览；未知字段会在严格 YAML 解码阶段直接报错。
 
 示例：
 
@@ -175,6 +203,30 @@ features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节
       - event
       - dao
       - errcode
+
+顶层和嵌套字段：
+
+| 字段 | 是否必需 | 含义与约束 |
+| --- | --- | --- |
+| `schema` | 是 | roost.yaml 格式版本；当前必须为 `1` |
+| `project.name` | 是 | 应用名；小写字母开头，只允许小写字母、数字和下划线 |
+| `project.module` | 是 | 生成代码使用的 Go module import path |
+| `versions.core` | 是 | cube-core 的 `latest` 策略或明确最低版本 |
+| `versions.kit` | 是 | cube-kit 的更新策略或最低版本 |
+| `versions.skill` | 是 | roost-skill 的更新策略或最低版本 |
+| `versions.codegen` | 是 | Makefile/模板使用的 codegen 策略 |
+| `shared_mods` | 否 | 进程级共享 Mod；每个 Service 不得重复声明 |
+| `services` | 是 | Service 名到配置的 map；至少一个 Service |
+| `services.<name>.mods` | 否 | 该 Service 装配的 Kit Mod，依赖会自动展开 |
+| `features` | 否 | 生成目录、生成器和 bootstrap 接线的项目级开关 |
+| `sagas` | 否 | `roost add saga` 已生成的 Saga 名称；不要只手工添加 |
+| `ids` | 否 | protocol/entity/component/errcode 的编号空间 |
+| `ids.<kind>.min/max` | 视类型 | 普通编号空间的闭区间，必须 `min > 0` 且 `max >= min` |
+| `ids.protocol.groups.<name>.min/max` | 否 | Protocol 按业务组划分的独立闭区间 |
+
+`versions.*: latest` 保存在 roost.yaml 中作为持续更新策略；Go 不允许在 require 中写
+`latest`，所以 go.mod/go.sum 保存一次解析出的具体版本。`features` 与 `mods` 是两个维度：
+前者决定生成什么，后者决定服务运行时启动什么。
 
 修改清单后执行：
 
@@ -427,7 +479,7 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
     roost project upgrade \
       -core v1.8.0 \
       -kit v1.8.0 \
-      -skill v1.7.0 \
+      -skill v1.9.0 \
       -codegen v1.7.0
 
 升级更新 roost.yaml 和生成器管理的文件，然后按新策略更新 `go.mod/go.sum`。业务代码和业务配置保留。依赖解析或 tidy 失败时，原 `go.mod/go.sum` 会恢复。core、kit、skill 的明确版本是 Go MVS 下限而不是上限；若其他直接依赖要求更高版本，最终解析结果会更高。codegen 查询则使用 `versions.codegen` 指定的版本或 `latest`。
@@ -454,7 +506,7 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 
     github.com/tjbdwanghaibo/cube-core v1.8.0
     github.com/tjbdwanghaibo/cube-kit v1.8.0
-    github.com/tjbdwanghaibo/roost-skill v1.7.0
+    github.com/tjbdwanghaibo/roost-skill v1.9.0
 
 不生成 `replace`。在正常的 `project new/sync/deps` 路径中，上述版本会立即被当前最新 release 替换；具体版本留在 `go.mod/go.sum`，而“继续跟随最新”的策略留在 `roost.yaml`。生成的 `internal/frameworkdeps/generated.go` 以类型别名保留暂未被业务导入的 skill，因此 tidy 不会删掉它。若需要离线生成，bootstrap 下限仍可构建；恢复网络后执行 `make deps-update` 即可追到最新。
 

@@ -55,6 +55,18 @@ roost project new planet \
 
 主要产物：`roost.yaml`、main/bootstrap/Service、配置、Makefile、CI、开发 compose，以及 Shell、Docker、Kubernetes 生产部署模板。Secret 示例和业务文件归应用所有，后续 sync 不覆盖；带生成标识的装配文件由生成器管理。
 
+新项目同时生成 `docs/QUICKSTART.zh-CN.md` 和 `docs/ROOST_YAML.zh-CN.md`。前者面向
+完全新手，后者逐项解释 `schema`、`project.*`、`versions.*`、`shared_mods`、
+`services.<name>.mods`、`features`、`sagas` 与 `ids` 的全部嵌套字段和示例。
+
+第一次只验证生成流程可使用较轻的项目：
+
+```bash
+roost project new hello_roost -module example.com/hello_roost \
+  -mods configdata \
+  -features protocol,config,entity,nest,event,dao,errcode
+```
+
 ### 1.2 同步、预览和诊断
 
 ```bash

@@ -25,7 +25,7 @@ var helpTopics = []helpTopic{
 roost project sync|diff|doctor [--root dir]
 roost project upgrade [--root dir] [--dry-run] [-core version] [-kit version] [-skill version] [-codegen version]
 make project-upgrade`,
-		Configuration: `项目声明位于 roost.yaml：project 定义名称/module，versions 定义 latest 或最低版本，shared_mods/services 定义装配，features 定义生成能力，ids 定义编号空间。sync/upgrade 只覆盖带生成标识的 codegen 受控文件；project-upgrade 始终通过 @latest 运行，并将 core、kit、skill、codegen 策略全部更新为 latest。升级读取旧清单时先合并新策略，再执行当前版本门禁。`,
+		Configuration: `项目声明位于 roost.yaml：project 定义名称/module，versions 定义 latest 或最低版本，shared_mods/services 定义装配，features 定义生成能力，sagas 定义已生成 Saga，ids 定义编号空间。新项目会生成 docs/ROOST_YAML.zh-CN.md 字段级参考和 docs/QUICKSTART.zh-CN.md 零基础教程。sync/upgrade 只覆盖 codegen 受控文件；project-upgrade 始终通过 @latest 运行，并将 core、kit、skill、codegen 策略全部更新为 latest。`,
 		Example: `roost project new planet -module example.com/planet -services game,gate
 cd planet
 make dev-up

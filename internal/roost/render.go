@@ -27,6 +27,8 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	add(".gitignore", "bin/\ndist/\nlog/\n.env\n*.local.yaml\ndeploy/k8s/secret.*.local.yaml\n.idea/\n.vscode/\n", false)
 	add("Makefile", renderMakefile(m), true)
 	add("README.md", renderProjectReadme(m), false)
+	add("docs/QUICKSTART.zh-CN.md", renderBeginnerQuickstart(m), true)
+	add("docs/ROOST_YAML.zh-CN.md", renderManifestGuide(), true)
 	add("docs/USAGE.zh-CN.md", renderUsage(m), true)
 	add(".github/workflows/ci.yml", renderCI(m), true)
 	add("deploy/dev/docker-compose.yaml", renderCompose(m), true)
@@ -168,11 +170,11 @@ func renderFrameworkDeps() string {
 	return generatedHeader + `
 package frameworkdeps
 
-import skillv2 "github.com/tjbdwanghaibo/roost-skill/skillv2"
+import "github.com/tjbdwanghaibo/roost-skill/skill"
 
 // SkillProgram retains the skill runtime selected by roost.yaml without adding
 // runtime initialization or requiring business code to import it immediately.
-type SkillProgram = skillv2.Program
+type SkillProgram = skill.Program
 `
 }
 
@@ -585,6 +587,9 @@ func renderProjectReadme(m Manifest) string {
 
 ## 第一级：完全新手，五分钟运行
 
+第一次使用先阅读 [零基础快速开始](docs/QUICKSTART.zh-CN.md) 和
+[roost.yaml 字段参考](docs/ROOST_YAML.zh-CN.md)。
+
     make dev-up
     make deps-update
     make generate
@@ -596,7 +601,7 @@ func renderProjectReadme(m Manifest) string {
 
 ## 第二级：有经验开发者
 
-阅读 [完整使用说明](docs/USAGE.zh-CN.md)，了解 Service/Mod 装配、生成命令、配置、测试与常用业务路径。
+阅读 [完整使用说明](docs/USAGE.zh-CN.md)，了解 Service/Mod 装配、生成命令、配置、测试与常用业务路径；修改项目声明前查阅 [roost.yaml 字段参考](docs/ROOST_YAML.zh-CN.md)。
 
 ## 第三级：框架实现与生产运维
 
@@ -659,5 +664,12 @@ core、kit、skill、codegen 默认都是 latest。roost project new/sync/deps �
 - /var/lib/roost/wal 必须挂载单写持久卷，同一个 SID 不得由两个实例同时挂载。
 - JetStream effect 消费必须通过 nestwal.MongoEffectInbox 与业务 Mongo 写入同一事务，不能仅依赖 MsgID 去重窗口。
 - 发布顺序为 roost-core、roost-kit、roost-skill、roost-codegen；部署前必须执行 make ci 并完成容器重启恢复演练。
+
+## 继续阅读
+
+- 零基础流程：QUICKSTART.zh-CN.md
+- roost.yaml 所有字段：ROOST_YAML.zh-CN.md
+- 实现原理：IMPLEMENTATION.zh-CN.md
+- 生产部署：DEPLOYMENT.zh-CN.md
 `, m.Project.Name, services.String(), minimumVersions.Core, minimumVersions.Kit, minimumVersions.Skill, minimumVersions.Codegen)
 }
