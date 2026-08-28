@@ -1,8 +1,12 @@
 # roost-codegen
 
-roost 框架的项目脚手架与代码生成工具链：用源码里的标记注释（`//cube:dao`、`//roost:nest` 等）驱动一组 Go 代码生成器，把持久化、同步、协议、事件、配置表这些"写错就丢数据"的样板代码变成可重复生成、可 CI 校验的产物。当前版本 **v1.5.0**。
+roost 框架的项目脚手架与代码生成工具链：用源码里的标记注释（`//cube:dao`、`//roost:nest` 等）驱动一组 Go 代码生成器，把持久化、同步、协议、事件、配置表这些"写错就丢数据"的样板代码变成可重复生成、可 CI 校验的产物。当前源码面向下一生产版本 **v1.7.0**；已发布稳定版为 v1.6.0。
 
 生成物依赖 [cube-core](https://github.com/tjbdwanghaibo/cube-core) 运行时（`checkpoint`、`entity`、`nest`、`fmap` 等包），见[与 cube-core 的关系](#学习路径与-cube-core-的关系)。
+
+文档按三级使用：新手先看 [Roost 五分钟快速开始](https://github.com/tjbdwanghaibo/cube-core/blob/main/docs/QUICKSTART.md)；熟练用户看 [项目生成器完整说明](docs/PROJECT_GENERATOR.zh-CN.md)；维护者再看生成器的关键实现细节和 [Roost 实现原理](https://github.com/tjbdwanghaibo/cube-core/blob/main/docs/INTERNALS.md)。
+
+逐个命令、marker、输入输出和完整用例见 [全功能使用手册与用例](docs/CODEGEN_REFERENCE.zh-CN.md)；cfggen 的 schema 字段级参考见 [CFGGEN_META](docs/CFGGEN_META.zh-CN.md)。
 
 ## 生成器总览
 
@@ -47,13 +51,13 @@ go run github.com/tjbdwanghaibo/roost-codegen/cmd/cfggen -meta ./configs/schema/
 
 ### 1. 安装 roost CLI
 
-推荐固定发布版本运行，不需要把 codegen 加进业务 module：
+推荐直接跟随最新 codegen，不需要把 codegen 加进业务 module：
 
-    go run github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.5.0 help
+    go run github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest help
 
 或安装本地命令：
 
-    go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@v1.5.0
+    go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest
     roost help
 
 Windows 下使用仓库内脚本（不修改现有 `GOBIN`/`GOPATH`，只把 `go install` 实际使用的 Go bin 目录追加进用户 PATH）：
@@ -63,6 +67,48 @@ Windows 下使用仓库内脚本（不修改现有 `GOBIN`/`GOPATH`，只把 `go
 
 完整步骤见 [Windows 安装与 PATH](docs/PROJECT_GENERATOR.zh-CN.md#windows-安装与-path)。
 
+### 安装后的内置帮助
+
+`roost help` 会列出 CLI 和所有生成器能力；不需要打开仓库文档即可查询用途、参数、配置/marker 和最小示例：
+
+```bash
+roost help                    # 能力总览
+roost help dao                # DAO 配置、tag、命令和例子
+roost help entity             # Entity marker 和装配例子
+roost help nest               # handler、rollback、durability
+roost help protocol           # 协议定义与输出目录
+roost help versions           # latest 策略和最低版本
+roost help all                # 输出全部专题
+
+roost project --help          # 顶级命令上下文帮助
+roost project deps --help     # 等价于 roost help versions
+roost add dao --help          # 等价于 roost help dao
+```
+
+内置专题包括：`project`、`versions`、`generate`、`add`、`mods`、`dao`、`entity`、`nest`、`protocol`、`cfggen`、`tablegen`、`eventgen`、`attribute`、`webroute`、`errcode`、`saga`、`replication`、`config`、`id`、`format`、`deploy`。常用别名也可查询，例如 `roost help table`、`roost help event`、`roost help k8s`。
+
+专题输出固定包含四部分：用途、命令、配置/标记和示例。未知能力会失败并提示先运行 `roost help`，适合脚本和 CI 发现拼写错误。
+
+新项目 Makefile 同时提供四个更新入口：
+
+```bash
+make project-upgrade # 使用 @latest codegen 升级工程模板
+make deps-update  # 按 roost.yaml 更新 core、kit、skill
+make roost-up     # GOWORK=off go get -u ./...；然后 go mod tidy
+make codegen-up   # go install roost-codegen/cmd/roost@latest
+```
+
+`project-upgrade` 直接通过 `@latest` 运行生成器，更新所有带生成标识的受控工程文件，并把 core、kit、skill、codegen 四个版本策略都设为 `latest`。`roost-up` 会更新项目实际引用的直接和间接依赖，变更 `go.mod/go.sum`；执行后应运行 `make ci` 并提交依赖文件。`codegen-up` 更新的是 Go bin 目录中的 `roost` 可执行文件。
+
+旧项目的 Makefile 尚无 `project-upgrade` 时，先预览并执行一次迁移：
+
+```bash
+go run github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest project upgrade --root . --dry-run -core latest -kit latest -skill latest -codegen latest
+go run github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest project upgrade --root . -core latest -kit latest -skill latest -codegen latest
+```
+
+迁移会把 `roost-up`、`codegen-up` 和其他当前工程指令一起写入 codegen 管理的 Makefile。没有生成标识的自定义 Makefile 会被拒绝，不会被静默覆盖。
+
 创建新项目（生成 `roost.yaml` 描述 Service、Kit Mod、生成能力、版本和 ID 空间）：
 
     roost project new planet -services game,gate \
@@ -70,7 +116,7 @@ Windows 下使用仓库内脚本（不修改现有 `GOBIN`/`GOPATH`，只把 `go
 
 `-features`（生成哪些代码：13 个开关）与 `-mods`（运行时装配哪些 Kit Mod：14 个，依赖自动展开）的完整清单见 [docs/PROJECT_GENERATOR.zh-CN.md](docs/PROJECT_GENERATOR.zh-CN.md) 第 4、5 节。
 
-生产项目不要在 Makefile 或 CI 中使用 `@latest`；落盘后必须固定版本。
+新项目的 `roost.yaml` 默认将 core、kit、skill、codegen 都声明为 `latest`。`project new/sync/deps` 会把 core、kit、skill 作为三个直接依赖一次性执行 `go get ...@latest`，再 `go mod tidy`；因此 kit/skill 的旧下限不会把底层 core 降级。Go 不允许在 `go.mod` 的 `require` 中写查询值 `latest`，所以落盘的是本次解析出的具体版本与 `go.sum`，策略仍保存在 `roost.yaml`。CI 会重新解析最新版本，发布构建则使用该次已经解析并测试过的具体依赖图。
 
 ### 2. 写一个带 dao 标记的 struct
 
@@ -105,7 +151,7 @@ type EquipInfo struct {
 
 或独立运行 dao 生成器：
 
-    go run github.com/tjbdwanghaibo/roost-codegen/cmd/dao@v1.5.0 -def ./db/def -out ./db
+    go run github.com/tjbdwanghaibo/roost-codegen/cmd/dao@v1.7.0 -def ./db/def -out ./db
 
 输出（输出目录需能推断出包名，即已有至少一个非生成的 `.go` 文件，否则用 `-pkg` 指定）：
 
@@ -217,7 +263,7 @@ func (d *HeroDao) markItemsKeyDirty(key int64, val int32) {
 
 ### 常见错误与 fail-fast 报错
 
-生成器对"看起来能过、实际埋雷"的写法一律报错而不是静默跳过。以下是真实运行输出（v1.5.0）：
+生成器对"看起来能过、实际埋雷"的写法一律报错而不是静默跳过。以下是真实运行输出（v1.6.0）：
 
 只写辅助选项（v1.4 会静默关掉 persist+sync，是数据丢失陷阱）：
 
@@ -268,7 +314,8 @@ type (
 ## roost CLI 统一命令
 
     roost project new <name>            # 脚手架新项目
-    roost project sync|diff|doctor|upgrade
+    roost project sync|diff|doctor
+    roost project upgrade [--root dir] [-core version] [-kit version] [-skill version] [-codegen version]
     roost generate                      # 按序执行 roost.yaml 启用的全部生成器
     roost generate --changed            # 只执行受 git 变更影响的生成器
     roost generate --check              # CI 门禁：临时副本中重新生成并比对
@@ -347,7 +394,7 @@ func handlerTransfer(owner BagOwner, target TargetOwner, itemID int64) error { /
 3. **读实现**：每个生成器都是同一结构：`parse.go`（标记/AST → 中间定义）→ `gen.go` + `template_*.go`（text/template → `format.Source` → `WriteIfChanged`）→ `main.go`（flag 与文件编排）。从 `internal/dao` 读起，其余生成器同构。
 4. **编排层**：`internal/roost/generate.go`（顺序、`--changed`/`--check`/`--force`）、`manifest.go`（roost.yaml 校验）、`add.go`（脚手架）、`id.go`（ID 空间扫描）。
 
-**与 cube-core 的关系**：roost-codegen 只在**生成期**运行，本身不被业务依赖；生成出来的代码在**运行期**依赖 cube-core 提供的接口与容器——`checkpoint.DirtyTracker`/`DirtyHook`/`PersistPatch`（脏追踪与落库 patch）、`entity.DaoInterface`（DAO 生命周期）、`nest.RollbackTx`/`RollbackSnapshotter`/`CommitParticipant`（事务回滚与提交参与者）、`fmap`（三种 map 实现）、`migration.MigrateDAO`（schema 迁移），以及 `go.mongodb.org/mongo-driver/bson`。升级 cube-core 后重新生成即可让产物对齐新接口；两者版本由 `roost.yaml` 的 `versions` 字段统一固定。
+**与 cube-core 的关系**：roost-codegen 只在**生成期**运行，本身不被业务依赖；生成出来的代码在**运行期**依赖 cube-core 提供的接口与容器——`checkpoint.DirtyTracker`/`DirtyHook`/`PersistPatch`（脏追踪与落库 patch）、`entity.DaoInterface`（DAO 生命周期）、`nest.RollbackTx`/`RollbackSnapshotter`/`CommitParticipant`（事务回滚与提交参与者）、`fmap`（三种 map 实现）、`migration.MigrateDAO`（schema 迁移），以及 `go.mongodb.org/mongo-driver/bson`。升级 cube-core 后重新生成即可让产物对齐新接口；更新策略由 `roost.yaml` 的 `versions` 字段统一管理，默认跟随 `latest`，也允许使用不低于兼容下限的明确版本。
 
 ## 从 v1.4 升级到 v1.5
 

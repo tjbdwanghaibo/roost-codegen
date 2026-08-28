@@ -1,12 +1,13 @@
 package dao
 
 import (
-	"bytes"
 	"flag"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/tjbdwanghaibo/roost-codegen/internal/genutil"
 )
 
 var updateGolden = flag.Bool("update", false, "rewrite golden files")
@@ -58,13 +59,7 @@ func TestGoldenGeneratedOutput(t *testing.T) {
 			}
 			continue
 		}
-		want, err := os.ReadFile(goldenPath)
-		if err != nil {
-			t.Fatalf("missing golden for generated file %s (run with -update after intentional template changes): %v", name, err)
-		}
-		if !bytes.Equal(got, want) {
-			t.Errorf("generated %s differs from golden; run with -update if the template change is intentional", name)
-		}
+		genutil.AssertGolden(t, goldenPath, got, false)
 	}
 	if *updateGolden {
 		return

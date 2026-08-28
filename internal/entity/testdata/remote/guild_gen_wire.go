@@ -113,14 +113,14 @@ func (e *Guild) BuildRemoteCommitLocked(lease entity.RemoteWriteLease, outcome e
 		return commit, nil
 	}
 	if e.dao != nil {
-		if mask := e.dao.Tracker.TakePersistDirty(); mask != 0 {
+		if mask := e.dao.DirtyTracker().TakePersistDirty(); mask != 0 {
 			data := append([]byte(nil), e.dao.MarshalPersist(mask)...)
 			if len(data) == 0 {
-				e.dao.Tracker.RollbackPersist(mask)
+				e.dao.DirtyTracker().RollbackPersist(mask)
 				e.RollbackRemoteCommit(commit)
 				return entity.RemoteCommit{}, fmt.Errorf("Guild: empty remote mutation for guilds")
 			}
-			e.dao.Tracker.IncVersion()
+			e.dao.DirtyTracker().IncVersion()
 			mutation := entity.RemoteDataMutation{
 				Database:      e.dao.DbName(),
 				DatabaseScope: uint8(checkpoint.ResolveDatabaseScope(e.dao)),
@@ -159,7 +159,7 @@ func (e *Guild) RollbackRemoteCommit(commit entity.RemoteCommit) {
 		switch mutation.Collection {
 		case GuildDAOCollection:
 			if e.dao != nil {
-				e.dao.Tracker.RollbackPersist(mutation.Mask)
+				e.dao.DirtyTracker().RollbackPersist(mutation.Mask)
 			}
 		}
 	}
@@ -170,8 +170,8 @@ func (e *Guild) RollbackRemoteCommit(commit entity.RemoteCommit) {
 func (e *Guild) Snapshot() []checkpoint.SaveItem {
 	var items []checkpoint.SaveItem
 	if e.dao != nil {
-		if mask := e.dao.Tracker.TakePersistDirty(); mask != 0 {
-			ver := e.dao.Tracker.IncVersion()
+		if mask := e.dao.DirtyTracker().TakePersistDirty(); mask != 0 {
+			ver := e.dao.DirtyTracker().IncVersion()
 			data := e.dao.MarshalPersist(mask)
 			mode := checkpoint.SaveModeFull
 			var patch checkpoint.PersistPatch
@@ -196,7 +196,7 @@ func (e *Guild) Snapshot() []checkpoint.SaveItem {
 				Mode:       mode,
 				Data:       data,
 				Patch:      patch,
-				Tracker:    &e.dao.Tracker,
+				Tracker:    e.dao.DirtyTracker(),
 			})
 		}
 	}

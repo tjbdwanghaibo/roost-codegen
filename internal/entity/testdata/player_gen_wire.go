@@ -127,8 +127,8 @@ func (e *Player) generatedOnDestroy(reason entity.EntityDestroyReason) {
 func (e *Player) Snapshot() []checkpoint.SaveItem {
 	var items []checkpoint.SaveItem
 	if e.dao != nil {
-		if mask := e.dao.Tracker.TakePersistDirty(); mask != 0 {
-			ver := e.dao.Tracker.IncVersion()
+		if mask := e.dao.DirtyTracker().TakePersistDirty(); mask != 0 {
+			ver := e.dao.DirtyTracker().IncVersion()
 			data := e.dao.MarshalPersist(mask)
 			mode := checkpoint.SaveModeFull
 			var patch checkpoint.PersistPatch
@@ -153,13 +153,13 @@ func (e *Player) Snapshot() []checkpoint.SaveItem {
 				Mode:       mode,
 				Data:       data,
 				Patch:      patch,
-				Tracker:    &e.dao.Tracker,
+				Tracker:    e.dao.DirtyTracker(),
 			})
 		}
 	}
 	if e.mail != nil {
-		if mask := e.mail.Tracker.TakePersistDirty(); mask != 0 {
-			ver := e.mail.Tracker.IncVersion()
+		if mask := e.mail.DirtyTracker().TakePersistDirty(); mask != 0 {
+			ver := e.mail.DirtyTracker().IncVersion()
 			data := e.mail.MarshalPersist(mask)
 			mode := checkpoint.SaveModeFull
 			var patch checkpoint.PersistPatch
@@ -184,7 +184,7 @@ func (e *Player) Snapshot() []checkpoint.SaveItem {
 				Mode:       mode,
 				Data:       data,
 				Patch:      patch,
-				Tracker:    &e.mail.Tracker,
+				Tracker:    e.mail.DirtyTracker(),
 			})
 		}
 	}
@@ -199,12 +199,14 @@ func (e *Player) RemoveSnapshot() []checkpoint.SaveItem {
 		items = append(items, checkpoint.SaveItem{
 			Db: e.dao.DbName(), DbScope: checkpoint.ResolveDatabaseScope(e.dao),
 			Collection: e.dao.CollName(), ID: e.dao.Id(),
+			Version: e.dao.DirtyTracker().IncVersion(), Deleted: true,
 		})
 	}
 	if e.mail != nil {
 		items = append(items, checkpoint.SaveItem{
 			Db: e.mail.DbName(), DbScope: checkpoint.ResolveDatabaseScope(e.mail),
 			Collection: e.mail.CollName(), ID: e.mail.Id(),
+			Version: e.mail.DirtyTracker().IncVersion(), Deleted: true,
 		})
 	}
 	return items

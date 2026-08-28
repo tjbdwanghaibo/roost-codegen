@@ -400,14 +400,14 @@ func (e *{{.Entity.Name}}) BuildRemoteCommitLocked(lease entity.RemoteWriteLease
 	}
 {{- range .Entity.Daos}}
 	if e.{{.FieldName}} != nil {
-		if mask := e.{{.FieldName}}.Tracker.TakePersistDirty(); mask != 0 {
+		if mask := e.{{.FieldName}}.DirtyTracker().TakePersistDirty(); mask != 0 {
 			data := append([]byte(nil), e.{{.FieldName}}.MarshalPersist(mask)...)
 			if len(data) == 0 {
-				e.{{.FieldName}}.Tracker.RollbackPersist(mask)
+				e.{{.FieldName}}.DirtyTracker().RollbackPersist(mask)
 				e.RollbackRemoteCommit(commit)
 				return entity.RemoteCommit{}, fmt.Errorf("{{$.Entity.Name}}: empty remote mutation for {{.CollName}}")
 			}
-			e.{{.FieldName}}.Tracker.IncVersion()
+			e.{{.FieldName}}.DirtyTracker().IncVersion()
 			mutation := entity.RemoteDataMutation{
 				Database:      e.{{.FieldName}}.DbName(),
 				DatabaseScope: uint8(checkpoint.ResolveDatabaseScope(e.{{.FieldName}})),
@@ -448,7 +448,7 @@ func (e *{{.Entity.Name}}) RollbackRemoteCommit(commit entity.RemoteCommit) {
 {{- range .Entity.Daos}}
 		case {{daoCollectionConst .TypeName}}:
 			if e.{{.FieldName}} != nil {
-				e.{{.FieldName}}.Tracker.RollbackPersist(mutation.Mask)
+				e.{{.FieldName}}.DirtyTracker().RollbackPersist(mutation.Mask)
 			}
 {{- end}}
 		}
@@ -464,8 +464,8 @@ func (e *{{.Entity.Name}}) Snapshot() []checkpoint.SaveItem {
 	var items []checkpoint.SaveItem
 {{- range .Entity.Daos}}
 	if e.{{.FieldName}} != nil {
-	if mask := e.{{.FieldName}}.Tracker.TakePersistDirty(); mask != 0 {
-		ver := e.{{.FieldName}}.Tracker.IncVersion()
+	if mask := e.{{.FieldName}}.DirtyTracker().TakePersistDirty(); mask != 0 {
+		ver := e.{{.FieldName}}.DirtyTracker().IncVersion()
 		data := e.{{.FieldName}}.MarshalPersist(mask)
 		mode := checkpoint.SaveModeFull
 		var patch checkpoint.PersistPatch
@@ -490,7 +490,7 @@ func (e *{{.Entity.Name}}) Snapshot() []checkpoint.SaveItem {
 			Mode:       mode,
 			Data:       data,
 			Patch:      patch,
-			Tracker:    &e.{{.FieldName}}.Tracker,
+			Tracker:    e.{{.FieldName}}.DirtyTracker(),
 		})
 	}
 	}
@@ -510,7 +510,7 @@ func (e *{{.Entity.Name}}) RemoveSnapshot() []checkpoint.SaveItem {
 		items = append(items, checkpoint.SaveItem{
 			Db: e.{{.FieldName}}.DbName(), DbScope: checkpoint.ResolveDatabaseScope(e.{{.FieldName}}),
 			Collection: e.{{.FieldName}}.CollName(), ID: e.{{.FieldName}}.Id(),
-			Version: e.{{.FieldName}}.Tracker.IncVersion(), Deleted: true,
+			Version: e.{{.FieldName}}.DirtyTracker().IncVersion(), Deleted: true,
 		})
 	}
 {{- end}}

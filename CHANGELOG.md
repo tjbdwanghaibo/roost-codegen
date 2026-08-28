@@ -4,8 +4,21 @@
 
 ## [Unreleased]
 
-### Docs
-- `docs/PROJECT_GENERATOR.zh-CN.md`：补充 **features 完整清单**（13 个开关：脚手架目录、驱动的生成器、bootstrap 接线、版本约束，标注 `project new` 默认七项）与 **Kit Mod 完整表**（14 个 Mod 含自动依赖列——原清单缺 `checkpoint`/`nestwal`/`nest`/`saga`，且 `remote_entity` 依赖不全）；明确 features（编译期生成开关）与 mods（运行时装配）的维度区别及默认值/校验约束；示例同步补默认 feature `errcode`；README 加清单入口。
+### Changed
+- 项目版本策略默认改为 core、kit、skill、codegen 全部跟随 `latest`；明确版本只要不低于兼容下限即可。
+- release-hygiene 增加根模块 `replace` 禁止门禁，防止本地联调路径进入发布 tag。
+- 新项目 `go.mod` 直接 require 三个真实发布 module，不再生成 `v0.0.0 + replace`；`project new/sync/deps` 联合执行 core、kit、skill 的 `@latest` 解析并 `go mod tidy`，失败时恢复原 go.mod/go.sum。新增无运行时副作用的 `internal/frameworkdeps` 类型别名，保证尚未被业务使用的 skill 在 tidy 后仍保留为直接依赖。
+- Entity generator 的 checkpoint、删除 tombstone 和 Remote Entity 路径统一改用 DAO `DirtyTracker()` 方法，不再访问已经私有化的 `Tracker` 字段；DAO 与 Entity 生成物恢复同代可编译。
+
+### Added
+- `project upgrade` 明确支持旧项目模板迁移，新增 `--dry-run` 预览，并允许先读取低于当前兼容下限的旧版本策略、合并新策略后再校验；生成 Makefile 新增 `project-upgrade`，通过 `roost-codegen@latest` 刷新受控文件，并让 core、kit、skill、codegen 持续跟随最新版本。旧生成 Makefile 会自动获得 `roost-up`、`codegen-up` 等当前目标，自定义 Makefile 则安全拒绝覆盖。
+- 新项目 Makefile 新增 `roost-up`（`GOWORK=off go get -u ./...` + `go mod tidy`）和 `codegen-up`（安装 `roost@latest`）；与只更新三个框架模块的 `deps-update` 分工明确，并同步到内置 help 与项目文档。
+- 安装后的 `roost help` 升级为能力目录，并新增 `roost help <capability>`、`roost help all` 和上下文 `--help`；21 个专题均提供用途、命令、配置/marker 和可复制示例，覆盖项目、全部生成器、版本、Saga、帧同步与部署。
+- 项目生成器新增生产部署基线：Shell 静态构建与 systemd 版本化发布（不可覆盖 release、校验和、原子切换、readiness 失败自动回滚）、distroless 非 root Docker 镜像、Kubernetes Deployment/StatefulSet、独占 WAL PVC、Secret 配置挂载、健康探针、PDB、默认 NetworkPolicy 和安全上下文。
+- 生成项目 README 分为新手快速使用、老手完整使用、框架实现与生产部署三级阅读路径。
+- CI 新增部署 Shell 语法校验、Kubernetes YAML 解码、生产 Docker 镜像构建和发布版本生成项目 smoke test。
+- golden 全量输出比较只规范化 Git checkout 的 CRLF/LF 差异，修复 Windows CI 因 `core.autocrlf` 产生的伪模板漂移；其余内容仍完整比较。
+- 新增 `docs/CODEGEN_REFERENCE.zh-CN.md`，覆盖项目、统一流水线及全部独立生成器的参数、marker、输入输出、完整示例、CI 用法和常见错误。
 
 ## [1.6.0] - 2026-08
 

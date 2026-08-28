@@ -21,17 +21,29 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	}
 
 	add("go.mod", renderGoMod(m), false)
-	add(".gitignore", "bin/\ndist/\nlog/\n.env\n*.local.yaml\n.idea/\n.vscode/\n", false)
+	// Keep the file present so Docker's deterministic `COPY go.mod go.sum ./`
+	// works before the first local `go mod tidy`. Sync never overwrites it.
+	add("go.sum", "", false)
+	add(".gitignore", "bin/\ndist/\nlog/\n.env\n*.local.yaml\ndeploy/k8s/secret.*.local.yaml\n.idea/\n.vscode/\n", false)
 	add("Makefile", renderMakefile(m), true)
 	add("README.md", renderProjectReadme(m), false)
 	add("docs/USAGE.zh-CN.md", renderUsage(m), true)
-	add(".github/workflows/ci.yml", renderCI(), true)
+	add(".github/workflows/ci.yml", renderCI(m), true)
 	add("deploy/dev/docker-compose.yaml", renderCompose(m), true)
 	add("Dockerfile", renderDockerfile(m), false)
+	for path, body := range renderProductionDeployment(m) {
+		owned := !strings.HasPrefix(path, "deploy/k8s/secret.")
+		add(path, body, owned)
+	}
+	add("docs/IMPLEMENTATION.zh-CN.md", renderImplementationGuide(m), true)
+	add("docs/DEPLOYMENT.zh-CN.md", renderDeploymentGuide(m), true)
 	if err := addGo("main.go", renderMain(m), false); err != nil {
 		return nil, err
 	}
 	if err := addGo("internal/bootstrap/generated.go", renderBootstrap(m), true); err != nil {
+		return nil, err
+	}
+	if err := addGo("internal/frameworkdeps/generated.go", renderFrameworkDeps(), true); err != nil {
 		return nil, err
 	}
 
@@ -135,16 +147,33 @@ func renderGoMod(m Manifest) string {
 
 go 1.25.0
 
+// roost.yaml owns the framework update policy. When it is "latest", this
+// bootstrap file starts at the supported minimum and roost project deps
+// resolves all three direct framework modules together to their latest tags.
 require (
-	github.com/tjbdwanghaibo/cube-core v0.0.0
-	github.com/tjbdwanghaibo/cube-kit v0.0.0
-	github.com/tjbdwanghaibo/cube-skill v0.0.0
+	github.com/tjbdwanghaibo/cube-core %s
+	github.com/tjbdwanghaibo/cube-kit %s
+	github.com/tjbdwanghaibo/roost-skill %s
 )
+`, m.Project.Module,
+		resolvedModuleVersion(m.Versions.Core, minimumVersions.Core),
+		resolvedModuleVersion(m.Versions.Kit, minimumVersions.Kit),
+		resolvedModuleVersion(m.Versions.Skill, minimumVersions.Skill))
+}
 
-replace github.com/tjbdwanghaibo/cube-core => github.com/tjbdwanghaibo/roost-core %s
-replace github.com/tjbdwanghaibo/cube-kit => github.com/tjbdwanghaibo/roost-kit %s
-replace github.com/tjbdwanghaibo/cube-skill => github.com/tjbdwanghaibo/roost-skill %s
-`, m.Project.Module, m.Versions.Core, m.Versions.Kit, m.Versions.Skill)
+// renderFrameworkDeps keeps optional framework-domain modules in go.mod even
+// before business code imports them. This makes a freshly generated project
+// go-mod-tidy clean while preserving the version baseline from roost.yaml.
+func renderFrameworkDeps() string {
+	return generatedHeader + `
+package frameworkdeps
+
+import skillv2 "github.com/tjbdwanghaibo/roost-skill/skillv2"
+
+// SkillProgram retains the skill runtime selected by roost.yaml without adding
+// runtime initialization or requiring business code to import it immediately.
+type SkillProgram = skillv2.Program
+`
 }
 
 func renderMain(m Manifest) string {
@@ -307,6 +336,9 @@ func renderServiceConfig(m Manifest, service string, production bool) string {
 	}
 	if production {
 		value := strings.ReplaceAll(strings.ReplaceAll(b.String(), "127.0.0.1", "CHANGE_ME"), "localhost", "CHANGE_ME")
+		value = strings.Replace(value,
+			"ops:\n  enabled: true\n  addr: CHANGE_ME:9100",
+			"ops:\n  enabled: true\n  addr: 0.0.0.0:9100", 1)
 		value = strings.ReplaceAll(value, "replicas: 1", "replicas: 3")
 		value = strings.ReplaceAll(value, "aof_replicas: 0", "aof_replicas: 1")
 		value = strings.ReplaceAll(value, "file: true", "file: false")
@@ -360,13 +392,22 @@ BUILD_TIME := $(shell git show -s --format=%%cI HEAD)
 DIRTY := $(shell git status --porcelain)
 LDFLAGS := -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Version=$(VERSION) -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Commit=$(COMMIT) -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.BuildTime=$(BUILD_TIME) -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Dirty=$(DIRTY)
 
-.PHONY: help sync doctor fmt fmt-check vet test test-race build run generate generate-changed check-generated config-check id-check ci dev-up dev-down dev-logs clean
+.PHONY: help sync project-upgrade deps-update roost-up codegen-up doctor fmt fmt-check vet test test-race build run generate generate-changed check-generated config-check id-check ci dev-up dev-down dev-logs clean
 .PHONY: new-service add-mod new-module new-protocol new-entity new-component new-event new-table new-dao new-webroute new-errcode new-saga
 
 help:
 	$(ROOST) help-make
 sync:
 	$(ROOST) project sync
+project-upgrade:
+	go run $(CODEGEN_MODULE)/cmd/roost@latest project upgrade --root . -core latest -kit latest -skill latest -codegen latest
+deps-update:
+	$(ROOST) project deps
+roost-up:
+	GOWORK=off go get -u ./...
+	GOWORK=off go mod tidy
+codegen-up:
+	go install $(CODEGEN_MODULE)/cmd/roost@latest
 doctor:
 	$(ROOST) project doctor
 fmt:
@@ -440,8 +481,8 @@ func codegenVersion(m Manifest) string {
 	return "latest"
 }
 
-func renderCI() string {
-	return `# Code generated by roost-codegen. DO NOT EDIT.
+func renderCI(m Manifest) string {
+	return fmt.Sprintf(`# Code generated by roost-codegen. DO NOT EDIT.
 name: ci
 on:
   push:
@@ -455,9 +496,24 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: release module has no replace
+        run: |
+          if grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod; then
+            echo "project go.mod must use published modules without replace"
+            exit 1
+          fi
+      - name: resolve latest framework releases
+        run: make deps-update
       - run: go mod download
+      - name: deployment shell syntax
+        run: |
+          for script in deploy/shell/*.sh; do
+            sh -n "$script"
+          done
+      - name: production container builds
+        run: docker build --build-arg VERSION=ci -t %s:ci .
       - run: make ci
-`
+`, m.Project.Name)
 }
 
 func renderCompose(m Manifest) string {
@@ -497,19 +553,25 @@ func renderDockerfile(m Manifest) string {
 		walBuild = "RUN mkdir -p /out/wal\n"
 		walRuntime = "COPY --chown=65532:65532 --from=build /out/wal /var/lib/roost/wal\nVOLUME [\"/var/lib/roost/wal\"]\n"
 	}
-	return fmt.Sprintf(`FROM golang:1.26-alpine AS build
+	return fmt.Sprintf(`ARG GO_VERSION=1.25
+FROM golang:${GO_VERSION}-alpine AS build
 WORKDIR /src
-COPY go.mod ./
-RUN go mod download
+COPY go.mod go.sum ./
+RUN go mod download && go mod verify
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -o /out/%s .
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_TIME=unknown
+RUN CGO_ENABLED=0 go build -trimpath \
+    -ldflags "-s -w -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Version=${VERSION} -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Commit=${COMMIT} -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.BuildTime=${BUILD_TIME}" \
+    -o /out/%s .
 %s
 
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --chown=65532:65532 --from=build /out/%s /app/%s
-COPY configs /app/configs
-%sUSER nonroot:nonroot
+%sEXPOSE 9100
+USER nonroot:nonroot
 ENTRYPOINT ["/app/%s"]
 `, m.Project.Name, walBuild, m.Project.Name, m.Project.Name, walRuntime, m.Project.Name)
 }
@@ -517,14 +579,33 @@ ENTRYPOINT ["/app/%s"]
 func renderProjectReadme(m Manifest) string {
 	return fmt.Sprintf(`# %s
 
-Generated with roost-codegen. Project configuration lives in roost.yaml.
+本项目由 roost-codegen 生成，项目声明位于 roost.yaml。
+
+安装 roost 后可用 roost help 查看能力目录，或用 roost help dao、roost help nest、roost help versions 查看配置和示例。
+
+## 第一级：完全新手，五分钟运行
 
     make dev-up
+    make deps-update
     make generate
     make run SERVICE=%s
-    make ci
 
-See [docs/USAGE.zh-CN.md](docs/USAGE.zh-CN.md) for complete usage.
+更新 codegen 管理的工程模板使用 make project-upgrade；更新框架依赖使用 make deps-update；更新全部项目依赖使用 make roost-up；更新本机安装的 codegen 使用 make codegen-up。
+
+确认 http://127.0.0.1:9100/readyz 返回成功后开始编写 Entity、DAO 和 Nest handler。
+
+## 第二级：有经验开发者
+
+阅读 [完整使用说明](docs/USAGE.zh-CN.md)，了解 Service/Mod 装配、生成命令、配置、测试与常用业务路径。
+
+## 第三级：框架实现与生产运维
+
+- [实现说明](docs/IMPLEMENTATION.zh-CN.md)：Entity/Nest、WAL/checkpoint、Remote Entity、Saga、同步与技能边界。
+- [部署说明](docs/DEPLOYMENT.zh-CN.md)：Shell/systemd、Docker、Kubernetes、升级回滚与故障演练。
+
+提交和发布前执行：
+
+    make ci
 `, m.Project.Name, sortedServiceNames(m)[0])
 }
 
@@ -550,12 +631,24 @@ func renderUsage(m Manifest) string {
 %s
 ## 命令
 
+- roost help / roost help <capability>：查看能力目录或指定能力的配置与示例。
 - make run SERVICE=<name> SID=<id>：启动服务。
+- make project-upgrade：使用最新 codegen 升级受控工程模板，并将 core、kit、skill、codegen 策略设为 latest。
+- make roost-up：执行 go get -u ./... 和 go mod tidy，更新整个项目依赖图。
+- make codegen-up：安装最新 roost-codegen CLI。
+- make deps-update：只按 roost.yaml 更新 core、kit、skill 三个框架模块。
 - make dev-up/dev-down：启动或停止所需基础设施。
+- make deps-update：按 roost.yaml 联合更新 core、kit、skill，并整理 go.mod/go.sum。
 - make doctor：检查清单、依赖、配置和生成状态。
 - make config-check SERVICE=<name>：检查服务配置。
 - make id-check：检查协议、实体、组件和错误码 ID。
 - make check-generated：在临时目录验证生成结果，不污染工作区。
+
+## 框架版本策略
+
+core、kit、skill、codegen 默认都是 latest。roost project new/sync/deps 会把前三者作为直接依赖在一条 go get 命令中联合解析，随后执行 go mod tidy。go.mod 不支持 latest 查询值，所以它保存本次实际解析出的具体版本，roost.yaml 保存持续跟随 latest 的策略。这样既避免下游依赖把 core/kit 降级，也保证同一次测试和发布使用确定的依赖图。
+
+当前兼容下限为 core %s、kit %s、skill %s、codegen %s。明确版本低于下限会在生成前失败；latest 始终允许。解析或 tidy 失败时，go.mod/go.sum 会恢复。
 
 ## 安全约定
 
@@ -565,6 +658,6 @@ func renderUsage(m Manifest) string {
 - Checkpoint WAL 要求 Redis 7.2+、AOF 已开启和单主/Sentinel 接入；生产默认还要求至少 1 个副本完成 AOF fsync。Redis Cluster 会因无法保证 Lua 与 WAITAOF 同连接同分片而拒绝启动。
 - /var/lib/roost/wal 必须挂载单写持久卷，同一个 SID 不得由两个实例同时挂载。
 - JetStream effect 消费必须通过 nestwal.MongoEffectInbox 与业务 Mongo 写入同一事务，不能仅依赖 MsgID 去重窗口。
-- 发布顺序为 roost-core、roost-kit、roost-codegen；部署前必须执行 make ci 并完成容器重启恢复演练。
-`, m.Project.Name, services.String())
+- 发布顺序为 roost-core、roost-kit、roost-skill、roost-codegen；部署前必须执行 make ci 并完成容器重启恢复演练。
+`, m.Project.Name, services.String(), minimumVersions.Core, minimumVersions.Kit, minimumVersions.Skill, minimumVersions.Codegen)
 }

@@ -1,0 +1,486 @@
+package roost
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
+func renderProductionDeployment(m Manifest) map[string]string {
+	files := map[string]string{
+		"deploy/shell/build.sh":           renderShellBuild(m),
+		"deploy/shell/install.sh":         renderShellInstall(m),
+		"deploy/shell/healthcheck.sh":     renderShellHealthcheck(),
+		"deploy/shell/README.md":          renderShellReadme(m),
+		"deploy/docker/README.md":         renderDockerReadme(m),
+		"deploy/k8s/namespace.yaml":       renderKubernetesNamespace(),
+		"deploy/k8s/service-account.yaml": renderKubernetesServiceAccount(m),
+		"deploy/k8s/network-policy.yaml":  renderKubernetesNetworkPolicy(m),
+		"deploy/k8s/README.md":            renderKubernetesReadme(m),
+	}
+
+	services := sortedServiceNames(m)
+	resources := []string{"namespace.yaml", "service-account.yaml", "network-policy.yaml"}
+	for _, service := range services {
+		files["deploy/k8s/"+service+".yaml"] = renderKubernetesWorkload(m, service)
+		files["deploy/k8s/"+service+"-pdb.yaml"] = renderKubernetesPDB(m, service)
+		files["deploy/k8s/secret."+service+".example.yaml"] = renderKubernetesSecretExample(m, service)
+		resources = append(resources, service+".yaml", service+"-pdb.yaml")
+	}
+	files["deploy/k8s/kustomization.yaml"] = renderKubernetesKustomization(resources)
+	return files
+}
+
+func renderShellBuild(m Manifest) string {
+	return replaceDeployTokens(`#!/usr/bin/env sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+OUTPUT_DIR=${OUTPUT_DIR:-"$ROOT/dist"}
+GOOS=${GOOS:-linux}
+GOARCH=${GOARCH:-amd64}
+VERSION=${VERSION:-dev}
+COMMIT=${COMMIT:-$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || printf unknown)}
+BUILD_TIME=${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+
+mkdir -p "$OUTPUT_DIR"
+cd "$ROOT"
+GOWORK=off go mod verify
+CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath \
+  -ldflags "-s -w -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Version=$VERSION -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Commit=$COMMIT -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.BuildTime=$BUILD_TIME" \
+  -o "$OUTPUT_DIR/{{APP}}" .
+printf 'built %s\n' "$OUTPUT_DIR/{{APP}}"
+`, m)
+}
+
+func renderShellInstall(m Manifest) string {
+	services := sortedServiceNames(m)
+	stateful := make([]string, 0, len(services))
+	for _, service := range services {
+		if serviceUsesPersistentWAL(m, service) {
+			stateful = append(stateful, service)
+		}
+	}
+	value := replaceDeployTokens(`#!/usr/bin/env sh
+set -eu
+
+if [ "$(id -u)" -ne 0 ]; then
+  printf 'install.sh must run as root\n' >&2
+  exit 1
+fi
+if [ "$#" -lt 4 ] || [ "$#" -gt 5 ]; then
+  printf 'usage: %s <service> <sid> <version> <production-config> [run-user]\n' "$0" >&2
+  exit 2
+fi
+
+SERVICE=$1
+SID=$2
+VERSION=$3
+CONFIG_SOURCE=$4
+RUN_USER=${5:-roost}
+case "$SERVICE" in *[!a-zA-Z0-9_-]*|'') printf 'invalid service: %s\n' "$SERVICE" >&2; exit 2;; esac
+case " {{SERVICES}} " in *" $SERVICE "*) ;; *) printf 'unknown service: %s (allowed: {{SERVICES}})\n' "$SERVICE" >&2; exit 2;; esac
+case "$SID" in *[!0-9]*|'0'|'') printf 'sid must be a positive integer\n' >&2; exit 2;; esac
+case "$VERSION" in *[!a-zA-Z0-9._-]*|'') printf 'invalid version: %s\n' "$VERSION" >&2; exit 2;; esac
+[ -f "$CONFIG_SOURCE" ] || { printf 'config not found: %s\n' "$CONFIG_SOURCE" >&2; exit 2; }
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+BINARY=${BINARY:-"$ROOT/dist/{{APP}}"}
+[ -x "$BINARY" ] || { printf 'binary not found; run: sh deploy/shell/build.sh\n' >&2; exit 2; }
+
+INSTANCE={{APP}}-$SERVICE-$SID
+APP_ROOT=${APP_ROOT:-/opt/roost/$INSTANCE}
+STATE_ROOT=${STATE_ROOT:-/var/lib/roost/$INSTANCE}
+LOG_ROOT=${LOG_ROOT:-/var/log/roost/$INSTANCE}
+RELEASE_ROOT=$APP_ROOT/releases/$VERSION
+UNIT_PATH=/etc/systemd/system/$INSTANCE.service
+HEALTH_URL=${HEALTH_URL:-http://127.0.0.1:9100/readyz}
+HEALTH_ATTEMPTS=${HEALTH_ATTEMPTS:-30}
+[ ! -e "$RELEASE_ROOT" ] || { printf 'release already exists and is immutable: %s\n' "$RELEASE_ROOT" >&2; exit 2; }
+
+case " {{STATEFUL_SERVICES}} " in
+  *" $SERVICE "*)
+    if ! grep -F "$STATE_ROOT/wal" "$CONFIG_SOURCE" >/dev/null 2>&1; then
+      printf 'nest.wal.dir in %s must be %s/wal for service %s\n' "$CONFIG_SOURCE" "$STATE_ROOT" "$SERVICE" >&2
+      exit 2
+    fi
+    ;;
+esac
+
+if ! getent passwd "$RUN_USER" >/dev/null 2>&1; then
+  useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin "$RUN_USER"
+fi
+install -d -m 0755 "$APP_ROOT/releases" "$RELEASE_ROOT"
+install -d -o "$RUN_USER" -g "$RUN_USER" -m 0750 "$STATE_ROOT/wal" "$LOG_ROOT"
+install -m 0755 "$BINARY" "$RELEASE_ROOT/{{APP}}"
+install -m 0640 -o root -g "$RUN_USER" "$CONFIG_SOURCE" "$RELEASE_ROOT/config.yaml"
+(cd "$RELEASE_ROOT" && sha256sum {{APP}} config.yaml > SHA256SUMS && sha256sum -c SHA256SUMS >/dev/null)
+
+cat >"$UNIT_PATH" <<EOF
+[Unit]
+Description={{APP}} $SERVICE server (sid $SID)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$RUN_USER
+Group=$RUN_USER
+WorkingDirectory=$APP_ROOT
+ExecStart=$APP_ROOT/current/{{APP}} $SERVICE --sid $SID --config $APP_ROOT/current/config.yaml
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=45s
+KillSignal=SIGTERM
+LimitNOFILE=1048576
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+ReadWritePaths=$STATE_ROOT $LOG_ROOT
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+switch_release() {
+  target=$1
+  next=$APP_ROOT/.current.$$
+  rm -f "$next"
+  ln -s "$target" "$next"
+  mv -Tf "$next" "$APP_ROOT/current"
+}
+
+wait_ready() {
+  attempt=1
+  while [ "$attempt" -le "$HEALTH_ATTEMPTS" ]; do
+    if sh "$ROOT/deploy/shell/healthcheck.sh" "$HEALTH_URL" >/dev/null 2>&1; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  return 1
+}
+
+PREVIOUS=$(readlink -f "$APP_ROOT/current" 2>/dev/null || true)
+switch_release "$RELEASE_ROOT"
+systemctl daemon-reload
+systemctl enable "$INSTANCE.service"
+if systemctl restart "$INSTANCE.service" && wait_ready; then
+  printf 'deployed %s version %s; inspect with: systemctl status %s.service\n' "$INSTANCE" "$VERSION" "$INSTANCE"
+  exit 0
+fi
+
+printf 'deployment health check failed for %s version %s; rolling back\n' "$INSTANCE" "$VERSION" >&2
+if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ]; then
+  switch_release "$PREVIOUS"
+  systemctl restart "$INSTANCE.service" || true
+  if ! wait_ready; then
+    printf 'rollback also failed readiness; manual recovery required\n' >&2
+  fi
+else
+  systemctl stop "$INSTANCE.service" || true
+fi
+exit 1
+`, m)
+	value = strings.ReplaceAll(value, "{{SERVICES}}", strings.Join(services, " "))
+	value = strings.ReplaceAll(value, "{{STATEFUL_SERVICES}}", strings.Join(stateful, " "))
+	return value
+}
+
+func renderShellHealthcheck() string {
+	return `#!/usr/bin/env sh
+set -eu
+URL=${1:-http://127.0.0.1:9100/readyz}
+if command -v curl >/dev/null 2>&1; then
+  curl --fail --silent --show-error --max-time 3 "$URL" >/dev/null
+elif command -v wget >/dev/null 2>&1; then
+  wget -q -T 3 -O /dev/null "$URL"
+else
+  printf 'curl or wget is required\n' >&2
+  exit 2
+fi
+printf 'ready: %s\n' "$URL"
+`
+}
+
+func renderShellReadme(m Manifest) string {
+	return replaceDeployTokens(`# Shell/systemd 部署
+
+1. sh deploy/shell/build.sh 构建 Linux 静态二进制。
+2. 从 configs/service/config.<service>.prod.example.yaml 复制生产配置，替换全部 CHANGE_ME，为每个 SID 设置独占 WAL 目录。
+3. 执行 sudo sh deploy/shell/install.sh <service> <sid> <version> <config>。
+4. 用 sh deploy/shell/healthcheck.sh 验证 readiness。
+
+安装器把二进制和配置写入不可变版本化 releases 目录并生成 SHA256SUMS，原子切换 current，创建专用 systemd unit、非登录用户、只读系统保护和 SIGTERM 45 秒停机预算。同一版本名拒绝覆盖。readiness 未在预算内成功时自动切回上一 release；首次安装失败则停服。多实例部署必须使用不同 SID、配置文件和 WAL 目录；不要让两个进程共享 WAL。可用 HEALTH_URL/HEALTH_ATTEMPTS 覆盖探测地址和次数。
+`, m)
+}
+
+func renderDockerReadme(m Manifest) string {
+	service := sortedServiceNames(m)[0]
+	return replaceDeployTokens(fmt.Sprintf(`# Docker 部署
+
+镜像只包含二进制，不包含生产配置或密钥：
+
+    docker build --build-arg VERSION=v1.0.0 -t {{APP}}:v1.0.0 .
+    docker run --rm --name {{APP}}-%s-1000 \
+      --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+      --cap-drop ALL --security-opt no-new-privileges \
+      -p 9100:9100 \
+      -v "$PWD/config.prod.yaml:/etc/roost/config.yaml:ro" \
+      -v {{APP}}-wal:/var/lib/roost/wal \
+      {{APP}}:v1.0.0 %s --sid 1000 --config /etc/roost/config.yaml
+
+配置必须让 ops 监听 0.0.0.0:9100，日志输出 stdout，WAL 使用挂载卷。镜像 tag 必须不可变，生产流水线应进一步使用 digest、签名和 SBOM。
+`, service, service), m)
+}
+
+func renderKubernetesNamespace() string {
+	return `apiVersion: v1
+kind: Namespace
+metadata:
+  name: roost
+`
+}
+
+func renderKubernetesServiceAccount(m Manifest) string {
+	return replaceDeployTokens(`apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{APP}}
+  namespace: roost
+automountServiceAccountToken: false
+`, m)
+}
+
+func renderKubernetesNetworkPolicy(m Manifest) string {
+	return replaceDeployTokens(`apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{APP}}-default-deny-ingress
+  namespace: roost
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{APP}}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: roost
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - {protocol: TCP, port: 9100}
+`, m)
+}
+
+func renderKubernetesKustomization(resources []string) string {
+	sort.Strings(resources)
+	var b strings.Builder
+	b.WriteString("apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamespace: roost\nresources:\n")
+	for _, resource := range resources {
+		fmt.Fprintf(&b, "  - %s\n", resource)
+	}
+	return b.String()
+}
+
+func renderKubernetesWorkload(m Manifest, service string) string {
+	stateful := serviceUsesPersistentWAL(m, service)
+	kind := "Deployment"
+	if stateful {
+		kind = "StatefulSet"
+	}
+	name := m.Project.Name + "-" + service
+	var head strings.Builder
+	fmt.Fprintf(&head, "apiVersion: apps/v1\nkind: %s\nmetadata:\n  name: %s\n  namespace: roost\n  labels:\n    app.kubernetes.io/name: %s\n    app.kubernetes.io/component: %s\nspec:\n", kind, name, m.Project.Name, service)
+	if stateful {
+		fmt.Fprintf(&head, "  serviceName: %s\n  podManagementPolicy: OrderedReady\n", name)
+	}
+	head.WriteString("  replicas: 1\n  selector:\n    matchLabels:\n")
+	fmt.Fprintf(&head, "      app.kubernetes.io/name: %s\n      app.kubernetes.io/component: %s\n", m.Project.Name, service)
+	if kind == "Deployment" {
+		head.WriteString("  strategy:\n    type: Recreate\n")
+	} else {
+		head.WriteString("  updateStrategy:\n    type: RollingUpdate\n")
+	}
+	head.WriteString("  template:\n    metadata:\n      labels:\n")
+	fmt.Fprintf(&head, "        app.kubernetes.io/name: %s\n        app.kubernetes.io/component: %s\n", m.Project.Name, service)
+	head.WriteString("      annotations:\n        prometheus.io/scrape: \"true\"\n        prometheus.io/port: \"9100\"\n        prometheus.io/path: /metrics\n    spec:\n")
+	fmt.Fprintf(&head, "      serviceAccountName: %s\n", m.Project.Name)
+	head.WriteString("      automountServiceAccountToken: false\n      terminationGracePeriodSeconds: 45\n      securityContext:\n        runAsNonRoot: true\n        runAsUser: 65532\n        runAsGroup: 65532\n        fsGroup: 65532\n        seccompProfile:\n          type: RuntimeDefault\n      containers:\n        - name: server\n")
+	fmt.Fprintf(&head, "          image: ghcr.io/CHANGE_ME/%s:v1.0.0\n          imagePullPolicy: IfNotPresent\n          args: [%q, \"--sid=$(ROOST_SID)\", \"--config=/etc/roost/config.yaml\"]\n", m.Project.Name, service)
+	head.WriteString("          env:\n            - name: ROOST_SID\n              value: \"1000\"\n          ports:\n            - name: ops\n              containerPort: 9100\n              protocol: TCP\n          startupProbe:\n            httpGet: {path: /healthz, port: ops}\n            failureThreshold: 30\n            periodSeconds: 2\n          readinessProbe:\n            httpGet: {path: /readyz, port: ops}\n            periodSeconds: 5\n            timeoutSeconds: 2\n            failureThreshold: 3\n          livenessProbe:\n            httpGet: {path: /healthz, port: ops}\n            periodSeconds: 10\n            timeoutSeconds: 2\n            failureThreshold: 3\n          resources:\n            requests: {cpu: \"250m\", memory: \"256Mi\"}\n            limits: {cpu: \"2\", memory: \"2Gi\"}\n          securityContext:\n            allowPrivilegeEscalation: false\n            readOnlyRootFilesystem: true\n            capabilities:\n              drop: [\"ALL\"]\n          volumeMounts:\n            - {name: config, mountPath: /etc/roost, readOnly: true}\n            - {name: tmp, mountPath: /tmp}\n")
+	if stateful {
+		head.WriteString("            - {name: wal, mountPath: /var/lib/roost/wal}\n")
+	}
+	head.WriteString("      volumes:\n        - name: config\n          secret:\n")
+	fmt.Fprintf(&head, "            secretName: %s-config\n", name)
+	head.WriteString("            items:\n              - {key: config.yaml, path: config.yaml}\n        - name: tmp\n          emptyDir: {sizeLimit: 64Mi}\n")
+	if stateful {
+		head.WriteString("  volumeClaimTemplates:\n    - metadata:\n        name: wal\n      spec:\n        accessModes: [\"ReadWriteOnce\"]\n        resources:\n          requests:\n            storage: 10Gi\n")
+	}
+	head.WriteString("---\napiVersion: v1\nkind: Service\nmetadata:\n")
+	fmt.Fprintf(&head, "  name: %s\n  namespace: roost\nspec:\n", name)
+	if stateful {
+		head.WriteString("  clusterIP: None\n")
+	}
+	head.WriteString("  selector:\n")
+	fmt.Fprintf(&head, "    app.kubernetes.io/name: %s\n    app.kubernetes.io/component: %s\n", m.Project.Name, service)
+	head.WriteString("  ports:\n    - {name: ops, port: 9100, targetPort: ops, protocol: TCP}\n")
+	return head.String()
+}
+
+func renderKubernetesPDB(m Manifest, service string) string {
+	return fmt.Sprintf(`apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: %s-%s
+  namespace: roost
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: %s
+      app.kubernetes.io/component: %s
+`, m.Project.Name, service, m.Project.Name, service)
+}
+
+func renderKubernetesSecretExample(m Manifest, service string) string {
+	config := renderServiceConfig(m, service, true)
+	return fmt.Sprintf(`# Copy to secret.%s.local.yaml, replace every CHANGE_ME, then apply it separately.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: %s-%s-config
+  namespace: roost
+type: Opaque
+stringData:
+  config.yaml: |
+%s`, service, m.Project.Name, service, indentText(config, "    "))
+}
+
+func renderKubernetesReadme(m Manifest) string {
+	var services strings.Builder
+	for _, service := range sortedServiceNames(m) {
+		fmt.Fprintf(&services, "- `%s`：复制 `secret.%s.example.yaml` 为 `secret.%s.local.yaml`，替换全部 `CHANGE_ME`。\n", service, service, service)
+	}
+	return fmt.Sprintf(`# Kubernetes 部署
+
+模板默认每个 Service 一个副本和唯一 SID，避免多个 writer 共享身份或 WAL。先创建配置 Secret，再应用 Kustomize：
+
+%s
+    kubectl apply -f deploy/k8s/secret.<service>.local.yaml
+    kubectl apply -k deploy/k8s
+    kubectl -n roost rollout status <deployment-or-statefulset>/%s-<service>
+
+生产要求：
+
+- 把 ghcr.io/CHANGE_ME/%s:v1.0.0 替换为不可变 image digest。
+- 每个有 nestwal 的实例独占 RWO PVC；扩容时复制 workload 并分配新 SID，不能直接提高 replicas。
+- Secret 不加入 kustomization，也不得提交；示例中的 CHANGE_ME 会让应用 fail-closed。
+- 默认 NetworkPolicy 只允许 roost/monitoring 命名空间访问 ops 9100；接入业务端口前必须按调用方和端口显式扩展策略。
+- /healthz 仅表示进程存活，流量切换必须使用 /readyz；terminationGracePeriodSeconds 必须大于框架总停机预算。
+- 上线前补 NetworkPolicy、镜像签名校验、监控抓取权限以及节点/PVC 故障演练。
+`, services.String(), m.Project.Name, m.Project.Name)
+}
+
+func renderImplementationGuide(m Manifest) string {
+	return fmt.Sprintf(`<!-- Code generated by roost-codegen. DO NOT EDIT. -->
+# %s 实现说明（第三级）
+
+## 请求路径
+
+玩家请求由接入层解码后调用生成的 Sender；Sender 进入 Nest，Nest 定位 Entity、按全局顺序加锁，再调用 handler。handler 只能通过 component/DAO 方法修改状态。成功后事务按 durability 进入内存、异步 WAL、严格 WAL 或 pipelined WAL；失败按 state/undo 策略回滚。
+
+## 数据路径
+
+- checkpoint 收集字段级 dirty patch，主动 Flush 与停机 Flush 使用同一 admission/retry 路径。
+- nestwal 保存事务意图和 outbox；结果不确定时 fence，不猜测回滚。
+- Remote Entity 使用 ownership marker、route epoch、lock fence、state version 四维拒绝旧写；读路径返回不可变 L1/L2 snapshot。
+- Saga 用 lease fencing、持久状态机、outbox、幂等 receipt 和补偿处理跨事务域流程。
+
+## 实时路径
+
+- entitysync 管理 observer 与可见性；replication 生成 snapshot/delta/LOD；syncstream 管理有序流、ACK 与 resync。
+- 状态同步和 lockstep 是并列模型：前者服务器下发权威状态，后者广播输入并由客户端确定性模拟。
+- UDP/KCP/QUIC 只改变传输特性，不改变版本、ACK、epoch 和 resync 一致性语义。
+
+## 技能路径
+
+roost-skill 把严格 JSON 编译为不可变 Program，由定点数 Runtime 执行。HostAdapter 把技能效果接入已持锁 Entity/component；技能 checkpoint、StateMutation 和 PresentationEvent 分别服务恢复、权威状态同步与客户端表现。
+
+## 本项目装配
+
+%s
+所有 Mod 都经过 Init → Provide → Start → Stop。业务通过 Registry capability 取接口，不持有基础设施私有实现。实现细节以 core 的 NEST_TRANSACTION_WAL、REMOTE_ENTITY、SAGA、ENTITY_SYNC、OBSERVABILITY 文档以及 kit README 为准。
+`, m.Project.Name, renderServiceList(m))
+}
+
+func renderDeploymentGuide(m Manifest) string {
+	return fmt.Sprintf(`<!-- Code generated by roost-codegen. DO NOT EDIT. -->
+# %s 生产部署说明
+
+## 共同不变量
+
+1. 相同 SID 同一时刻只能有一个 writer；WAL 目录/PVC 必须单写。
+2. 配置和密钥在部署时挂载，不进入镜像；生产配置不得含 CHANGE_ME、localhost 或开发 token。
+3. 先看 readiness 再接流量；SIGTERM 后等待 checkpoint、WAL、NATS 和服务 Shutdown 收敛。
+4. 发布前执行 make ci、配置检查、数据库迁移检查和故障演练；镜像使用不可变 digest。
+
+## Shell/systemd
+
+使用 deploy/shell/build.sh 与 install.sh。适合物理机或 VM；systemd 负责重启、停机预算、用户隔离和文件系统保护。
+
+## Docker
+
+Dockerfile 生成不包含配置的 distroless 非 root 镜像。运行时只读根文件系统，外挂配置和 WAL volume，丢弃 Linux capabilities。
+
+## Kubernetes
+
+deploy/k8s 使用 Secret 挂载完整配置，提供 startup/readiness/liveness probe、资源上下限、PDB、非 root/只读根文件系统。带 nestwal 的 Service 使用单副本 StatefulSet 和独占 PVC；无状态 Service 使用单副本 Deployment，确认 SID 分配策略后再扩容。
+
+## 灰度、升级和回滚
+
+- 先部署新 SID canary，确认 WAL replay、Mongo/Redis/NATS/etcd 健康和业务指标，再切流量。
+- schema/wire/checkpoint 不兼容升级必须先完成迁移或双读，不能只回滚二进制。
+- 回滚前先停止新 writer 并 Flush；旧版本必须能读取新版本已写的数据，否则只能前滚修复。
+- 故障演练至少覆盖 kill -9、磁盘满、PVC 重新挂载、Mongo primary 切换、Redis AOF 不满足、NATS 重投、etcd compaction 和网络分区。
+`, m.Project.Name)
+}
+
+func serviceUsesPersistentWAL(m Manifest, service string) bool {
+	mods, err := resolveMods(append(append([]string{}, m.SharedMods...), m.Services[service].Mods...))
+	return err == nil && contains(mods, "nestwal")
+}
+
+func renderServiceList(m Manifest) string {
+	var b strings.Builder
+	for _, service := range sortedServiceNames(m) {
+		fmt.Fprintf(&b, "- %s：%s\n", service, strings.Join(m.Services[service].Mods, ", "))
+	}
+	return b.String()
+}
+
+func replaceDeployTokens(value string, m Manifest) string {
+	return strings.ReplaceAll(value, "{{APP}}", m.Project.Name)
+}
+
+func indentText(value, prefix string) string {
+	lines := strings.Split(strings.TrimSuffix(value, "\n"), "\n")
+	for i := range lines {
+		lines[i] = prefix + lines[i]
+	}
+	return strings.Join(lines, "\n") + "\n"
+}

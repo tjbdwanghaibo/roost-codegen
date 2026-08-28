@@ -16,6 +16,19 @@ const ManifestName = "roost.yaml"
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
+var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
+
+// minimumVersions is the oldest framework set supported by this generator.
+// "latest" remains the default update policy; these concrete versions are
+// used only as an offline/bootstrap go.mod baseline and as compatibility
+// guards for users that intentionally pin a release.
+var minimumVersions = VersionSpec{
+	Core:    "v1.8.0",
+	Kit:     "v1.8.0",
+	Skill:   "v1.7.0",
+	Codegen: "v1.7.0",
+}
+
 type Manifest struct {
 	Schema     int                    `yaml:"schema"`
 	Project    ProjectSpec            `yaml:"project"`
@@ -89,6 +102,25 @@ func DefaultManifest(name, module string, services, mods, features []string) Man
 }
 
 func LoadManifest(root string) (Manifest, error) {
+	manifest, err := decodeManifest(root)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if err := manifest.Validate(); err != nil {
+		return Manifest{}, err
+	}
+	return manifest, nil
+}
+
+// loadManifestForUpgrade decodes an older manifest without applying the
+// current version floor first. The upgrade command merges the requested
+// policies and validates the resulting manifest before it is saved. YAML
+// fields remain strict so this path cannot silently discard unknown data.
+func loadManifestForUpgrade(root string) (Manifest, error) {
+	return decodeManifest(root)
+}
+
+func decodeManifest(root string) (Manifest, error) {
 	path := filepath.Join(root, ManifestName)
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -99,9 +131,6 @@ func LoadManifest(root string) (Manifest, error) {
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&manifest); err != nil {
 		return Manifest{}, fmt.Errorf("decode %s: %w", path, err)
-	}
-	if err := manifest.Validate(); err != nil {
-		return Manifest{}, err
 	}
 	return manifest, nil
 }
@@ -114,7 +143,11 @@ func (m Manifest) Marshal() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append([]byte("# Roost project manifest. Run `make sync` after editing.\n"), raw...), nil
+	header := fmt.Sprintf(`# Roost project manifest. Run make sync after editing.
+# versions.* defaults to latest; go.mod records the concrete release resolved
+# for one build. Minimums: core %s, kit %s, skill %s, codegen %s.
+`, minimumVersions.Core, minimumVersions.Kit, minimumVersions.Skill, minimumVersions.Codegen)
+	return append([]byte(header), raw...), nil
 }
 
 func (m Manifest) Validate() error {
@@ -154,6 +187,20 @@ func (m Manifest) Validate() error {
 	for _, feature := range m.Features {
 		if !knownFeatures[feature] {
 			joined = errors.Join(joined, fmt.Errorf("unknown feature %q", feature))
+		}
+	}
+	for _, version := range []struct {
+		name    string
+		value   string
+		minimum string
+	}{
+		{name: "core", value: m.Versions.Core, minimum: minimumVersions.Core},
+		{name: "kit", value: m.Versions.Kit, minimum: minimumVersions.Kit},
+		{name: "skill", value: m.Versions.Skill, minimum: minimumVersions.Skill},
+		{name: "codegen", value: m.Versions.Codegen, minimum: minimumVersions.Codegen},
+	} {
+		if err := validateVersionPolicy(version.name, version.value, version.minimum); err != nil {
+			joined = errors.Join(joined, err)
 		}
 	}
 	for _, sagaName := range m.Sagas {
@@ -198,11 +245,11 @@ func hasReplicationFeature(m Manifest) bool {
 }
 
 func versionAtLeast(version string, major, minor, patch int) bool {
-	if version == "latest" {
+	if strings.EqualFold(strings.TrimSpace(version), "latest") {
 		return true
 	}
-	var gotMajor, gotMinor, gotPatch int
-	if _, err := fmt.Sscanf(strings.TrimPrefix(version, "v"), "%d.%d.%d", &gotMajor, &gotMinor, &gotPatch); err != nil {
+	gotMajor, gotMinor, gotPatch, ok := releaseVersion(version)
+	if !ok {
 		return false
 	}
 	if gotMajor != major {
@@ -212,6 +259,43 @@ func versionAtLeast(version string, major, minor, patch int) bool {
 		return gotMinor > minor
 	}
 	return gotPatch >= patch
+}
+
+func validateVersionPolicy(name, value, minimum string) error {
+	value = strings.TrimSpace(value)
+	if strings.EqualFold(value, "latest") {
+		return nil
+	}
+	major, _, _, ok := releaseVersion(value)
+	if !ok {
+		return fmt.Errorf("versions.%s must be latest or a semantic release such as %s; got %q", name, minimum, value)
+	}
+	minimumMajor, minimumMinor, minimumPatch, _ := releaseVersion(minimum)
+	if major != minimumMajor {
+		return fmt.Errorf("versions.%s major v%d is incompatible with the current module path; use latest or v%d.x", name, major, minimumMajor)
+	}
+	if !versionAtLeast(value, minimumMajor, minimumMinor, minimumPatch) {
+		return fmt.Errorf("versions.%s requires >= %s or latest; got %q", name, minimum, value)
+	}
+	return nil
+}
+
+func releaseVersion(version string) (major, minor, patch int, ok bool) {
+	match := releaseVersionPattern.FindStringSubmatch(strings.TrimSpace(version))
+	if match == nil {
+		return 0, 0, 0, false
+	}
+	if _, err := fmt.Sscanf(match[1]+"."+match[2]+"."+match[3], "%d.%d.%d", &major, &minor, &patch); err != nil {
+		return 0, 0, 0, false
+	}
+	return major, minor, patch, true
+}
+
+func resolvedModuleVersion(policy, minimum string) string {
+	if strings.EqualFold(strings.TrimSpace(policy), "latest") {
+		return minimum
+	}
+	return strings.TrimSpace(policy)
 }
 
 func splitList(raw string) []string {

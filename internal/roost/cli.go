@@ -11,9 +11,19 @@ import (
 )
 
 func Run(args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		printUsage(stdout)
+	if len(args) == 0 {
+		printHelpOverview(stdout)
 		return nil
+	}
+	if args[0] == "help" {
+		return runHelp(args[1:], stdout)
+	}
+	if isHelpToken(args[0]) {
+		printHelpOverview(stdout)
+		return nil
+	}
+	if len(args) >= 2 && isHelpToken(args[len(args)-1]) {
+		return runContextHelp(args[:len(args)-1], stdout)
 	}
 	switch args[0] {
 	case "project":
@@ -49,7 +59,7 @@ func Run(args []string, stdout, stderr io.Writer) error {
 
 func runProject(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: roost project <new|sync|diff|doctor|upgrade>")
+		return errors.New("usage: roost project <new|sync|diff|doctor|upgrade|deps>")
 	}
 	switch args[0] {
 	case "new":
@@ -74,15 +84,23 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
+		manifest, err := LoadManifest(target)
+		if err != nil {
+			return err
+		}
+		if err := UpdateFrameworkDependencies(target, manifest, stdout, stderr); err != nil {
+			return fmt.Errorf("project files created at %s but framework resolution failed; after connectivity recovers run roost project deps --root %s: %w", target, target, err)
+		}
 		printSyncResult(stdout, result)
 		fmt.Fprintf(stdout, "project ready: %s\n", target)
 		return nil
-	case "sync", "diff", "doctor", "upgrade":
+	case "sync", "diff", "doctor", "upgrade", "deps":
 		fs := flag.NewFlagSet("project "+args[0], flag.ContinueOnError)
 		fs.SetOutput(stderr)
 		rootFlag := fs.String("root", ".", "project directory")
 		strict := fs.Bool("strict", true, "include generated freshness checks")
 		jsonOutput := fs.Bool("json", false, "JSON output")
+		dryRun := fs.Bool("dry-run", false, "preview an upgrade without writing files or resolving dependencies")
 		core := fs.String("core", "", "new core version")
 		kit := fs.String("kit", "", "new kit version")
 		skill := fs.String("skill", "", "new skill version")
@@ -97,28 +115,59 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 		switch args[0] {
 		case "sync":
 			result, err := SyncProject(root)
-			if err == nil {
-				printSyncResult(stdout, result)
+			if err != nil {
+				return err
 			}
-			return err
+			manifest, err := LoadManifest(root)
+			if err != nil {
+				return err
+			}
+			if err := UpdateFrameworkDependencies(root, manifest, stdout, stderr); err != nil {
+				return fmt.Errorf("project files synchronized but framework resolution failed: %w", err)
+			}
+			printSyncResult(stdout, result)
+			return nil
 		case "diff":
 			return DiffProject(root, stdout)
 		case "doctor":
 			return Doctor(root, *strict, *jsonOutput, stdout)
+		case "deps":
+			manifest, err := LoadManifest(root)
+			if err != nil {
+				return err
+			}
+			return UpdateFrameworkDependencies(root, manifest, stdout, stderr)
 		case "upgrade":
-			m, err := LoadManifest(root)
+			m, err := loadManifestForUpgrade(root)
 			if err != nil {
 				return err
 			}
 			mergeVersions(&m.Versions, VersionSpec{Core: *core, Kit: *kit, Skill: *skill, Codegen: *codegen})
+			if err := m.Validate(); err != nil {
+				return fmt.Errorf("validate upgraded manifest: %w", err)
+			}
+			if *dryRun {
+				return diffManifest(root, m, true, stdout)
+			}
+			if _, _, err := planManifestSync(root, m); err != nil {
+				return fmt.Errorf("preflight project upgrade: %w", err)
+			}
 			if err := saveManifest(root, m); err != nil {
 				return err
 			}
 			result, err := SyncProject(root)
-			if err == nil {
-				printSyncResult(stdout, result)
+			if err != nil {
+				return err
 			}
-			return err
+			manifest, err := LoadManifest(root)
+			if err != nil {
+				return err
+			}
+			if err := UpdateFrameworkDependencies(root, manifest, stdout, stderr); err != nil {
+				return fmt.Errorf("project upgraded but framework resolution failed: %w", err)
+			}
+			printSyncResult(stdout, result)
+			return nil
 		}
 	}
 	return fmt.Errorf("unknown project command %q", args[0])
@@ -212,7 +261,11 @@ func runID(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	rootFlag := fs.String("root", ".", "project directory")
 	group := fs.String("group", "", "ID group")
-	if err := fs.Parse(args[1:]); err != nil {
+	parseArgs := args[1:]
+	if args[0] == "next" {
+		parseArgs = normalizeNextIDArgs(parseArgs)
+	}
+	if err := fs.Parse(parseArgs); err != nil {
 		return err
 	}
 	root, err := projectRoot(*rootFlag)
@@ -244,24 +297,18 @@ func runID(args []string, stdout, stderr io.Writer) error {
 	}
 }
 
-func printUsage(w io.Writer) {
-	fmt.Fprint(w, `roost-codegen
-
-Usage:
-  roost project new <name> [flags]
-  roost project sync|diff|doctor|upgrade
-  roost generate [--changed|--check|--dry-run]
-  roost add <kind> <name> [flags]
-  roost config check --service <name>
-  roost id next <kind> | id check
-  roost format check
-
-See docs/PROJECT_GENERATOR.zh-CN.md for complete documentation.
-`)
+func normalizeNextIDArgs(args []string) []string {
+	if len(args) <= 1 || strings.HasPrefix(args[0], "-") {
+		return args
+	}
+	normalized := make([]string, 0, len(args))
+	normalized = append(normalized, args[1:]...)
+	normalized = append(normalized, args[0])
+	return normalized
 }
 
 func printMakeHelp(w io.Writer) {
-	fmt.Fprint(w, `Targets: sync doctor generate generate-changed check-generated config-check id-check build run test test-race new-saga ci dev-up dev-down dev-logs
+	fmt.Fprint(w, `Targets: sync project-upgrade deps-update roost-up codegen-up doctor generate generate-changed check-generated config-check id-check build run test test-race new-saga ci dev-up dev-down dev-logs
 `)
 }
 

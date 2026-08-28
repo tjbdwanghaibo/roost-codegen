@@ -33,10 +33,52 @@ jobs:
       - if: runner.os == 'Linux'
         run: go test -race ./internal/nest ./internal/project ./internal/protocol ./internal/roost
 
+  generated-project-release-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: generate project from release defaults
+        run: go run ./cmd/roost project new planet -out "${RUNNER_TEMP}/planet"
+      - name: reject replace directives
+        working-directory: ${{ runner.temp }}/planet
+        run: |
+          if grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod; then
+            echo "generated project must not contain replace directives"
+            exit 1
+          fi
+      - name: resolve and compile published framework versions
+        working-directory: ${{ runner.temp }}/planet
+        run: |
+          GOWORK=off go mod tidy
+          GOWORK=off go mod verify
+          GOWORK=off go test ./...
+          GOWORK=off go vet ./...
+      - name: validate deployment shell scripts
+        working-directory: ${{ runner.temp }}/planet
+        run: |
+          for script in deploy/shell/*.sh; do
+            sh -n "$script"
+          done
+      - name: build production container
+        working-directory: ${{ runner.temp }}/planet
+        run: docker build --build-arg VERSION=ci -t planet:ci .
+
   release-hygiene:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: root module has no local replace
+        run: |
+          if grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod; then
+            echo "release module must not contain replace directives"
+            grep -nE '^[[:space:]]*replace([[:space:]]|\()' go.mod
+            exit 1
+          fi
       # The module path must resolve as a real repository, and a version tag
       # must match the module's major suffix — the two failure modes that made
       # v1.4.0-era roost-skill uninstallable (module pointed at a nonexistent

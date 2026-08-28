@@ -11,7 +11,7 @@ import (
 
 func main() {
 	args := os.Args[1:]
-	if len(args) > 0 && args[0] != "new" && args[0] != "sync" && args[0] != "diff" && args[0] != "doctor" && args[0] != "upgrade" {
+	if len(args) > 0 && args[0] != "new" && args[0] != "sync" && args[0] != "diff" && args[0] != "doctor" && args[0] != "upgrade" && args[0] != "deps" {
 		args = append([]string{"new"}, args...)
 	}
 	args = append([]string{"project"}, args...)

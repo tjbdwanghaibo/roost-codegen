@@ -114,22 +114,25 @@ func TestGenerate(t *testing.T) {
 		"e.dao.DbName()",
 		"checkpoint.ResolveDatabaseScope(e.dao)",
 		"e.dao.CollName()",
-		"e.dao.Tracker.TakePersistDirty()",
+		"e.dao.DirtyTracker().TakePersistDirty()",
 		"e.dao.MarshalPersist(mask)",
 		"e.mail.DbName()",
 		"checkpoint.ResolveDatabaseScope(e.mail)",
 		"e.mail.CollName()",
-		"e.mail.Tracker.TakePersistDirty()",
+		"e.mail.DirtyTracker().TakePersistDirty()",
 		"e.mail.MarshalPersist(mask)",
 		"func (e *Player) generatedOnClear()",
 		"func (e *Player) generatedOnDestroy(reason entity.EntityDestroyReason)",
 		"func (e *Player) Snapshot() []checkpoint.SaveItem",
-		"Version: e.dao.Tracker.IncVersion(), Deleted: true",
+		"Version: e.dao.DirtyTracker().IncVersion(), Deleted: true",
 	}
 	for _, check := range checks {
 		if !contains(s, check) {
 			t.Errorf("generated code missing: %q", check)
 		}
+	}
+	if strings.Contains(s, ".Tracker") {
+		t.Fatalf("entity generator bypassed DAO tracker accessor:\n%s", s)
 	}
 
 	// Second run should be unchanged
