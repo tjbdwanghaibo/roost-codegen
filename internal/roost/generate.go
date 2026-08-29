@@ -1,6 +1,7 @@
 package roost
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/tjbdwanghaibo/roost-codegen/internal/attribute"
 	"github.com/tjbdwanghaibo/roost-codegen/internal/dao"
@@ -21,6 +23,11 @@ import (
 	"github.com/tjbdwanghaibo/roost-codegen/internal/tablegen"
 	"github.com/tjbdwanghaibo/roost-codegen/internal/webroute"
 )
+
+// os.Chdir is process-wide. Serializing generator execution prevents two
+// library callers from parsing or writing relative paths in each other's
+// projects. Cross-process conflicts are handled by the commit guards.
+var generatorWorkingDirectory sync.Mutex
 
 type GenerateOptions struct {
 	Changed bool
@@ -64,7 +71,17 @@ func generatorsFor(m Manifest, force bool) []generator {
 			return codeerr.Run([]string{"-root", ".", "-out", "docs/generated/errcode.csv"}, w)
 		}},
 		{Feature: "protocol", Name: "protocol", Prefixes: []string{"protocol/def/"}, Run: func(w io.Writer) error {
-			return protocol.Run(forceArg([]string{"-def", "./protocol/def", "-bind", "", "-handlers", "", "-robot-protocol", ""}, force), w)
+			args := []string{"-def", "./protocol/def", "-robot-protocol", ""}
+			if _, enabled := m.Access["player"]; enabled {
+				args = append(args,
+					"-bind", "./protocol/player_bind",
+					"-handlers", "./game/protocol_handlers",
+					"-handler-bootstrap", "./game/protocol_bootstrap/protocol_gen.go",
+				)
+			} else {
+				args = append(args, "-bind", "", "-handlers", "", "-handler-bootstrap", "")
+			}
+			return protocol.Run(forceArg(args, force), w)
 		}},
 		{Feature: "entity", Name: "entity", Prefixes: []string{"game/entities/", "game/components/"}, Run: func(w io.Writer) error { return entity.Run(forceArg([]string{"-dir", "./game"}, force), w) }},
 		{Feature: "nest", Name: "nest", Prefixes: []string{"game/entities/", "game/components/", "game/handler/"}, Run: func(w io.Writer) error { return nest.Run(forceArg([]string{"-dir", "./game"}, force), w) }},
@@ -114,7 +131,166 @@ func Generate(root string, options GenerateOptions) error {
 	return runGenerators(root, manifest, selected, options)
 }
 
-func runGenerators(root string, manifest Manifest, generators []generator, options GenerateOptions) error {
+// GenerateTransactional runs every selected generator and go mod tidy in a
+// sibling staging tree. Only generated artifacts and dependency metadata are
+// committed, as one rollback-capable batch, after the whole pipeline succeeds.
+func GenerateTransactional(root string, options GenerateOptions, stderr io.Writer) error {
+	if options.Stdout == nil {
+		options.Stdout = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	if options.Check || options.DryRun {
+		return Generate(root, options)
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	manifest, err := LoadManifest(absRoot)
+	if err != nil {
+		return err
+	}
+	stage, err := os.MkdirTemp(filepath.Dir(absRoot), ".roost-generate-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stage)
+	if err := copyProject(absRoot, stage); err != nil {
+		return fmt.Errorf("stage generation: %w", err)
+	}
+	inputs, err := snapshotProjectInputs(stage, manifest)
+	if err != nil {
+		return fmt.Errorf("snapshot generation inputs: %w", err)
+	}
+	var stagedStdout, stagedStderr bytes.Buffer
+	selected := generatorsFor(manifest, options.Force)
+	if options.Changed {
+		changed, changedErr := gitChanged(absRoot)
+		if changedErr != nil {
+			return changedErr
+		}
+		selected = filterChanged(selected, changed)
+	}
+	stagedOptions := options
+	stagedOptions.Changed = false
+	stagedOptions.Stdout = &stagedStdout
+	if err := runGenerators(stage, manifest, selected, stagedOptions); err != nil {
+		replayStagedOutput(options.Stdout, stagedStdout.String(), stage, absRoot)
+		return err
+	}
+	if err := TidyProjectDependencies(stage, &stagedStdout, &stagedStderr); err != nil {
+		replayStagedOutput(options.Stdout, stagedStdout.String(), stage, absRoot)
+		replayStagedOutput(stderr, stagedStderr.String(), stage, absRoot)
+		return err
+	}
+	changes, err := planStagedProjectCommit(absRoot, stage, manifest)
+	if err != nil {
+		return err
+	}
+	dependencyChanges, err := planExplicitStagedFiles(absRoot, stage, "go.mod", "go.sum")
+	if err != nil {
+		return err
+	}
+	changes, err = mergeSyncChanges(changes, dependencyChanges)
+	if err != nil {
+		return err
+	}
+	sort.Slice(changes, func(i, j int) bool { return changes[i].rel < changes[j].rel })
+	if err := verifyProjectInputs(absRoot, manifest, inputs); err != nil {
+		return err
+	}
+	if err := commitSyncChanges(changes); err != nil {
+		return err
+	}
+	replayStagedOutput(options.Stdout, stagedStdout.String(), stage, absRoot)
+	replayStagedOutput(stderr, stagedStderr.String(), stage, absRoot)
+	return nil
+}
+
+// snapshotProjectInputs records application-owned source and configuration
+// that generators may read. Codegen-owned output and dependency metadata are
+// excluded because they are independently guarded by syncChange.before.
+func snapshotProjectInputs(root string, manifest Manifest) (map[string][sha256.Size]byte, error) {
+	plan, err := renderProject(manifest)
+	if err != nil {
+		return nil, err
+	}
+	owned := make(map[string]bool, len(plan))
+	for rel, file := range plan {
+		if file.Owned {
+			owned[filepath.ToSlash(rel)] = true
+		}
+	}
+	out := make(map[string][sha256.Size]byte)
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if path != root && skippedProjectDirectory(entry.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == "go.mod" || rel == "go.sum" || owned[rel] {
+			return nil
+		}
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if bytes.Contains(raw, []byte("Code generated")) || isGeneratedData(path) {
+			return nil
+		}
+		out[rel] = sha256.Sum256(raw)
+		return nil
+	})
+	return out, err
+}
+
+func verifyProjectInputs(root string, manifest Manifest, expected map[string][sha256.Size]byte) error {
+	current, err := snapshotProjectInputs(root, manifest)
+	if err != nil {
+		return fmt.Errorf("verify project inputs: %w", err)
+	}
+	changed := diffSnapshot(expected, current)
+	if len(changed) == 0 {
+		return nil
+	}
+	const maxReported = 5
+	reported := changed
+	if len(reported) > maxReported {
+		reported = reported[:maxReported]
+	}
+	detail := strings.Join(reported, ", ")
+	if len(changed) > len(reported) {
+		detail += fmt.Sprintf(" (and %d more)", len(changed)-len(reported))
+	}
+	return fmt.Errorf("project inputs changed while code generation was running: %s; rerun the command", detail)
+}
+
+func replayStagedOutput(writer io.Writer, value, stage, root string) {
+	if value == "" {
+		return
+	}
+	value = strings.ReplaceAll(value, stage, root)
+	value = strings.ReplaceAll(value, filepath.ToSlash(stage), filepath.ToSlash(root))
+	_, _ = io.WriteString(writer, value)
+}
+
+func runGenerators(root string, manifest Manifest, generators []generator, options GenerateOptions) (returnErr error) {
+	generatorWorkingDirectory.Lock()
+	defer generatorWorkingDirectory.Unlock()
 	old, err := os.Getwd()
 	if err != nil {
 		return err
@@ -122,7 +298,11 @@ func runGenerators(root string, manifest Manifest, generators []generator, optio
 	if err := os.Chdir(root); err != nil {
 		return err
 	}
-	defer os.Chdir(old)
+	defer func() {
+		if err := os.Chdir(old); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("restore generator working directory: %w", err))
+		}
+	}()
 	for _, gen := range generators {
 		if !hasFeature(manifest, gen.Feature) {
 			continue
@@ -182,7 +362,7 @@ func copyProject(src, dst string) error {
 			return nil
 		}
 		if entry.IsDir() {
-			if entry.Name() == ".git" || entry.Name() == "bin" || entry.Name() == "dist" || entry.Name() == "log" {
+			if skippedProjectDirectory(entry.Name()) {
 				return filepath.SkipDir
 			}
 			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
@@ -196,6 +376,11 @@ func copyProject(src, dst string) error {
 		}
 		return writeAtomic(filepath.Join(dst, rel), raw, 0o644)
 	})
+}
+
+func skippedProjectDirectory(name string) bool {
+	return name == ".git" || name == "bin" || name == "dist" || name == "log" ||
+		name == ".testcache" || strings.HasPrefix(name, ".roost-")
 }
 
 func snapshotGenerated(root string) (map[string][sha256.Size]byte, error) {

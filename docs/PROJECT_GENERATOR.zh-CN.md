@@ -61,15 +61,17 @@ make codegen-up   # go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@
       -features protocol,config,entity,nest,event,dao,errcode
     cd hello_roost
     make deps-update
-    make generate
-    make doctor
-    make test
-    make run SERVICE=game
+    roost project next
 
 每个新项目都会生成：
 
 - `docs/QUICKSTART.zh-CN.md`：环境、概念、第一次运行、第一次业务改动和常见错误；
+- `docs/BEGINNER_WORKBOOK.zh-CN.md`：project next 驱动的逐步业务、TCP、排错和发布手册；
 - `docs/ROOST_YAML.zh-CN.md`：清单全部字段、嵌套字段、规则和完整例子；
+- `docs/FIRST_BUSINESS.zh-CN.md`：Player Access → Protocol → Nest Sender → Entity 首条业务链；
+- `docs/ENTITY_COMPONENT.zh-CN.md`：Entity、Component、DAO、Nest handler 的可复制实战；
+- `docs/ENTITY_LIFECYCLE.zh-CN.md`、`docs/PROTOCOL_TO_NEST.zh-CN.md`：生命周期与接入边界；
+- `docs/SKILL.zh-CN.md`、`docs/TROUBLESHOOTING.zh-CN.md`：技能接入与错误定位；
 - `docs/USAGE.zh-CN.md`：当前项目实际启用的 Service、Mod 和日常命令。
 
 初学者最容易混淆的是：Service 是进程入口，Mod 是运行时基础设施，Feature 是生成期开关，
@@ -119,9 +121,9 @@ PATH 的目录就是 `D:\Program Files\Go\bin\bin`。关闭并重新打开 Power
 
 ## 3. 创建项目
 
-最小命令：
+最小命令（module 必填，避免误用框架作者的仓库命名空间）：
 
-    roost project new planet
+    roost project new planet -module github.com/your-account/planet
 
 指定 module、服务和能力：
 
@@ -137,6 +139,7 @@ features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节
 默认无需传版本参数，生成项目会跟随最新版本。若要提高某个模块的最低版本，可传明确版本；它不得低于 codegen 的兼容下限：
 
     roost project new planet \
+      -module github.com/acme/planet \
       -roost-core-version v1.8.0 \
       -roost-kit-version v1.8.0 \
       -roost-skill-version v1.9.0 \
@@ -218,11 +221,16 @@ features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节
 | `shared_mods` | 否 | 进程级共享 Mod；每个 Service 不得重复声明 |
 | `services` | 是 | Service 名到配置的 map；至少一个 Service |
 | `services.<name>.mods` | 否 | 该 Service 装配的 Kit Mod，依赖会自动展开 |
+| `access.player.service` | 否 | 玩家协议接入层所属 Service；用 add access 创建 |
+| `access.player.transports` | 否 | 显式启用的客户端传输；当前支持 tcp，用 add transport 创建 |
 | `features` | 否 | 生成目录、生成器和 bootstrap 接线的项目级开关 |
 | `sagas` | 否 | `roost add saga` 已生成的 Saga 名称；不要只手工添加 |
 | `ids` | 否 | protocol/entity/component/errcode 的编号空间 |
 | `ids.<kind>.min/max` | 视类型 | 普通编号空间的闭区间，必须 `min > 0` 且 `max >= min` |
 | `ids.protocol.groups.<name>.min/max` | 否 | Protocol 按业务组划分的独立闭区间 |
+
+底层编码上限会 fail-fast：EntityKind 为 1..255，ComponentType 最大 65535，Protocol 消息 ID
+最大 4294967295。不要沿用旧脚手架曾给出的 Entity 1000..1999 区间；它无法转换为 core 的 uint8 EntityKind。
 
 `versions.*: latest` 保存在 roost.yaml 中作为持续更新策略；Go 不允许在 require 中写
 `latest`，所以 go.mod/go.sum 保存一次解析出的具体版本。`features` 与 `mods` 是两个维度：
@@ -233,7 +241,11 @@ features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节
     make sync
     make doctor
 
-sync 会重新生成 App 装配、Makefile、CI、Docker Compose 和使用说明，不覆盖已经存在的 Service 实现与业务配置。
+sync 会在项目同级临时目录重新生成 App 装配、Makefile、CI、Docker Compose 和使用说明，通过全部预检后才提交，不覆盖已经存在的 Service 实现与业务配置。提交失败会回滚已写文件；提交窗口发生并发编辑时会拒绝覆盖并提示重试。
+
+`roost generate` 在同级临时项目完成全部生成器和 `GOWORK=off go mod tidy`，因此新增 DAO/Protocol 等
+import 后可直接执行测试，不需要新手手工猜测 `go get`。只有所有步骤成功才提交生成物与依赖文件；
+该步骤只整理当前依赖，不升级框架，任何失败都不会留下半生成工程。
 
 ### features 完整清单
 
@@ -291,16 +303,29 @@ Core 会根据 DependsOn 排序生命周期。生成器负责补齐必需依赖�
 ## 6. 日常业务脚手架
 
     roost add module alliance
-    roost add protocol AllianceCreate -group game
+    roost add access player --service game
+    roost add transport tcp
+    # 每完成一步：
+    roost project next
     roost add entity Player
-    roost add component Inventory
+    roost add component Inventory --entity Player
+    roost add dao Player --entity Player
+    roost add handler UseItem --entity Player --component Inventory
+    roost add protocol UseItem -group game --handler inventory
+    # 修改 Request 字段与 handler 参数后
+    roost add endpoint UseItem --handler inventory
+    roost add lifecycle Player --service game
+    roost add skill Fireball
     roost add event PlayerLogin
     roost add table Item
-    roost add dao Player
+    roost add dao Player --entity Player
     roost add webroute AdminQuery
     roost add errcode InvalidRequest
     roost add mod saga -service game
     roost add saga AllianceRally -service game -steps ReserveTroops,CreateMarch,CreateRally
+
+TCP 生成层的帧格式、鉴权、主动推送、配置硬上限和上线门禁见
+[Player TCP 接入](PLAYER_ACCESS_TCP.zh-CN.md)。
 
 Saga 命令会自动给目标 Service 添加 `saga`、`nestwal` 及其传递依赖，并生成
 `saga/alliance_rally/definition.go`，其中包含类型、步骤、重试、
@@ -331,6 +356,18 @@ protocol、entity、component 默认从 roost.yaml 的 ID 空间分配下一个�
 Makefile 也提供了对应入口，例如：
 
     make new-protocol NAME=PlayerLogin GROUP=game
+    make new-access NAME=player SERVICE=game
+    make new-transport NAME=tcp SERVICE=game
+    make next
+    make next NEXT_WORKFLOW=player-tcp
+    make player-tcp-enable SERVICE=game
+    make new-entity NAME=Player
+    make new-component NAME=Profile ENTITY=Player
+    make new-handler NAME=RenamePlayer ENTITY=Player COMPONENT=Profile
+    make new-lifecycle NAME=Player ENTITY=Player SERVICE=game
+    make new-endpoint NAME=RenamePlayer HANDLER=player
+    make new-skill NAME=Fireball
+    make new-dao NAME=Player ENTITY=Player
     make new-table NAME=Item
     make new-service NAME=chat MODS=etcd,redis,nats
     make new-saga NAME=AllianceRally SERVICE=game STEPS=ReserveTroops,CreateMarch,CreateRally
@@ -339,6 +376,12 @@ Makefile 也提供了对应入口，例如：
 
     make generate-changed
     make test
+
+`--entity` 会自动完成 Component 工厂注册、窄 Entity 接口、Manager、字段 tag 和 DAO import；
+Entity wire 会生成 Component/DAO getter，
+不需要手工编辑这些接线。玩法方法写在 `<name>_component.go`，持久化/同步字段写在
+`db/def` 并通过生成的 getter/setter 访问。完整流程见生成项目的
+`docs/FIRST_BUSINESS.zh-CN.md` 和 `docs/ENTITY_COMPONENT.zh-CN.md`。
 
 ## 7. ID 管理
 
@@ -385,7 +428,7 @@ check-generated 会复制项目到临时目录，在副本中执行全部生成�
 
 独立调用：
 
-    go run github.com/tjbdwanghaibo/roost-codegen/cmd/protocol@v1.7.0 \
+    go run github.com/tjbdwanghaibo/roost-codegen/cmd/protocol@latest \
       -def ./protocol/def \
       -bind "" \
       -handlers "" \
@@ -456,6 +499,9 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
     roost project doctor
     roost project doctor -strict=false
     roost project doctor -json
+    roost project doctor --workflow first-business
+    roost project next
+    roost project next --workflow player-tcp
 
 查看 sync 将修改的文件：
 
@@ -482,7 +528,7 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
       -skill v1.9.0 \
       -codegen v1.7.0
 
-升级更新 roost.yaml 和生成器管理的文件，然后按新策略更新 `go.mod/go.sum`。业务代码和业务配置保留。依赖解析或 tidy 失败时，原 `go.mod/go.sum` 会恢复。core、kit、skill 的明确版本是 Go MVS 下限而不是上限；若其他直接依赖要求更高版本，最终解析结果会更高。codegen 查询则使用 `versions.codegen` 指定的版本或 `latest`。
+升级更新 roost.yaml 和生成器管理的文件，然后按新策略更新 `go.mod/go.sum`。业务代码和业务配置保留。依赖解析与 tidy 在同级临时项目完成，失败时原 `go.mod/go.sum` 从未被改动；提交前还会校验业务输入和依赖文件没有并发变化。core、kit、skill 的明确版本是 Go MVS 下限而不是上限；若其他直接依赖要求更高版本，最终解析结果会更高。codegen 查询则使用 `versions.codegen` 指定的版本或 `latest`。
 
 ## 14. 生产检查清单
 
@@ -508,7 +554,7 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
     github.com/tjbdwanghaibo/cube-kit v1.8.0
     github.com/tjbdwanghaibo/roost-skill v1.9.0
 
-不生成 `replace`。在正常的 `project new/sync/deps` 路径中，上述版本会立即被当前最新 release 替换；具体版本留在 `go.mod/go.sum`，而“继续跟随最新”的策略留在 `roost.yaml`。生成的 `internal/frameworkdeps/generated.go` 以类型别名保留暂未被业务导入的 skill，因此 tidy 不会删掉它。若需要离线生成，bootstrap 下限仍可构建；恢复网络后执行 `make deps-update` 即可追到最新。
+不生成 `replace`。在正常的 `project new/sync/deps` 路径中，上述版本会立即被当前最新 release 替换；具体版本留在 `go.mod/go.sum`，而“继续跟随最新”的策略留在 `roost.yaml`。生成的 `internal/frameworkdeps/generated.go` 通过稳定路径 `github.com/tjbdwanghaibo/roost-skill/skill` 的类型别名保留暂未被业务导入的 skill，因此 tidy 不会删掉它。旧模板中的 `/skillv2` 会在 `project sync/upgrade` 时迁移，不保留双版本兼容。若需要离线生成，bootstrap 下限仍可构建；恢复网络后执行 `make deps-update` 即可追到最新。
 
 ## 16. 帧同步 Transport 预设
 

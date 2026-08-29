@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"flag"
 	"log"
 	"os"
 
@@ -8,7 +10,7 @@ import (
 )
 
 func main() {
-	if err := eventgen.Run(os.Args[1:], os.Stdout); err != nil {
+	if err := eventgen.Run(os.Args[1:], os.Stdout); err != nil && !errors.Is(err, flag.ErrHelp) {
 		log.Fatal(err)
 	}
 }

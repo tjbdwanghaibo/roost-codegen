@@ -12,7 +12,7 @@ import (
 {{- if .HasMaps}}
 	fmap "github.com/tjbdwanghaibo/cube-core/map"
 {{- end}}
-	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // {{.Dao.Name}} is the DAO for collection "{{.Dao.Coll}}".

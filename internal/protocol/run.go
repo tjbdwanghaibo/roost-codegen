@@ -21,6 +21,7 @@ func Run(args []string, stdout io.Writer) error {
 	msgIDDir := flags.String("msgid", "./protocol/msgid", "generated msg id directory")
 	bindDir := flags.String("bind", "./protocol/player_bind", "generated player_agent binding directory")
 	handlerDir := flags.String("handlers", "./game/protocol_handlers", "generated player protocol handler directory")
+	handlerBootstrap := flags.String("handler-bootstrap", "", "generated aggregate player protocol registration file")
 	robotProtocolFile := flags.String("robot-protocol", "./service/robot/protocol/registry_gen.go", "generated robot protocol registry path")
 	manifestFile := flags.String("manifest", "./protocol/protocol_manifest.json", "generated protocol manifest path")
 	reverseProtoFile := flags.String("reverse-proto", "", "reverse-generate Go protocol defs from a proto file")
@@ -52,7 +53,7 @@ func Run(args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("parse protocol defs: %w", err)
 	}
-	if len(defs.Structs) == 0 {
+	if len(defs.Structs) == 0 && *handlerBootstrap == "" {
 		_, _ = fmt.Fprintf(stdout, "no protocol structs found in %s\n", *defDir)
 		return nil
 	}
@@ -62,12 +63,30 @@ func Run(args []string, stdout io.Writer) error {
 	}
 	defs.ModulePath = projectInfo.ModulePath
 	defs.GoPackage = defs.ModulePath + "/protocol/pb;pb"
+	if len(defs.Structs) == 0 {
+		if err := os.MkdirAll(filepath.Dir(*handlerBootstrap), 0o755); err != nil {
+			return err
+		}
+		content, err := generateProtocolBootstrap(defs, "")
+		if err != nil {
+			return err
+		}
+		changed, err := writeIfChanged(*handlerBootstrap, content, *force)
+		if err != nil {
+			return err
+		}
+		printChange(stdout, *handlerBootstrap, changed)
+		return nil
+	}
 	dirs := []string{*protoDir, *pbDir, *msgIDDir, filepath.Dir(*manifestFile)}
 	if *bindDir != "" {
 		dirs = append(dirs, *bindDir)
 	}
 	if *robotProtocolFile != "" {
 		dirs = append(dirs, filepath.Dir(*robotProtocolFile))
+	}
+	if *handlerBootstrap != "" {
+		dirs = append(dirs, filepath.Dir(*handlerBootstrap))
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -107,6 +126,18 @@ func Run(args []string, stdout io.Writer) error {
 		printChange(stdout, item.path, changed)
 	}
 	if *handlerDir == "" {
+		if *handlerBootstrap == "" {
+			return nil
+		}
+		content, err := generateProtocolBootstrap(defs, "")
+		if err != nil {
+			return err
+		}
+		changed, err := writeIfChanged(*handlerBootstrap, content, *force)
+		if err != nil {
+			return err
+		}
+		printChange(stdout, *handlerBootstrap, changed)
 		return nil
 	}
 	files, err := generateProtocolHandlerFiles(defs)
@@ -128,6 +159,21 @@ func Run(args []string, stdout io.Writer) error {
 			return err
 		}
 		printChange(stdout, path, changed)
+	}
+	if *handlerBootstrap != "" {
+		handlerImport, err := projectInfo.ImportPath(*handlerDir)
+		if err != nil {
+			return fmt.Errorf("resolve protocol handler import: %w", err)
+		}
+		content, err := generateProtocolBootstrap(defs, handlerImport)
+		if err != nil {
+			return err
+		}
+		changed, err := writeIfChanged(*handlerBootstrap, content, *force)
+		if err != nil {
+			return err
+		}
+		printChange(stdout, *handlerBootstrap, changed)
 	}
 	return nil
 }

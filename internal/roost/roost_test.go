@@ -2,6 +2,7 @@ package roost
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -44,6 +45,7 @@ func TestNewProjectSyncPreservesBusinessFiles(t *testing.T) {
 		"Makefile",
 		"docs/QUICKSTART.zh-CN.md",
 		"docs/ROOST_YAML.zh-CN.md",
+		"docs/ENTITY_COMPONENT.zh-CN.md",
 		"internal/bootstrap/generated.go",
 		"internal/service/game/service.go",
 		"configs/generated/gen_table_config.go",
@@ -198,6 +200,761 @@ func TestAddCamelCaseProtocolUsesSnakeFileAndPascalTypes(t *testing.T) {
 	raw, _ := os.ReadFile(filepath.Join(root, filepath.FromSlash(paths[0])))
 	if !strings.Contains(string(raw), "type PlayerLoginRequest struct") {
 		t.Fatalf("unexpected protocol:\n%s", raw)
+	}
+}
+
+func TestBeginnerEntityComponentAndDAOFlowWiresAggregate(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{
+		Name: "planet", Module: "example.com/planet", Out: target,
+		Mods: []string{"configdata"}, Features: []string{"entity", "dao", "nest"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "entity", Name: "Player"}); err != nil {
+		t.Fatal(err)
+	}
+	componentPaths, err := Add(root, AddOptions{Kind: "component", Name: "Inventory", Entity: "Player"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(componentPaths, ","), "game/entities/player/inventory_component.go,game/entities/player/entity.go"; got != want {
+		t.Fatalf("component paths = %s, want %s", got, want)
+	}
+	if _, err := Add(root, AddOptions{Kind: "dao", Name: "Player", Entity: "Player"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "handler", Name: "RenamePlayer", Entity: "Player", Component: "Inventory"}); err == nil || !strings.Contains(err.Error(), "roost add mod nest -service game") {
+		t.Fatalf("handler without the nest runtime mod error = %v", err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "mod", Name: "nest", Service: "game"}); err != nil {
+		t.Fatal(err)
+	}
+	entitySource, err := os.ReadFile(filepath.Join(root, "game", "entities", "player", "entity.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"type IPlayerEntity interface", "entity.IThreadSafeEntity", "entity.ComponentManager", "entity.DaoManager",
+		"inventory *InventoryComponent `comp:\"CompTypeInventory\"`",
+		"*db.PlayerDao", "`dao:\"player\"`", `db "example.com/planet/db"`,
+	} {
+		if !strings.Contains(string(entitySource), want) {
+			t.Errorf("Entity scaffold missing %q:\n%s", want, entitySource)
+		}
+	}
+	componentSource, err := os.ReadFile(filepath.Join(root, "game", "entities", "player", "inventory_component.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"entity.RegisterComponentFactory", "owner.(*Player)", "func (component *InventoryComponent) Owner() *Player", "type IInventoryEntity interface", "InventoryComp() *InventoryComponent",
+		"Do not add mutexes here", "CompTypeInventory entity.ComponentType = 2000",
+	} {
+		if !strings.Contains(string(componentSource), want) {
+			t.Errorf("Component scaffold missing %q:\n%s", want, componentSource)
+		}
+	}
+	if _, err := Add(root, AddOptions{Kind: "handler", Name: "RenamePlayer", Entity: "Player", Component: "Inventory"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err != nil {
+		t.Fatalf("generate beginner aggregate: %v", err)
+	}
+	wire, err := os.ReadFile(filepath.Join(root, "game", "entities", "player", "player_gen_wire.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"CreateComponent(CompTypeInventory", "func (e *Player) InventoryComp() *InventoryComponent", "func (e *Player) Dao() *db.PlayerDao"} {
+		if !strings.Contains(string(wire), want) {
+			t.Errorf("generated Entity wire missing %q:\n%s", want, wire)
+		}
+	}
+	nestFiles, err := filepath.Glob(filepath.Join(root, "game", "handler", "*_nest_gen.go"))
+	if err != nil || len(nestFiles) == 0 {
+		t.Fatalf("Nest output missing: files=%v err=%v", nestFiles, err)
+	}
+	nestWire, err := os.ReadFile(nestFiles[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"handlerRenamePlayer", "player.IInventoryEntity", "nest.DurabilityStrict"} {
+		if !strings.Contains(string(nestWire), want) {
+			t.Errorf("generated Nest wire missing %q:\n%s", want, nestWire)
+		}
+	}
+}
+
+func TestAddComponentInfersOnlyEntityAndRejectsAmbiguity(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Features: []string{"entity"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "entity", Name: "Player"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "component", Name: "Profile"}); err != nil {
+		t.Fatalf("infer the only Entity: %v", err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "entity", Name: "Guild"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "component", Name: "Inventory"}); err == nil || !strings.Contains(err.Error(), "--entity") {
+		t.Fatalf("ambiguous component target error = %v", err)
+	}
+}
+
+func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{
+		Name: "planet", Module: "example.com/planet", Out: target,
+		Mods: []string{"configdata"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := []AddOptions{
+		{Kind: "access", Name: "player", Service: "game"},
+		{Kind: "entity", Name: "Player"},
+		{Kind: "component", Name: "Profile", Entity: "Player"},
+		{Kind: "dao", Name: "Player", Entity: "Player"},
+		{Kind: "handler", Name: "RenamePlayer", Entity: "Player", Component: "Profile"},
+		{Kind: "protocol", Name: "RenamePlayer", Group: "game", Handler: "player"},
+		{Kind: "lifecycle", Name: "Player", Entity: "Player", Service: "game"},
+		{Kind: "endpoint", Name: "RenamePlayer", Handler: "player", Protocol: "RenamePlayer", NestHandler: "RenamePlayer"},
+	}
+	for _, step := range steps {
+		if _, err := Add(root, step); err != nil {
+			t.Fatalf("add %s %s: %v", step.Kind, step.Name, err)
+		}
+		switch step.Kind {
+		case "component":
+			path := filepath.Join(root, "game", "entities", "player", "profile_component.go")
+			raw, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			raw = append(raw, []byte("\nfunc (component *ProfileComponent) Rename(name string) error { return nil }\n")...)
+			if writeErr := os.WriteFile(path, raw, 0o644); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+		case "dao":
+			path := filepath.Join(root, "db", "def", "player.go")
+			raw, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			raw = bytes.Replace(raw, []byte("\t// Add domain fields here. Example:\n"), []byte("\tName string `bson:\"name\" dao:\"persist,sync\"`\n\t// Add domain fields here. Example:\n"), 1)
+			if writeErr := os.WriteFile(path, raw, 0o644); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+		case "handler":
+			path := filepath.Join(root, "game", "handler", "rename_player.go")
+			raw, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			raw = bytes.Replace(raw,
+				[]byte("func handlerRenamePlayer(target player.IProfileEntity) error {\n\t// TODO: validate input and call target.ProfileComp().<BusinessMethod>().\n\treturn nil\n}"),
+				[]byte("func handlerRenamePlayer(target player.IProfileEntity, name string) error {\n\treturn target.ProfileComp().Rename(name)\n}"), 1)
+			if writeErr := os.WriteFile(path, raw, 0o644); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+		case "protocol":
+			path := filepath.Join(root, "protocol", "def", "rename_player.go")
+			raw, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			raw = bytes.Replace(raw, []byte("type RenamePlayerRequest struct{}"), []byte("type RenamePlayerRequest struct { Name string `pb:\"1\"` }"), 1)
+			if writeErr := os.WriteFile(path, raw, 0o644); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+		}
+	}
+	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err != nil {
+		t.Fatalf("generate first business workflow: %v", err)
+	}
+	var doctorOutput bytes.Buffer
+	if err := DoctorWithOptions(root, DoctorOptions{Strict: true, Workflow: "first-business"}, &doctorOutput); err != nil {
+		t.Fatalf("doctor first business workflow: %v\n%s", err, doctorOutput.String())
+	}
+	checks := map[string][]string{
+		"roost.yaml":                               {"access:", "player:", "service: game", "- nest"},
+		"game/player_agent/runtime_gen.go":         {"type ProtocolRegistry struct", "func (registry *ProtocolRegistry) Dispatch", "gateway.ErrUnauthenticated"},
+		"internal/access/player/mod_gen.go":        {"protocolbootstrap.RegisterPlayerProtocols", "registry.Register(Name, mod.runtime)"},
+		"game/protocol_bootstrap/protocol_gen.go":  {"RegisterPlayerPlayerProtocols"},
+		"game/controllers/player/controller.go":    {"app.Lookup[corenest.Client]", "NestClient() corenest.Client"},
+		"game/controllers/player/rename_player.go": {"Sync_RenamePlayer", "context.PlayerID", "NewRenamePlayerSender"},
+		"game/lifecycle/player.go":                 {"GetOrCreate", "FromRegistry", "mods.ModEntityRuntime", "kitcheckpoint.ErrEntityAggregateNotFound", "entity.BuildEntityID", "EntityKindPlayer"},
+		"protocol/player_bind/bind_gen.go":         {"RegisterRenamePlayer"},
+	}
+	for path, fragments := range checks {
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+		if err != nil {
+			t.Errorf("read %s: %v", path, err)
+			continue
+		}
+		for _, fragment := range fragments {
+			if !strings.Contains(string(raw), fragment) {
+				t.Errorf("%s missing %q:\n%s", path, fragment, raw)
+			}
+		}
+	}
+	// A duplicate endpoint must be rejected before any companion controller is
+	// created. This keeps a failed add operation free of partial artifacts.
+	controllerPath := filepath.Join(root, "game", "controllers", "player", "controller.go")
+	if err := os.Remove(controllerPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "endpoint", Name: "RenamePlayer", Handler: "player"}); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("duplicate endpoint error = %v", err)
+	}
+	if _, err := os.Stat(controllerPath); !os.IsNotExist(err) {
+		t.Fatalf("duplicate endpoint recreated controller: %v", err)
+	}
+}
+
+func TestDoctorFirstBusinessReportsActionableMissingSteps(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	err = DoctorWithOptions(root, DoctorOptions{Strict: false, Workflow: "first-business"}, &output)
+	if err == nil {
+		t.Fatal("incomplete first business workflow unexpectedly passed")
+	}
+	for _, want := range []string{"workflow:player-access", "roost add access player", "workflow:endpoint", "roost add endpoint"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("doctor output missing %q:\n%s", want, output.String())
+		}
+	}
+}
+
+func TestProjectNextReturnsOnlyTheCurrentSafeAction(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := PrintNextStep(root, "", &output); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"workflow: first-business", "progress: 0/", "next: roost add access player", "guide: docs/BEGINNER_WORKBOOK.zh-CN.md"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("next output missing %q:\n%s", want, output.String())
+		}
+	}
+	if strings.Contains(output.String(), "roost add entity Player") {
+		t.Fatalf("next printed later steps instead of one action:\n%s", output.String())
+	}
+	if _, err := Add(root, AddOptions{Kind: "access", Name: "player", Service: "game"}); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if err := PrintNextStep(root, "", &output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "next: roost add entity Player") {
+		t.Fatalf("next did not advance to Entity:\n%s", output.String())
+	}
+}
+
+func TestProjectNextRejectsEmptyDAOAndComponentSkeleton(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []AddOptions{
+		{Kind: "access", Name: "player", Service: "game"},
+		{Kind: "entity", Name: "Player"},
+		{Kind: "component", Name: "Profile", Entity: "Player"},
+		{Kind: "dao", Name: "Player", Entity: "Player"},
+	} {
+		if _, err := Add(root, step); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var output bytes.Buffer
+	if err := PrintNextStep(root, "first-business", &output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "add a persisted field") {
+		t.Fatalf("empty DAO was treated as application state:\n%s", output.String())
+	}
+	daoPath := filepath.Join(root, "db", "def", "player.go")
+	raw, err := os.ReadFile(daoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = bytes.Replace(raw, []byte("\t// Add domain fields here. Example:\n"), []byte("\tName string `bson:\"name\" dao:\"persist,sync\"`\n\t// Add domain fields here. Example:\n"), 1)
+	if err := os.WriteFile(daoPath, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if err := PrintNextStep(root, "first-business", &output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "implement a method") {
+		t.Fatalf("Component Name method was treated as business logic:\n%s", output.String())
+	}
+}
+
+func TestAddManifestMutationRollsBackWhenSyncPreflightFails(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, ManifestName)
+	before, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	makefilePath := filepath.Join(root, "Makefile")
+	if err := os.WriteFile(makefilePath, []byte("application owned\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "mod", Name: "nest", Service: "game"}); err == nil {
+		t.Fatal("add mod unexpectedly succeeded with an unmanaged Makefile conflict")
+	}
+	after, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("manifest changed after failed sync:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+func TestAddPlayerTCPTransportIsExplicitAndProductionGuarded(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "transport", Name: "tcp"}); err == nil || !strings.Contains(err.Error(), "roost add access player") {
+		t.Fatalf("transport without access error = %v", err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "access", Name: "player", Service: "game"}); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := Add(root, AddOptions{Kind: "transport", Name: "tcp", Service: "game"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 14 {
+		t.Fatalf("transport paths = %v", paths)
+	}
+	for path, fragments := range map[string][]string{
+		"roost.yaml": {"transports:", "- tcp"},
+		"internal/access/player/tcp/server_gen.go":      {"max_connections_per_ip", "MaxHandshakes", "MaxHandshakeBytes", "readFrameLimit", "handshakeSlots", "PushPlayer", "PushSession", "outbound payload"},
+		"internal/access/player/tcp/server_gen_test.go": {"TestFrameRoundTrip", "TestHandshakeFrameUsesIndependentSmallLimit", "TestWriteFrameRejectsOversizedServerPayload"},
+		"internal/access/player/tcp/auth.go":            {"gateway.ErrUnauthenticated", "newApplicationAuthenticator"},
+		"cmd/playerprobe/main.go":                       {"ROOST_PLAYER_TOKEN", "writeAuth", "readAck"},
+		"internal/bootstrap/generated.go":               {"accessplayertcp.NewMod()"},
+		"configs/examples/access.player.tcp.yaml":       {"enabled: false", "max_handshake_bytes: 8192", "max_payload_bytes: 1048576"},
+		"configs/service/config.game.yaml":              {"player_access:", "enabled: false", "max_payload_bytes: 1048576"},
+		"configs/service/config.game.prod.example.yaml": {"player_access:", "enabled: false", "max_payload_bytes: 1048576"},
+	} {
+		raw, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+		if readErr != nil {
+			t.Errorf("read %s: %v", path, readErr)
+			continue
+		}
+		for _, fragment := range fragments {
+			if !strings.Contains(string(raw), fragment) {
+				t.Errorf("%s missing %q:\n%s", path, fragment, raw)
+			}
+		}
+	}
+	for path, fragments := range map[string][]string{
+		"Dockerfile":                     {"EXPOSE 9100 7000"},
+		"deploy/k8s/game.yaml":           {"name: player-tcp", "containerPort: 7000", "port: 7000"},
+		"deploy/k8s/network-policy.yaml": {"roost.tjbdwanghaibo.io/player-access", "port: 7000"},
+	} {
+		raw, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+		if readErr != nil {
+			t.Errorf("read %s: %v", path, readErr)
+			continue
+		}
+		for _, fragment := range fragments {
+			if !strings.Contains(string(raw), fragment) {
+				t.Errorf("%s missing %q:\n%s", path, fragment, raw)
+			}
+		}
+	}
+	if _, err := Add(root, AddOptions{Kind: "transport", Name: "tcp"}); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("duplicate transport error = %v", err)
+	}
+	var output bytes.Buffer
+	if err := DoctorWithOptions(root, DoctorOptions{Strict: false, Workflow: "player-tcp"}, &output); err == nil {
+		t.Fatal("default reject auth and disabled listener unexpectedly passed player-tcp doctor")
+	}
+	for _, want := range []string{"workflow:tcp-auth", "workflow:tcp-config"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("doctor output missing %q:\n%s", want, output.String())
+		}
+	}
+}
+
+func TestDockerReadmePublishesPlayerPortForOwningService(t *testing.T) {
+	manifest := DefaultManifest("planet", "example.com/planet", []string{"alpha", "world"}, []string{"configdata"}, nil)
+	manifest.Access = map[string]AccessSpec{
+		"player": {Service: "world", Transports: []string{"tcp"}},
+	}
+	readme := renderDockerReadme(manifest)
+	for _, want := range []string{"planet-world-1000", "-p 7000:7000", "planet:v1.0.0 world"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("Docker README missing %q:\n%s", want, readme)
+		}
+	}
+}
+
+func TestDoctorPlayerTCPPassesAfterAuthAndConfig(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "access", Name: "player", Service: "game"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "transport", Name: "tcp"}); err != nil {
+		t.Fatal(err)
+	}
+	authPath := filepath.Join(root, "internal", "access", "player", "tcp", "auth.go")
+	auth, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth = bytes.Replace(auth, []byte("func (applicationAuthenticator) Authenticate(context.Context, string, net.Addr)"), []byte("func (applicationAuthenticator) Authenticate(_ context.Context, token string, _ net.Addr)"), 1)
+	auth = bytes.Replace(auth, []byte("return gateway.Principal{}, gateway.ErrUnauthenticated"), []byte(`return gateway.Principal{PlayerID: int64(len(token)), SessionID: token}, nil`), 1)
+	if err := os.WriteFile(authPath, auth, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ensurePlayerTCPConfig(root, "game", "", true); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := DoctorWithOptions(root, DoctorOptions{Strict: false, Workflow: "player-tcp"}, &output); err != nil {
+		t.Fatalf("doctor player-tcp: %v\n%s", err, output.String())
+	}
+}
+
+func TestConfigEnablePlayerTCPRefusesSkeletonThenPreservesConfig(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "access", Name: "player", Service: "game"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "transport", Name: "tcp"}); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	err = Run([]string{"config", "enable", "player-tcp", "--root", root}, &output, &output)
+	if err == nil || !strings.Contains(err.Error(), "auth.go is still") {
+		t.Fatalf("enable with skeleton auth error = %v", err)
+	}
+	authPath := filepath.Join(root, "internal", "access", "player", "tcp", "auth.go")
+	auth, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth = bytes.Replace(auth, []byte("func (applicationAuthenticator) Authenticate(context.Context, string, net.Addr)"), []byte("func (applicationAuthenticator) Authenticate(_ context.Context, token string, _ net.Addr)"), 1)
+	auth = bytes.Replace(auth, []byte("return gateway.Principal{}, gateway.ErrUnauthenticated"), []byte(`return gateway.Principal{PlayerID: int64(len(token)), SessionID: token}, nil`), 1)
+	if err := os.WriteFile(authPath, auth, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "configs", "service", "config.game.yaml")
+	config, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config = bytes.Replace(config, []byte("sid: 1000"), []byte("# keep-this-comment\nsid: 1000"), 1)
+	if err := os.WriteFile(configPath, config, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if err := Run([]string{"config", "enable", "player-tcp", "--root", root}, &output, &output); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(after, []byte("# keep-this-comment")) || !bytes.Contains(after, []byte("enabled: true")) || bytes.Count(after, []byte("player_access:")) != 1 {
+		t.Fatalf("config merge did not preserve content or enable once:\n%s", after)
+	}
+	if !strings.Contains(output.String(), "project doctor --workflow player-tcp") {
+		t.Fatalf("enable output has no next step:\n%s", output.String())
+	}
+	if err := Run([]string{"config", "disable", "player-tcp", "--root", root}, &output, &output); err != nil {
+		t.Fatal(err)
+	}
+	after, _ = os.ReadFile(configPath)
+	if !bytes.Contains(after, []byte("enabled: false")) {
+		t.Fatalf("disable did not update config:\n%s", after)
+	}
+}
+
+func TestPlayerTCPConfigPreservesCRLFAndExistingParentMap(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "config.yaml")
+	original := "sid: 1\r\n# application comment\r\nplayer_access:\r\n  gateway_name: edge\r\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ensurePlayerTCPConfig(root, "game", path, false); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(bytes.ReplaceAll(raw, []byte("\r\n"), nil), []byte("\n")) {
+		t.Fatalf("config line endings were mixed:\n%q", raw)
+	}
+	for _, want := range []string{"# application comment", "gateway_name: edge", "tcp:", "max_handshake_bytes: 8192"} {
+		if !bytes.Contains(raw, []byte(want)) {
+			t.Errorf("config missing %q:\n%s", want, raw)
+		}
+	}
+}
+
+func TestCLIRejectsDangerousDefaultsAndUnexpectedArguments(t *testing.T) {
+	var output bytes.Buffer
+	err := Run([]string{"project", "new", "planet", "-out", filepath.Join(t.TempDir(), "planet")}, &output, &output)
+	if err == nil || !strings.Contains(err.Error(), "-module is required") {
+		t.Fatalf("missing module error = %v", err)
+	}
+	output.Reset()
+	err = Run([]string{"generate", "typo"}, &output, &output)
+	if err == nil || !strings.Contains(err.Error(), "unexpected arguments") {
+		t.Fatalf("unexpected generate argument error = %v", err)
+	}
+	output.Reset()
+	if err := Run([]string{"version"}, &output, &output); err != nil || !strings.Contains(output.String(), "roost-codegen") {
+		t.Fatalf("version output=%q error=%v", output.String(), err)
+	}
+}
+
+func TestProjectInputSnapshotRejectsConcurrentBusinessEdit(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputPath := filepath.Join(root, "game", "business.go")
+	if err := os.WriteFile(inputPath, []byte("package game\n\nconst Version = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stage := t.TempDir()
+	if err := copyProject(root, stage); err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := snapshotProjectInputs(stage, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inputPath, []byte("package game\n\nconst Version = 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = verifyProjectInputs(root, manifest, inputs)
+	if err == nil || !strings.Contains(err.Error(), "game/business.go") || !strings.Contains(err.Error(), "rerun") {
+		t.Fatalf("concurrent input error = %v", err)
+	}
+}
+
+func TestMergeSyncChangesDeduplicatesDependencyMetadata(t *testing.T) {
+	first := syncChange{rel: "go.mod", path: filepath.Join(t.TempDir(), "go.mod"), before: []byte("old"), body: []byte("new"), existed: true}
+	merged, err := mergeSyncChanges([]syncChange{first}, []syncChange{first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged) != 1 || merged[0].rel != "go.mod" {
+		t.Fatalf("merged changes = %+v", merged)
+	}
+	conflict := first
+	conflict.body = []byte("different")
+	if _, err := mergeSyncChanges([]syncChange{first}, []syncChange{conflict}); err == nil {
+		t.Fatal("conflicting duplicate change unexpectedly accepted")
+	}
+}
+
+func TestRelatedBusinessFilesPreserveConcurrentEntityEdit(t *testing.T) {
+	root := t.TempDir()
+	entityPath := filepath.Join(root, "game", "entities", "player", "entity.go")
+	newPath := filepath.Join(root, "game", "entities", "player", "profile_component.go")
+	if err := os.MkdirAll(filepath.Dir(entityPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := []byte("package player\n\ntype Player struct{}\n")
+	concurrent := []byte("package player\n\ntype Player struct{ Revision int }\n")
+	if err := os.WriteFile(entityPath, concurrent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := writeRelatedBusinessFiles(entityPath, before, []byte("package player\n\ntype Player struct{ Profile int }\n"), newPath, []byte("package player\n"))
+	if err == nil || !strings.Contains(err.Error(), "concurrently changed") {
+		t.Fatalf("concurrent Entity error = %v", err)
+	}
+	if _, err := os.Stat(newPath); !os.IsNotExist(err) {
+		t.Fatalf("new companion file was not rolled back: %v", err)
+	}
+	current, err := os.ReadFile(entityPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(current, concurrent) {
+		t.Fatalf("concurrent Entity edit was overwritten:\n%s", current)
+	}
+}
+
+func TestAddRejectsTraversalInRelatedNames(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "component", Name: "Profile", Entity: `..\..\outside`}); err == nil || !strings.Contains(err.Error(), "invalid Entity name") {
+		t.Fatalf("traversal Entity error = %v", err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "protocol", Name: "Login", Group: "game\n//injected", ID: 10001}); err == nil || !strings.Contains(err.Error(), "invalid protocol group") {
+		t.Fatalf("invalid protocol group error = %v", err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "protocol", Name: "Login", Group: "game", ID: 999}); err == nil || !strings.Contains(err.Error(), "outside 10000-19999") {
+		t.Fatalf("out-of-range protocol id error = %v", err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "protocol", Name: "Login", Group: "game", ID: 10001}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "protocol", Name: "LoginAgain", Group: "game", ID: 10001}); err == nil || !strings.Contains(err.Error(), "already used") {
+		t.Fatalf("duplicate explicit protocol id error = %v", err)
+	}
+}
+
+func TestManifestRejectsModulePathInjection(t *testing.T) {
+	for _, module := range []string{"example.com/planet\nreplace victim => ../local", `example.com\planet`, "example.com/../planet", `example.com/planet\"`} {
+		manifest := DefaultManifest("planet", module, nil, nil, nil)
+		if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), "invalid module") {
+			t.Errorf("module %q error = %v", module, err)
+		}
+	}
+}
+
+func TestGuardedRollbackDoesNotOverwriteConcurrentEdit(t *testing.T) {
+	root := t.TempDir()
+	rel := "config.yaml"
+	path := filepath.Join(root, rel)
+	if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := captureFiles(root, []string{rel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("generated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	expected, err := captureFiles(root, []string{rel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("developer edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = restoreFilesIfCurrent(root, before, expected, errors.New("later step failed"))
+	if err == nil || !strings.Contains(err.Error(), "rollback skipped concurrently changed") {
+		t.Fatalf("guarded rollback error = %v", err)
+	}
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(current) != "developer edit\n" {
+		t.Fatalf("concurrent edit was overwritten: %q", current)
+	}
+}
+
+func TestAddSkillUsesStablePackageAndNeutralDefinition(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, err := Add(root, AddOptions{Kind: "skill", Name: "Fireball"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 2 {
+		t.Fatalf("created paths = %v", paths)
+	}
+	definition, err := os.ReadFile(filepath.Join(root, "game", "skills", "fireball.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"schema": "cube.skill/v2"`, `"id": "skill.planet.fireball"`, `"flow": "finish"`} {
+		if !bytes.Contains(definition, []byte(want)) {
+			t.Errorf("Skill definition missing %q:\n%s", want, definition)
+		}
+	}
+	catalog, err := os.ReadFile(filepath.Join(root, "game", "skills", "catalog.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(catalog, []byte("github.com/tjbdwanghaibo/roost-skill/skill")) || bytes.Contains(catalog, []byte("skillv2")) {
+		t.Fatalf("Skill catalog must use the stable package:\n%s", catalog)
+	}
+}
+
+func TestManifestRejectsIDsOutsideFrameworkEncoding(t *testing.T) {
+	manifest := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"configdata"}, nil)
+	space := manifest.IDs["entity"]
+	space.Max = 256
+	manifest.IDs["entity"] = space
+	if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), "encoding limit 255") {
+		t.Fatalf("invalid EntityKind range error = %v", err)
+	}
+	space = manifest.IDs["entity"]
+	space.Max = 255
+	manifest.IDs["entity"] = space
+	protocol := manifest.IDs["protocol"]
+	protocol.Groups["game"] = IDRange{Min: 1, Max: 4294967296}
+	manifest.IDs["protocol"] = protocol
+	if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), "encoding limit 4294967295") {
+		t.Fatalf("invalid protocol range error = %v", err)
+	}
+}
+
+func TestEndpointArgumentsMapNamedRequestFields(t *testing.T) {
+	directory := t.TempDir()
+	protocolPath := filepath.Join(directory, "protocol.go")
+	handlerPath := filepath.Join(directory, "handler.go")
+	if err := os.WriteFile(protocolPath, []byte("package def\ntype RenamePlayerRequest struct { Name string; Locale string }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(handlerPath, []byte("package handler\nfunc handlerRenamePlayer(target IPlayerEntity, name, locale string) error { return nil }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	arguments, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(arguments, ","), "request.Name,request.Locale"; got != want {
+		t.Fatalf("endpoint arguments = %q, want %q", got, want)
 	}
 }
 
@@ -463,6 +1220,13 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 		"GOWORK=off go mod tidy",
 		"codegen-up:",
 		"go install $(CODEGEN_MODULE)/cmd/roost@latest",
+		"COMPONENT ?=",
+		"HANDLER ?=",
+		"new-handler:",
+		"new-access:",
+		"new-lifecycle:",
+		"new-endpoint:",
+		"new-skill:",
 	} {
 		if !strings.Contains(makefile, want) {
 			t.Errorf("generated Makefile missing %q:\n%s", want, makefile)
@@ -484,7 +1248,7 @@ func TestGeneratedBeginnerAndManifestDocumentationIsComplete(t *testing.T) {
 	for _, want := range []string{
 		"schema", "project.name", "project.module", "versions.core", "versions.kit",
 		"versions.skill", "versions.codegen", "shared_mods", "services.<name>.mods",
-		"features", "sagas", "ids", "groups", "min", "max", "完整示例",
+		"access.player.service", "features", "sagas", "ids", "groups", "min", "max", "完整示例",
 		"Feature 和 Mod 必须分别理解", "roost id next protocol -group game",
 		minimumVersions.Core, minimumVersions.Kit, minimumVersions.Skill, minimumVersions.Codegen,
 	} {
@@ -506,10 +1270,22 @@ func TestGeneratedBeginnerAndManifestDocumentationIsComplete(t *testing.T) {
 	for _, want := range []string{
 		"零基础快速开始", "Go 1.25", "Service", "Mod", "Feature", "Generated file",
 		"make deps-update", "make generate", "make doctor", "make run SERVICE=game",
-		"roost add protocol", "常见问题", "ROOST_YAML.zh-CN.md",
+		"roost add access player --service game", "roost add protocol", "roost add endpoint", "常见问题", "ROOST_YAML.zh-CN.md",
 	} {
 		if !strings.Contains(quickstart, want) {
 			t.Errorf("beginner guide missing %q:\n%s", want, quickstart)
+		}
+	}
+	entityGuide := string(plan["docs/ENTITY_COMPONENT.zh-CN.md"].Body)
+	for _, want := range []string{
+		"roost add component Profile --entity Player", "roost add dao Player --entity Player",
+		"roost add mod nest -service game",
+		"roost add handler RenamePlayer --entity Player --component Profile",
+		`import player "example.com/planet/game/entities/player"`, "SetName(name)",
+		"业务层不要再次", "rollback=undo durability=strict", "ID、id、tracker",
+	} {
+		if !strings.Contains(entityGuide, want) {
+			t.Errorf("Entity beginner guide missing %q:\n%s", want, entityGuide)
 		}
 	}
 }
@@ -525,12 +1301,20 @@ func TestSyncUpgradesLegacyGeneratedMakefile(t *testing.T) {
 	if err := os.WriteFile(makefilePath, legacy, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	frameworkDepsPath := filepath.Join(root, "internal", "frameworkdeps", "generated.go")
+	legacyFrameworkDeps := []byte("// Code generated by roost-codegen. DO NOT EDIT.\npackage frameworkdeps\n\nimport skillv2 \"github.com/tjbdwanghaibo/roost-skill/skillv2\"\n\ntype SkillProgram = skillv2.Program\n")
+	if err := os.WriteFile(frameworkDepsPath, legacyFrameworkDeps, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	result, err := SyncProject(root)
 	if err != nil {
 		t.Fatalf("upgrade legacy project: %v", err)
 	}
 	if !contains(result.Updated, "Makefile") {
 		t.Fatalf("updated files = %v, want Makefile", result.Updated)
+	}
+	if !contains(result.Updated, "internal/frameworkdeps/generated.go") {
+		t.Fatalf("updated files = %v, want frameworkdeps migration", result.Updated)
 	}
 	upgraded, err := os.ReadFile(makefilePath)
 	if err != nil {
@@ -540,6 +1324,13 @@ func TestSyncUpgradesLegacyGeneratedMakefile(t *testing.T) {
 		if !bytes.Contains(upgraded, []byte(want)) {
 			t.Errorf("upgraded Makefile missing %q:\n%s", want, upgraded)
 		}
+	}
+	upgradedFrameworkDeps, err := os.ReadFile(frameworkDepsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(upgradedFrameworkDeps, []byte("github.com/tjbdwanghaibo/roost-skill/skill")) || bytes.Contains(upgradedFrameworkDeps, []byte("skillv2")) {
+		t.Fatalf("legacy skillv2 dependency was not migrated:\n%s", upgradedFrameworkDeps)
 	}
 }
 
@@ -645,5 +1436,117 @@ func TestSyncPreflightsConflictsBeforeWriting(t *testing.T) {
 	}
 	if !bytes.Equal(before, after) {
 		t.Fatal("Makefile changed before a later preflight conflict")
+	}
+}
+
+func TestSyncConcurrencyGuardRefusesDrift(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "generated.go")
+	before := []byte("before")
+	if err := os.WriteFile(path, before, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	change := syncChange{rel: "generated.go", path: path, before: before, body: []byte("generated"), existed: true}
+	if err := os.WriteFile(path, []byte("developer edit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifySyncChangeCurrent(change); err == nil || !strings.Contains(err.Error(), "concurrently changed") {
+		t.Fatalf("expected concurrency conflict, got %v", err)
+	}
+}
+
+func TestSyncRollbackPreservesConcurrentEdit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "generated.go")
+	change := syncChange{rel: "generated.go", path: path, before: []byte("before"), body: []byte("generated"), existed: true}
+	if err := os.WriteFile(path, []byte("developer edit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := rollbackSync([]syncChange{change}); err == nil || !strings.Contains(err.Error(), "rollback skipped") {
+		t.Fatalf("expected rollback conflict, got %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != "developer edit" {
+		t.Fatalf("rollback overwrote concurrent edit: %q", after)
+	}
+}
+
+func TestSyncCommitsGeneratedOrphanDeletion(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{
+		Name: "planet", Module: "example.com/planet", Out: target,
+		Mods: []string{"configdata"}, Features: []string{"dao"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "dao", Name: "player"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err != nil {
+		t.Fatal(err)
+	}
+	generated := filepath.Join(root, "db", "gen_player_dao.go")
+	if _, err := os.Stat(generated); err != nil {
+		t.Fatalf("generated DAO missing before orphan test: %v", err)
+	}
+	if err := os.Remove(filepath.Join(root, "db", "def", "player.go")); err != nil {
+		t.Fatal(err)
+	}
+	result, err := SyncProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(generated); !os.IsNotExist(err) {
+		t.Fatalf("orphan generated DAO still exists: %v", err)
+	}
+	if !contains(result.Removed, "db/gen_player_dao.go") {
+		t.Fatalf("removed files = %v", result.Removed)
+	}
+}
+
+func TestTransactionalGenerateDoesNotCommitEarlierGeneratorOnLaterFailure(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{
+		Name: "planet", Module: "example.com/planet", Out: target,
+		Mods: []string{"configdata"}, Features: []string{"dao", "nest"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "dao", Name: "player"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err != nil {
+		t.Fatal(err)
+	}
+	generatedPath := filepath.Join(root, "db", "gen_player_dao.go")
+	generatedBefore, err := os.ReadFile(generatedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitionPath := filepath.Join(root, "db", "def", "player.go")
+	definition, err := os.ReadFile(definitionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition = bytes.Replace(definition, []byte("type PlayerDao struct {"), []byte("type PlayerDao struct {\n\tName string `dao:\"persist,sync\"`"), 1)
+	if err := os.WriteFile(definitionPath, definition, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	invalidHandler := filepath.Join(root, "game", "handler", "broken.go")
+	if err := os.WriteFile(invalidHandler, []byte("package handler\n//roost:nest rollback=undo durability=strict\nfunc handlerBroken("), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := GenerateTransactional(root, GenerateOptions{Stdout: io.Discard}, io.Discard); err == nil {
+		t.Fatal("invalid later generator unexpectedly succeeded")
+	}
+	generatedAfter, err := os.ReadFile(generatedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(generatedBefore, generatedAfter) {
+		t.Fatal("failed transactional generation committed an earlier DAO output")
 	}
 }

@@ -28,11 +28,19 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	add("Makefile", renderMakefile(m), true)
 	add("README.md", renderProjectReadme(m), false)
 	add("docs/QUICKSTART.zh-CN.md", renderBeginnerQuickstart(m), true)
+	add("docs/BEGINNER_WORKBOOK.zh-CN.md", renderBeginnerWorkbook(m), true)
 	add("docs/ROOST_YAML.zh-CN.md", renderManifestGuide(), true)
+	add("docs/ENTITY_COMPONENT.zh-CN.md", renderEntityComponentGuide(m), true)
+	add("docs/FIRST_BUSINESS.zh-CN.md", renderFirstBusinessGuide(m), true)
+	add("docs/ENTITY_LIFECYCLE.zh-CN.md", renderEntityLifecycleGuide(m), true)
+	add("docs/PROTOCOL_TO_NEST.zh-CN.md", renderProtocolNestGuide(m), true)
+	add("docs/PLAYER_ACCESS_TCP.zh-CN.md", renderPlayerTCPGuide(m), true)
+	add("docs/SKILL.zh-CN.md", renderSkillGuide(m), true)
+	add("docs/TROUBLESHOOTING.zh-CN.md", renderTroubleshootingGuide(m), true)
 	add("docs/USAGE.zh-CN.md", renderUsage(m), true)
 	add(".github/workflows/ci.yml", renderCI(m), true)
 	add("deploy/dev/docker-compose.yaml", renderCompose(m), true)
-	add("Dockerfile", renderDockerfile(m), false)
+	add("Dockerfile", renderDockerfile(m), true)
 	for path, body := range renderProductionDeployment(m) {
 		owned := !strings.HasPrefix(path, "deploy/k8s/secret.")
 		add(path, body, owned)
@@ -47,6 +55,29 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	}
 	if err := addGo("internal/frameworkdeps/generated.go", renderFrameworkDeps(), true); err != nil {
 		return nil, err
+	}
+	if _, enabled := m.Access["player"]; enabled {
+		if err := addGo("game/player_agent/runtime_gen.go", renderPlayerAccessRuntime(), true); err != nil {
+			return nil, err
+		}
+		if err := addGo("internal/access/player/mod_gen.go", renderPlayerAccessMod(m), true); err != nil {
+			return nil, err
+		}
+		if contains(m.Access["player"].Transports, "tcp") {
+			if err := addGo("internal/access/player/tcp/server_gen.go", renderPlayerTCPServer(m), true); err != nil {
+				return nil, err
+			}
+			if err := addGo("internal/access/player/tcp/server_gen_test.go", renderPlayerTCPServerTests(m), true); err != nil {
+				return nil, err
+			}
+			if err := addGo("internal/access/player/tcp/auth.go", renderPlayerTCPAuthenticator(), false); err != nil {
+				return nil, err
+			}
+			if err := addGo("cmd/playerprobe/main.go", renderPlayerTCPProbe(), true); err != nil {
+				return nil, err
+			}
+			add("configs/examples/access.player.tcp.yaml", renderPlayerTCPConfig(), true)
+		}
 	}
 
 	services := sortedServiceNames(m)
@@ -220,6 +251,12 @@ func renderBootstrap(m Manifest) string {
 	for _, name := range services {
 		imports[m.Project.Module+"/internal/service/"+name] = "service" + safeIdent(name)
 	}
+	if _, enabled := m.Access["player"]; enabled {
+		imports[m.Project.Module+"/internal/access/player"] = "accessplayer"
+		if contains(m.Access["player"].Transports, "tcp") {
+			imports[m.Project.Module+"/internal/access/player/tcp"] = "accessplayertcp"
+		}
+	}
 	if hasFeature(m, "config") && contains(allMods, "configdata") {
 		imports["github.com/tjbdwanghaibo/cube-core/configdata"] = "coreconfigdata"
 		imports[m.Project.Module+"/configs/generated"] = "generatedconfig"
@@ -270,6 +307,12 @@ func renderBootstrap(m Manifest) string {
 		fmt.Fprintf(&b, "\ta.RegisterServer(app.ServiceName(%q), service%s.New()", name, safeIdent(name))
 		for _, mod := range mods {
 			fmt.Fprintf(&b, ",\n\t\t%s", renderModConstructor(m, mod, allMods))
+		}
+		if access, enabled := m.Access["player"]; enabled && access.Service == name {
+			b.WriteString(",\n\t\taccessplayer.NewMod()")
+			if contains(access.Transports, "tcp") {
+				b.WriteString(",\n\t\taccessplayertcp.NewMod()")
+			}
 		}
 		b.WriteString(")\n")
 	}
@@ -386,6 +429,12 @@ CODEGEN_MODULE := github.com/tjbdwanghaibo/roost-codegen
 CODEGEN_VERSION ?= %s
 ROOST := go run $(CODEGEN_MODULE)/cmd/roost@$(CODEGEN_VERSION)
 SERVICE ?= %s
+ENTITY ?=
+COMPONENT ?=
+HANDLER ?=
+PROTOCOL ?=
+NEST_HANDLER ?=
+NEXT_WORKFLOW ?=
 SID ?= 1000
 CONFIG ?= configs/service/config.$(SERVICE).yaml
 VERSION ?= dev
@@ -394,8 +443,8 @@ BUILD_TIME := $(shell git show -s --format=%%cI HEAD)
 DIRTY := $(shell git status --porcelain)
 LDFLAGS := -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Version=$(VERSION) -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Commit=$(COMMIT) -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.BuildTime=$(BUILD_TIME) -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Dirty=$(DIRTY)
 
-.PHONY: help sync project-upgrade deps-update roost-up codegen-up doctor fmt fmt-check vet test test-race build run generate generate-changed check-generated config-check id-check ci dev-up dev-down dev-logs clean
-.PHONY: new-service add-mod new-module new-protocol new-entity new-component new-event new-table new-dao new-webroute new-errcode new-saga
+.PHONY: help sync project-upgrade deps-update roost-up codegen-up next doctor fmt fmt-check vet test test-race build run generate generate-changed check-generated config-check player-tcp-enable player-tcp-disable id-check ci dev-up dev-down dev-logs clean
+.PHONY: new-service add-mod new-access new-transport new-module new-protocol new-entity new-component new-handler new-lifecycle new-endpoint new-skill new-event new-table new-dao new-webroute new-errcode new-saga
 
 help:
 	$(ROOST) help-make
@@ -410,6 +459,8 @@ roost-up:
 	GOWORK=off go mod tidy
 codegen-up:
 	go install $(CODEGEN_MODULE)/cmd/roost@latest
+next:
+	$(ROOST) project next $(if $(NEXT_WORKFLOW),--workflow $(NEXT_WORKFLOW),)
 doctor:
 	$(ROOST) project doctor
 fmt:
@@ -434,26 +485,42 @@ check-generated:
 	$(ROOST) generate --check
 config-check:
 	$(ROOST) config check --service $(SERVICE)
+player-tcp-enable:
+	$(ROOST) config enable player-tcp --service $(SERVICE)
+player-tcp-disable:
+	$(ROOST) config disable player-tcp --service $(SERVICE)
 id-check:
 	$(ROOST) id check
 new-service:
 	$(ROOST) add service $(NAME) -mods $(MODS)
 add-mod:
 	$(ROOST) add mod $(NAME) -service $(SERVICE)
+new-access:
+	$(ROOST) add access $(NAME) -service $(SERVICE)
+new-transport:
+	$(ROOST) add transport $(NAME) -service $(SERVICE)
 new-module:
 	$(ROOST) add module $(NAME)
 new-protocol:
-	$(ROOST) add protocol $(NAME) -group $(GROUP)
+	$(ROOST) add protocol $(NAME) -group $(GROUP) $(if $(HANDLER),--handler $(HANDLER),)
 new-entity:
 	$(ROOST) add entity $(NAME)
 new-component:
-	$(ROOST) add component $(NAME)
+	$(ROOST) add component $(NAME) $(if $(ENTITY),--entity $(ENTITY),)
+new-handler:
+	$(ROOST) add handler $(NAME) --entity $(ENTITY) --component $(COMPONENT)
+new-lifecycle:
+	$(ROOST) add lifecycle $(NAME) $(if $(ENTITY),--entity $(ENTITY),) -service $(SERVICE)
+new-endpoint:
+	$(ROOST) add endpoint $(NAME) --handler $(HANDLER) $(if $(PROTOCOL),--protocol $(PROTOCOL),) $(if $(NEST_HANDLER),--nest-handler $(NEST_HANDLER),)
+new-skill:
+	$(ROOST) add skill $(NAME)
 new-event:
 	$(ROOST) add event $(NAME)
 new-table:
 	$(ROOST) add table $(NAME)
 new-dao:
-	$(ROOST) add dao $(NAME)
+	$(ROOST) add dao $(NAME) $(if $(ENTITY),--entity $(ENTITY),)
 new-webroute:
 	$(ROOST) add webroute $(NAME)
 new-errcode:
@@ -551,11 +618,16 @@ func renderCompose(m Manifest) string {
 func renderDockerfile(m Manifest) string {
 	wal := contains(allProjectMods(m), "nestwal")
 	walBuild, walRuntime := "", ""
+	exposedPorts := "EXPOSE 9100"
+	if playerTCPEnabled(m) {
+		exposedPorts += " 7000"
+	}
 	if wal {
 		walBuild = "RUN mkdir -p /out/wal\n"
 		walRuntime = "COPY --chown=65532:65532 --from=build /out/wal /var/lib/roost/wal\nVOLUME [\"/var/lib/roost/wal\"]\n"
 	}
-	return fmt.Sprintf(`ARG GO_VERSION=1.25
+	return fmt.Sprintf(`# Code generated by roost-codegen. DO NOT EDIT.
+ARG GO_VERSION=1.25
 FROM golang:${GO_VERSION}-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -572,10 +644,10 @@ RUN CGO_ENABLED=0 go build -trimpath \
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --chown=65532:65532 --from=build /out/%s /app/%s
-%sEXPOSE 9100
+%s%s
 USER nonroot:nonroot
 ENTRYPOINT ["/app/%s"]
-`, m.Project.Name, walBuild, m.Project.Name, m.Project.Name, walRuntime, m.Project.Name)
+`, m.Project.Name, walBuild, m.Project.Name, m.Project.Name, walRuntime, exposedPorts, m.Project.Name)
 }
 
 func renderProjectReadme(m Manifest) string {
@@ -583,16 +655,17 @@ func renderProjectReadme(m Manifest) string {
 
 本项目由 roost-codegen 生成，项目声明位于 roost.yaml。
 
-安装 roost 后可用 roost help 查看能力目录，或用 roost help dao、roost help nest、roost help versions 查看配置和示例。
+安装 roost 后先运行 roost env doctor；用 roost help 查看能力目录，用 roost version 确认当前版本。
 
 ## 第一级：完全新手，五分钟运行
 
-第一次使用先阅读 [零基础快速开始](docs/QUICKSTART.zh-CN.md) 和
-[roost.yaml 字段参考](docs/ROOST_YAML.zh-CN.md)。
+第一次只阅读 [小白逐步操作手册](docs/BEGINNER_WORKBOOK.zh-CN.md)，然后反复执行 make next。工具会根据
+真实文件只给出当前一个动作，不需要先在多份文档间选择。
 
-    make dev-up
     make deps-update
-    make generate
+    make next
+    # 执行 next 输出的命令或文件修改，然后再次 make next
+    make test
     make run SERVICE=%s
 
 更新 codegen 管理的工程模板使用 make project-upgrade；更新框架依赖使用 make deps-update；更新全部项目依赖使用 make roost-up；更新本机安装的 codegen 使用 make codegen-up。
@@ -643,8 +716,9 @@ func renderUsage(m Manifest) string {
 - make codegen-up：安装最新 roost-codegen CLI。
 - make deps-update：只按 roost.yaml 更新 core、kit、skill 三个框架模块。
 - make dev-up/dev-down：启动或停止所需基础设施。
-- make deps-update：按 roost.yaml 联合更新 core、kit、skill，并整理 go.mod/go.sum。
-- make doctor：检查清单、依赖、配置和生成状态。
+- make next：根据项目真实状态只显示一个当前动作；不需要背完整流程。
+- make generate：在临时项目按依赖顺序生成并 tidy 新增 import，全部成功后原子提交；不会执行依赖升级。
+- make doctor：检查清单、依赖、配置和生成状态；阶段验收使用 roost project doctor --workflow first-business。
 - make config-check SERVICE=<name>：检查服务配置。
 - make id-check：检查协议、实体、组件和错误码 ID。
 - make check-generated：在临时目录验证生成结果，不污染工作区。
@@ -653,7 +727,7 @@ func renderUsage(m Manifest) string {
 
 core、kit、skill、codegen 默认都是 latest。roost project new/sync/deps 会把前三者作为直接依赖在一条 go get 命令中联合解析，随后执行 go mod tidy。go.mod 不支持 latest 查询值，所以它保存本次实际解析出的具体版本，roost.yaml 保存持续跟随 latest 的策略。这样既避免下游依赖把 core/kit 降级，也保证同一次测试和发布使用确定的依赖图。
 
-当前兼容下限为 core %s、kit %s、skill %s、codegen %s。明确版本低于下限会在生成前失败；latest 始终允许。解析或 tidy 失败时，go.mod/go.sum 会恢复。
+当前兼容下限为 core %s、kit %s、skill %s、codegen %s。明确版本低于下限会在生成前失败；latest 始终允许。解析与 tidy 在临时项目完成，只提交最终 go.mod/go.sum；失败不会修改原依赖文件，并发变化会拒绝覆盖。
 
 ## 安全约定
 
@@ -667,7 +741,14 @@ core、kit、skill、codegen 默认都是 latest。roost project new/sync/deps �
 
 ## 继续阅读
 
+- 当前一步：BEGINNER_WORKBOOK.zh-CN.md
 - 零基础流程：QUICKSTART.zh-CN.md
+- 第一条完整业务：FIRST_BUSINESS.zh-CN.md
+- Entity/Component/DAO 实战：ENTITY_COMPONENT.zh-CN.md
+- Entity 生命周期：ENTITY_LIFECYCLE.zh-CN.md
+- Protocol 到 Nest：PROTOCOL_TO_NEST.zh-CN.md
+- roost-skill：SKILL.zh-CN.md
+- 常见错误：TROUBLESHOOTING.zh-CN.md
 - roost.yaml 所有字段：ROOST_YAML.zh-CN.md
 - 实现原理：IMPLEMENTATION.zh-CN.md
 - 生产部署：DEPLOYMENT.zh-CN.md

@@ -20,11 +20,13 @@ roost help all              # 全部专题
 roost <command> --help      # 上下文帮助
 ```
 
-可查询的 capability：`project`、`versions`、`generate`、`add`、`mods`、`dao`、`entity`、`nest`、`protocol`、`cfggen`、`tablegen`、`eventgen`、`attribute`、`webroute`、`errcode`、`saga`、`replication`、`config`、`id`、`format`、`deploy`。专题输出统一包含用途、命令、配置/marker 和可复制的最小示例。
+可查询的 capability：`environment`、`beginner`、`project`、`versions`、`generate`、`add`、`mods`、`access`、`transport`、`lifecycle`、`endpoint`、`skill`、`dao`、`entity`、`nest`、`protocol`、`cfggen`、`tablegen`、`eventgen`、`attribute`、`webroute`、`errcode`、`saga`、`replication`、`config`、`id`、`format`、`deploy`。专题输出统一包含用途、命令、配置/marker 和可复制的最小示例。
 
 ```bash
 roost help dao
 roost help replication
+roost help transport
+roost env doctor
 roost project deps --help
 roost add saga --help
 ```
@@ -55,9 +57,10 @@ roost project new planet \
 
 主要产物：`roost.yaml`、main/bootstrap/Service、配置、Makefile、CI、开发 compose，以及 Shell、Docker、Kubernetes 生产部署模板。Secret 示例和业务文件归应用所有，后续 sync 不覆盖；带生成标识的装配文件由生成器管理。
 
-新项目同时生成 `docs/QUICKSTART.zh-CN.md` 和 `docs/ROOST_YAML.zh-CN.md`。前者面向
-完全新手，后者逐项解释 `schema`、`project.*`、`versions.*`、`shared_mods`、
-`services.<name>.mods`、`features`、`sagas` 与 `ids` 的全部嵌套字段和示例。
+新项目同时生成 `docs/QUICKSTART.zh-CN.md`、`docs/BEGINNER_WORKBOOK.zh-CN.md`、`docs/ROOST_YAML.zh-CN.md`、
+`docs/FIRST_BUSINESS.zh-CN.md`、`docs/ENTITY_COMPONENT.zh-CN.md`、
+`docs/ENTITY_LIFECYCLE.zh-CN.md`、`docs/PROTOCOL_TO_NEST.zh-CN.md`、`docs/SKILL.zh-CN.md`
+和 `docs/TROUBLESHOOTING.zh-CN.md`，覆盖从零启动到首条玩家业务、生命周期、网络边界和技能接入。
 
 第一次只验证生成流程可使用较轻的项目：
 
@@ -75,16 +78,19 @@ roost project sync                 # 按 roost.yaml 更新生成文件
 roost project doctor               # 含生成物新鲜度检查
 roost project doctor -strict=false # 只检查结构、版本和配置
 roost project doctor -json         # CI/平台读取 JSON
+roost project doctor --workflow first-business # 检查首条业务链完整性并给出修复命令
+roost project next                 # 根据真实进度只显示一个当前动作
+roost project next --workflow player-tcp
 ```
 
-同步时会重新解析 core、kit、skill 的最新版本；也可以只更新依赖：
+同步先把项目复制到同级临时目录，在其中完成模板渲染和全部生成器；所有权冲突或生成失败时不会写回项目。提交阶段逐文件使用原子替换，后续失败会回滚已写内容；若开发者或另一 codegen 进程在提交窗口修改了目标文件，命令拒绝覆盖并保留新内容。同步完成后会重新解析 core、kit、skill 的最新版本；也可以只更新依赖：
 
 ```bash
 roost project sync
 roost project deps
 ```
 
-三个模块在一条 `go get` 中作为直接依赖联合更新，随后自动执行 `GOWORK=off go mod tidy`。因此依赖图选择最高版本，kit/skill 不会把 core 或 kit 降到旧版本。依赖更新失败会恢复原 `go.mod/go.sum`。若需提高最低版本，可用 `project upgrade -core vX.Y.Z -kit vX.Y.Z -skill vX.Y.Z -codegen vX.Y.Z`；core、kit、skill 的明确值是 MVS 下限而不是上限，且必须满足 codegen 的兼容门槛。`latest` 始终直接通过静态版本门禁。
+三个模块在一条 `go get` 中作为直接依赖联合更新，随后自动执行 `GOWORK=off go mod tidy`。因此依赖图选择最高版本，kit/skill 不会把 core 或 kit 降到旧版本。整个解析在同级临时项目完成，只提交最终 `go.mod/go.sum`；失败不会触碰原依赖文件，业务输入或依赖文件并发变化时拒绝覆盖。若需提高最低版本，可用 `project upgrade -core vX.Y.Z -kit vX.Y.Z -skill vX.Y.Z -codegen vX.Y.Z`；core、kit、skill 的明确值是 MVS 下限而不是上限，且必须满足 codegen 的兼容门槛。`latest` 始终直接通过静态版本门禁。
 
 ### 1.3 升级旧项目模板
 
@@ -100,6 +106,9 @@ go run github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest project upgrade -
 ## 2. 统一生成流水线：roost generate
 
 默认顺序为 DAO → Event → Errcode → Protocol → Entity → Nest → Attribute → Config → WebRoute，避免后一个生成器读取旧产物。
+普通生成在同级临时项目内完成全部生成器与 `GOWORK=off go mod tidy`，补齐新生成 import 的依赖与
+checksum；只有全部成功才以可回滚批次提交生成物和 `go.mod/go.sum`。后置生成器、tidy 或提交失败
+不会留下半生成工程；它不执行 `go get -u`，不会借机升级框架。
 
 ```bash
 roost generate                  # 全量增量生成
@@ -122,31 +131,54 @@ go test ./...
 
 ## 3. 业务骨架：roost add
 
-支持 `service|mod|module|protocol|entity|component|event|table|dao|webroute|errcode|saga`。
+支持 `service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|event|table|dao|webroute|errcode|saga`。
 
 ```bash
 roost add service world -mods etcd,redis,mongo,nats,nestwal,nest
 roost add mod saga -service game
+roost add access player --service game
+roost add transport tcp
 roost add module inventory
-roost add protocol use_item -group game
+roost add protocol use_item -group game --handler inventory
 roost add entity player
-roost add component inventory
+roost add component inventory --entity player
+roost add mod nest -service game
+roost add handler use_item --entity player --component inventory
+roost add endpoint use_item --handler inventory
+roost add lifecycle player --service game
+roost add skill fireball
 roost add event player_level_up
 roost add table monster
-roost add dao player
+roost add dao player --entity player
 roost add webroute gm_query
 roost add errcode item_not_found
 roost add saga cross_server_trade -service game -steps reserve,deduct,deliver
 ```
 
-需要编号的类型默认从 `roost.yaml` 的 ID 空间分配；`-id` 可显式指定，`-group` 选择协议分组。骨架只提供正确目录和最小签名，业务字段、Entity 与 DAO 绑定、Saga handler 仍需开发者补充。
+需要编号的类型默认从 `roost.yaml` 的 ID 空间分配；`-id` 可显式指定，`-group` 选择协议分组。Component 使用 `--entity` 后会在所属 Entity 包生成工厂、窄 Entity 接口，并自动添加 ComponentManager 与字段 tag；项目只有一个 Entity 时可自动推断。DAO 使用 `--entity` 后会自动添加 import、DaoManager 和 dao tag。Entity wire 统一生成 Component/DAO getter。业务只需补领域字段、Component 方法与 Saga/Nest handler。
+
+新增的首层业务命令不是 preset，彼此可独立组合：
+
+| 命令 | 必需参数 | 生成/修改 | 下一步 |
+| --- | --- | --- | --- |
+| `add access player` | 多 Service 时 `--service` | roost.yaml、player_agent、access Mod、bootstrap | 添加协议；需要真实 TCP 时 add transport |
+| `add transport tcp` | 已存在 access.player | TCP server/Session/主动发布/test、应用 auth.go、自动合并 disabled 配置、bootstrap | 实现鉴权、config enable、player-tcp doctor |
+| `add lifecycle <entity>` | 多 Entity 时 `--entity` | `game/lifecycle/<entity>.go` | 登录/创角边界从 Registry 构造 |
+| `add endpoint <name>` | `--handler <controller-domain>` | controller 与 endpoint | `roost generate` 生成 typed binding |
+| `add skill <name>` | 无 | 中性 JSON；首次生成 CompileAll catalog | 配置 CompileEnvironment 与 Host |
+
+endpoint 默认把同名 protocol 接到同名 Nest handler；名字不同时使用 `--protocol` 与
+`--nest-handler`。第一个 Nest 参数必须是 Entity 接口，其余命名参数按 snake_case 对应 Request
+字段；找不到字段会在 add 阶段报错，不生成半成品。完整顺序与编辑点见生成项目的
+`docs/FIRST_BUSINESS.zh-CN.md`，边界契约见 `docs/PROTOCOL_TO_NEST.zh-CN.md`，可运行 TCP 接入与帧协议见
+`docs/PLAYER_ACCESS_TCP.zh-CN.md`。
 
 ## 4. DAO 生成器
 
 命令：
 
 ```bash
-go run github.com/tjbdwanghaibo/roost-codegen/cmd/dao@v1.7.0 \
+go run github.com/tjbdwanghaibo/roost-codegen/cmd/dao@latest \
   -def ./db/def -out ./db -pkg db
 ```
 
@@ -183,7 +215,7 @@ type PlayerDao struct {
 ```go
 dao := db.NewPlayerDao()
 dao.SetName("alice")
-name := dao.Name()
+name := dao.GetName()
 dao.SetLevel(10)
 dao.SetItems(10001, 3)
 count, ok := dao.GetItems(10001)
@@ -197,10 +229,26 @@ Redis DAO 使用 `//cube:redisdao`，生成类型化 Get/Set/Delete 包装；具
 
 ## 5. Entity 生成器
 
+新项目优先使用高层命令，不要手工复制下面的底层接线：
+
+```bash
+roost add entity Player
+roost add component Profile --entity Player
+roost add dao Player --entity Player
+roost add mod nest -service game
+roost add handler RenamePlayer --entity Player --component Profile
+roost generate
+roost project doctor
+```
+
+生成项目的 `docs/ENTITY_COMPONENT.zh-CN.md` 说明业务代码位置、DAO 方法式读写和 Nest 锁边界。
+handler 会同时校验 nest feature 和至少一个 Service 的 nest 运行时 Mod；缺失时错误会给出
+`roost add mod nest -service <service>` 修复命令。
+
 命令：
 
 ```bash
-go run github.com/tjbdwanghaibo/roost-codegen/cmd/entity@v1.7.0 \
+go run github.com/tjbdwanghaibo/roost-codegen/cmd/entity@latest \
   -dir ./game/entities/player
 ```
 
@@ -213,7 +261,7 @@ import "github.com/tjbdwanghaibo/cube-core/entity"
 
 const (
     EntityCategoryPlayer entity.EntityCategory = 1
-    EntityKindPlayer     entity.EntityKind = 1000
+    EntityKindPlayer     entity.EntityKind = 1
     CompTypeBag          entity.ComponentType = 2000
 )
 
@@ -222,7 +270,7 @@ var _ = func() struct{} {
     return struct{}{}
 }()
 
-//cube:entity id=1000 entityKind=EntityKindPlayer
+//cube:entity id=1 entityKind=EntityKindPlayer
 type Player struct {
     *entity.EntityBase
     entity.ComponentManager
@@ -240,7 +288,7 @@ DAO 必须实现 codegen 生成的标准方法，尤其是 `DirtyTracker() *chec
 ## 6. Nest handler 生成器
 
 ```bash
-go run github.com/tjbdwanghaibo/roost-codegen/cmd/nest@v1.7.0 \
+go run github.com/tjbdwanghaibo/roost-codegen/cmd/nest@latest \
   -dir ./game -sender=true
 ```
 
@@ -276,7 +324,7 @@ type QueryRequest struct {
 ## 7. Protocol 生成器
 
 ```bash
-go run github.com/tjbdwanghaibo/roost-codegen/cmd/protocol@v1.7.0 \
+go run github.com/tjbdwanghaibo/roost-codegen/cmd/protocol@latest \
   -def ./protocol/def \
   -proto ./protocol/proto -pb ./protocol/pb \
   -msgid ./protocol/msgid -bind ./protocol/player_bind \
@@ -311,7 +359,7 @@ type GameProtocol interface {
 产物包含 `.proto`、pb Go、msgid、player binding、handler、robot registry 和协议 manifest。ID 全局查重；字段 `pb:"N"` 不得复用。反向生成：
 
 ```bash
-go run .../cmd/protocol@v1.7.0 \
+go run .../cmd/protocol@latest \
   -reverse-proto ./third_party/game.proto \
   -reverse-out ./protocol/def/imported -reverse-package imported
 ```
@@ -319,7 +367,7 @@ go run .../cmd/protocol@v1.7.0 \
 ## 8. cfggen：YAML schema 先行配置
 
 ```bash
-go run github.com/tjbdwanghaibo/roost-codegen/cmd/cfggen@v1.7.0 \
+go run github.com/tjbdwanghaibo/roost-codegen/cmd/cfggen@latest \
   -meta ./configs/schema/cfg.yaml -out ./configs/generated -pkg generated
 ```
 
@@ -369,15 +417,15 @@ type World struct { Width int32 `csv:"width" json:"width"` }
 ```
 
 ```bash
-go run .../cmd/tablegen@v1.7.0 \
+go run .../cmd/tablegen@latest \
   -meta ./configs/schema \
   -out ./configs/generated -pkg generated \
   -csv-template ./configs/template
 
-go run .../cmd/tablegen@v1.7.0 \
+go run .../cmd/tablegen@latest \
   -meta ./configs/schema -csv ./configs/csv -json ./configs/data
 
-go run .../cmd/tablegen@v1.7.0 \
+go run .../cmd/tablegen@latest \
   -meta ./configs/schema -json ./configs/data -check
 ```
 
@@ -403,7 +451,7 @@ func (p *Player) DealEventPlayerLevelUp(e *event.EventPlayerLevelUp) {}
 ```
 
 ```bash
-go run .../cmd/eventgen@v1.7.0 \
+go run .../cmd/eventgen@latest \
   -def ./event/def -out ./event -pkg event \
   -game ./game -eventpkg example.com/planet/event
 ```
@@ -427,7 +475,7 @@ func (p *PlayerProfile) _Power(Attack int64, HP int64) int64 {
 ```
 
 ```bash
-go run .../cmd/attribute@v1.7.0 -dir ./game/attribute
+go run .../cmd/attribute@latest -dir ./game/attribute
 ```
 
 生成属性 ID/mask、metadata、类型化 setter、dirty mask、派生属性 Update、clone/snapshot 和容器访问器。所在包需提供框架约定的 `AttrID`、`AttrValue`、`AttributeMeta`、`AttributeProfile`、`Snapshot`、`Container`、`Selector` 类型。派生公式出现环、未知字段或重复输出时生成失败。
@@ -447,7 +495,7 @@ func webhook(ctx context.Context, svc *Service, req webroute.RawRequest) (Ack, e
 ```
 
 ```bash
-go run .../cmd/webroute@v1.7.0 -dir ./service/web
+go run .../cmd/webroute@latest -dir ./service/web
 ```
 
 生成 `RegisterRoutes`。JSON 模式只接受一个完整 JSON 文档并统一返回 400 解码错误；raw 模式保留原始 body。是否拒绝未知 JSON 字段由 `cube-core/webroute.DecodeJSON` 的版本契约决定。重复 method/path、非法 body mode 或 handler 签名直接失败。
@@ -459,7 +507,7 @@ var ErrItemNotFound = errcode.Define(100001, "item_not_found", "item not found")
 ```
 
 ```bash
-go run .../cmd/errcode@v1.7.0 -root . -out docs/generated/errcode.csv
+go run .../cmd/errcode@latest -root . -out docs/generated/errcode.csv
 ```
 
 扫描整个仓库并导出编号、名称和消息；重复 code/name 或非常量调用失败。ID 分配配合：
@@ -474,12 +522,17 @@ roost id check
 
 ```bash
 roost config check --service game
+roost config enable player-tcp --service game
+roost config disable player-tcp --service game
 roost config check --service game --production \
   --file configs/service/config.game.prod.yaml
 roost format check
 ```
 
-当前 production 静态检查会解析 YAML、要求 `sid`，并拒绝 `CHANGE_ME`、localhost/127.0.0.1 和 `dev-` 前缀值。项目生成的生产模板会另外给出 Mongo replica set、Redis AOF/WAL 和 JetStream 副本建议，但 `config check` 不会替代这些组件自身的拓扑探测；发布环境仍需启动探针和故障演练。
+`add transport tcp` 会增量补齐开发与生产示例中的 player_access.tcp 默认项，并保持其他 YAML 文本；
+`enable` 在鉴权仍是默认拒绝骨架时 fail-fast，只修改 enabled，`disable` 可随时安全停流。production 静态
+检查会解析 YAML、要求 sid，并拒绝 CHANGE_ME、localhost/127.0.0.1 和 dev- 前缀值；它不替代基础设施
+拓扑探测和故障演练。
 
 ### 14.1 独立生成器参数速查
 
@@ -502,6 +555,7 @@ roost format check
 
 - **entity 生成代码访问 `dao.Tracker` 编译失败**：使用 v1.7.0 重新生成；新模板调用 `DirtyTracker()`。DAO 与 Entity 必须由同一代 codegen 重新生成。
 - **`go mod tidy` 删除 skill**：新项目的 `internal/frameworkdeps/generated.go` 用类型别名固定 skill module。
+- **frameworkdeps 仍导入 `roost-skill/skillv2`**：这是旧模板；执行 `make project-upgrade` 或 `roost project sync`，受控文件会迁移到稳定的 `roost-skill/skill` 包。不要手工保留两套 skill API。
 - **生成后 CI 有 diff**：先运行 `roost generate`，确认没有手改生成文件；CI 用 `--check`。
 - **输出目录无法确定 package**：先放一个非生成 `.go` 文件，或使用 `-pkg`。
 - **标记没有生效**：标记必须紧邻目标声明，孤儿标记会报错；不要放在生成文件中。
@@ -511,9 +565,12 @@ roost format check
 ## 16. 推荐的日常闭环
 
 ```bash
-roost add dao player
 roost add entity player
-# 补全 DAO 字段、Entity 的 dao/component tag 和 Nest handler
+roost add component profile --entity player
+roost add dao player --entity player
+roost add mod nest -service game
+roost add handler rename_player --entity player --component profile
+# 补全 DAO 字段、Component 方法和 Nest handler 的业务参数
 roost generate
 roost project doctor
 make ci

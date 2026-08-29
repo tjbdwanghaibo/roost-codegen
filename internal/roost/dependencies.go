@@ -28,7 +28,71 @@ type dependencyFileSnapshot struct {
 // version selection retain the highest selected core/kit versions even when a
 // downstream framework module declares an older lower bound.
 func UpdateFrameworkDependencies(root string, manifest Manifest, stdout, stderr io.Writer) error {
-	return updateFrameworkDependencies(root, manifest, stdout, stderr, runDependencyCommand)
+	return updateFrameworkDependenciesTransactional(root, manifest, stdout, stderr, runDependencyCommand)
+}
+
+func updateFrameworkDependenciesTransactional(root string, manifest Manifest, stdout, stderr io.Writer, run dependencyCommandRunner) error {
+	if err := manifest.Validate(); err != nil {
+		return err
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	stage, err := os.MkdirTemp(filepath.Dir(absRoot), ".roost-deps-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stage)
+	if err := copyProject(absRoot, stage); err != nil {
+		return fmt.Errorf("stage framework dependencies: %w", err)
+	}
+	inputs, err := snapshotProjectInputs(stage, manifest)
+	if err != nil {
+		return fmt.Errorf("snapshot dependency inputs: %w", err)
+	}
+	if err := updateFrameworkDependencies(stage, manifest, stdout, stderr, run); err != nil {
+		return err
+	}
+	changes, err := planExplicitStagedFiles(absRoot, stage, "go.mod", "go.sum")
+	if err != nil {
+		return err
+	}
+	if err := verifyProjectInputs(absRoot, manifest, inputs); err != nil {
+		return err
+	}
+	return commitSyncChanges(changes)
+}
+
+// TidyProjectDependencies records module checksums introduced by newly
+// generated imports without upgrading framework versions. This keeps the
+// beginner workflow buildable immediately after `roost generate`.
+func TidyProjectDependencies(root string, stdout, stderr io.Writer) error {
+	return tidyProjectDependencies(root, stdout, stderr, runDependencyCommand)
+}
+
+func tidyProjectDependencies(root string, stdout, stderr io.Writer, run dependencyCommandRunner) error {
+	if run == nil {
+		return errors.New("dependency command runner is nil")
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	goMod := filepath.Join(absRoot, "go.mod")
+	if _, err := os.Stat(goMod); err != nil {
+		return fmt.Errorf("tidy project dependencies requires go.mod: %w", err)
+	}
+	snapshots, err := snapshotDependencyFiles(goMod, filepath.Join(absRoot, "go.sum"))
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), dependencyUpdateTimeout)
+	defer cancel()
+	if err := run(ctx, absRoot, stdout, stderr, "mod", "tidy"); err != nil {
+		return rollbackDependencyUpdate(snapshots, fmt.Errorf("tidy generated dependencies: %w", err))
+	}
+	return nil
 }
 
 func updateFrameworkDependencies(root string, manifest Manifest, stdout, stderr io.Writer, run dependencyCommandRunner) error {

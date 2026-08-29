@@ -1,6 +1,7 @@
 package roost
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -10,6 +11,51 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestFrameworkDependencyUpdateStagesAndCommitsOnlyModuleFiles(t *testing.T) {
+	root := t.TempDir()
+	manifest := DefaultManifest("planet", "example.com/planet", nil, nil, nil)
+	raw, err := manifest.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ManifestName), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/planet\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	businessPath := filepath.Join(root, "business.go")
+	if err := os.WriteFile(businessPath, []byte("package planet\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := func(_ context.Context, stage string, _, _ io.Writer, args ...string) error {
+		if args[0] == "get" {
+			if err := os.WriteFile(filepath.Join(stage, "go.mod"), []byte("module example.com/planet\n\nrequire example.com/dependency v1.0.0\n"), 0o644); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(stage, "business.go"), []byte("package overwritten\n"), 0o644)
+		}
+		return os.WriteFile(filepath.Join(stage, "go.sum"), []byte("checksum\n"), 0o644)
+	}
+	if err := updateFrameworkDependenciesTransactional(root, manifest, io.Discard, io.Discard, runner); err != nil {
+		t.Fatal(err)
+	}
+	goMod, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(goMod, []byte("example.com/dependency")) {
+		t.Fatalf("go.mod was not committed:\n%s", goMod)
+	}
+	business, err := os.ReadFile(businessPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(business) != "package planet\n" {
+		t.Fatalf("staged business change leaked into project:\n%s", business)
+	}
+}
 
 func TestUpdateFrameworkDependenciesResolvesAllDirectModulesTogether(t *testing.T) {
 	root := t.TempDir()
@@ -94,6 +140,53 @@ func TestUpdateFrameworkDependenciesRollsBackModuleFiles(t *testing.T) {
 	err := updateFrameworkDependencies(root, DefaultManifest("planet", "example.com/planet", nil, nil, nil), io.Discard, io.Discard, runner)
 	if err == nil || !strings.Contains(err.Error(), "registry unavailable") {
 		t.Fatalf("expected resolver error, got %v", err)
+	}
+	assertFileContent(t, modPath, oldMod)
+	assertFileContent(t, sumPath, oldSum)
+}
+
+func TestTidyProjectDependenciesDoesNotUpgradeFramework(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/planet\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var commands [][]string
+	runner := func(_ context.Context, _ string, _, _ io.Writer, args ...string) error {
+		commands = append(commands, append([]string(nil), args...))
+		return nil
+	}
+	if err := tidyProjectDependencies(root, io.Discard, io.Discard, runner); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"mod", "tidy"}}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestTidyProjectDependenciesRollsBackModuleFiles(t *testing.T) {
+	root := t.TempDir()
+	modPath := filepath.Join(root, "go.mod")
+	sumPath := filepath.Join(root, "go.sum")
+	oldMod, oldSum := []byte("module example.com/planet\n"), []byte("old checksum\n")
+	if err := os.WriteFile(modPath, oldMod, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sumPath, oldSum, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := func(_ context.Context, _ string, _, _ io.Writer, _ ...string) error {
+		if err := os.WriteFile(modPath, []byte("partial\n"), 0o644); err != nil {
+			return err
+		}
+		if err := os.WriteFile(sumPath, []byte("partial\n"), 0o644); err != nil {
+			return err
+		}
+		return errors.New("proxy unavailable")
+	}
+	err := tidyProjectDependencies(root, io.Discard, io.Discard, runner)
+	if err == nil || !strings.Contains(err.Error(), "proxy unavailable") {
+		t.Fatalf("expected tidy error, got %v", err)
 	}
 	assertFileContent(t, modPath, oldMod)
 	assertFileContent(t, sumPath, oldSum)

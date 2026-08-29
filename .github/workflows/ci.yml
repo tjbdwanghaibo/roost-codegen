@@ -3,6 +3,7 @@ name: ci
 on:
   push:
     branches: [main, master]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -42,8 +43,28 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: generate project from release defaults
-        run: go run ./cmd/roost project new planet -out "${RUNNER_TEMP}/planet"
+      - name: build current CLI and generate project
+        run: |
+          go build -o "${RUNNER_TEMP}/roost" ./cmd/roost
+          "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -mods configdata
+      - name: generate explicit first business workflow
+        working-directory: ${{ runner.temp }}/planet
+        run: |
+          "${RUNNER_TEMP}/roost" add access player --service game
+          "${RUNNER_TEMP}/roost" add transport tcp
+          "${RUNNER_TEMP}/roost" add entity Player
+          "${RUNNER_TEMP}/roost" add component Profile --entity Player
+          "${RUNNER_TEMP}/roost" add dao Player --entity Player
+          "${RUNNER_TEMP}/roost" add handler RenamePlayer --entity Player --component Profile
+          "${RUNNER_TEMP}/roost" add protocol RenamePlayer --group game --handler player
+          "${RUNNER_TEMP}/roost" add lifecycle Player --service game
+          "${RUNNER_TEMP}/roost" add endpoint RenamePlayer --handler player
+          "${RUNNER_TEMP}/roost" add skill Fireball
+          "${RUNNER_TEMP}/roost" generate
+          # Application-owned fields and method bodies are validated by the
+          # internal workflow tests. This release smoke verifies that all
+          # generated skeletons compile against published framework releases.
+          "${RUNNER_TEMP}/roost" project doctor --strict=false
       - name: reject replace directives
         working-directory: ${{ runner.temp }}/planet
         run: |

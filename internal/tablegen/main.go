@@ -69,6 +69,9 @@ type Field struct {
 }
 
 func Run(args []string, stdout io.Writer) error {
+	if stdout == nil {
+		stdout = io.Discard
+	}
 	flags := flag.NewFlagSet("tablegen", flag.ContinueOnError)
 	flags.SetOutput(stdout)
 	metaDir := flags.String("meta", "./configs/schema", "table meta root")
@@ -81,6 +84,9 @@ func Run(args []string, stdout io.Writer) error {
 	force := flags.Bool("force", false, "overwrite generated files")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments %q", flags.Args())
 	}
 
 	metas, err := parseMetaRoot(*metaDir)
@@ -98,12 +104,12 @@ func Run(args []string, stdout io.Writer) error {
 	}
 
 	if *csvTemplateDir != "" {
-		if err := writeCSVTemplates(metas, *csvTemplateDir, *force); err != nil {
+		if err := writeCSVTemplates(metas, *csvTemplateDir, *force, stdout); err != nil {
 			return err
 		}
 	}
 	if *csvDir != "" && *jsonDir != "" {
-		if err := convertCSVToJSON(metas, *csvDir, *jsonDir, *force); err != nil {
+		if err := convertCSVToJSON(metas, *csvDir, *jsonDir, *force, stdout); err != nil {
 			return err
 		}
 	}
@@ -123,7 +129,7 @@ func Run(args []string, stdout io.Writer) error {
 				return fmt.Errorf("detect output package: %w", err)
 			}
 		}
-		if err := generateGo(metas, *outDir, *outPkg, *force); err != nil {
+		if err := generateGo(metas, *outDir, *outPkg, *force, stdout); err != nil {
 			return err
 		}
 	}
@@ -297,7 +303,7 @@ func parseMarkerOptions(raw string) map[string]string {
 	return ret
 }
 
-func writeCSVTemplates(metas []Meta, dir string, force bool) error {
+func writeCSVTemplates(metas []Meta, dir string, force bool, stdout io.Writer) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
@@ -323,12 +329,12 @@ func writeCSVTemplates(metas []Meta, dir string, force bool) error {
 		if err := writeGenerated(path, buf.Bytes(), force); err != nil {
 			return err
 		}
-		fmt.Printf("table template: %s\n", path)
+		fmt.Fprintf(stdout, "table template: %s\n", path)
 	}
 	return nil
 }
 
-func convertCSVToJSON(metas []Meta, csvDir string, jsonDir string, force bool) error {
+func convertCSVToJSON(metas []Meta, csvDir string, jsonDir string, force bool, stdout io.Writer) error {
 	if err := os.MkdirAll(jsonDir, 0755); err != nil {
 		return err
 	}
@@ -359,7 +365,7 @@ func convertCSVToJSON(metas []Meta, csvDir string, jsonDir string, force bool) e
 		if err := writeGenerated(out, raw, force); err != nil {
 			return err
 		}
-		fmt.Printf("table json: %s\n", out)
+		fmt.Fprintf(stdout, "table json: %s\n", out)
 	}
 	manifestRaw, _ := json.MarshalIndent(manifest, "", "  ")
 	manifestRaw = append(manifestRaw, '\n')
@@ -490,7 +496,7 @@ func zeroValue(typeName string) any {
 	}
 }
 
-func generateGo(metas []Meta, outDir string, pkg string, force bool) error {
+func generateGo(metas []Meta, outDir string, pkg string, force bool, stdout io.Writer) error {
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return err
 	}
@@ -519,7 +525,7 @@ func generateGo(metas []Meta, outDir string, pkg string, force bool) error {
 	if err := writeGenerated(path, formatted, force); err != nil {
 		return err
 	}
-	fmt.Printf("table go: %s\n", path)
+	fmt.Fprintf(stdout, "table go: %s\n", path)
 	return nil
 }
 

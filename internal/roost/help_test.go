@@ -12,8 +12,8 @@ func TestHelpCatalogIsCompleteAndUnique(t *testing.T) {
 	}
 	names := helpTopicNames()
 	for _, required := range []string{
-		"project", "versions", "generate", "add", "mods", "dao", "entity", "nest",
-		"protocol", "cfggen", "tablegen", "eventgen", "attribute", "webroute",
+		"environment", "beginner", "project", "versions", "generate", "add", "mods", "dao", "entity", "nest",
+		"access", "transport", "lifecycle", "endpoint", "skill", "protocol", "cfggen", "tablegen", "eventgen", "attribute", "webroute",
 		"errcode", "saga", "replication", "config", "id", "format", "deploy",
 	} {
 		if !contains(names, required) {
@@ -33,7 +33,7 @@ func TestHelpOverviewListsCapabilities(t *testing.T) {
 			t.Errorf("overview missing %s: %s", topic.Name, text)
 		}
 	}
-	for _, want := range []string{"roost help <能力>", "roost help all", "roost help dao"} {
+	for _, want := range []string{"roost help <能力>", "roost help all", "roost help beginner"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("overview missing %q: %s", want, text)
 		}
@@ -69,7 +69,9 @@ func TestHelpAliasesAndContextCommands(t *testing.T) {
 		{args: []string{"project", "--help"}, want: "project - "},
 		{args: []string{"project", "upgrade", "--help"}, want: "project - "},
 		{args: []string{"project", "deps", "--help"}, want: "versions - "},
+		{args: []string{"project", "next", "--help"}, want: "project - "},
 		{args: []string{"config", "check", "-h"}, want: "config - "},
+		{args: []string{"config", "enable", "player-tcp", "--help"}, want: "config - "},
 		{args: []string{"id", "next", "--help"}, want: "id - "},
 		{args: []string{"add", "dao", "--help"}, want: "dao - "},
 	}

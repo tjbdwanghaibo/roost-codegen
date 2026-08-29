@@ -80,11 +80,23 @@ func CheckIDs(root string, m Manifest) error {
 			seen[key] = use
 		}
 		space, ok := m.IDs[use.Kind]
-		if ok && space.Min > 0 && (use.ID < space.Min || use.ID > space.Max) {
-			joined = errors.Join(joined, fmt.Errorf("%s id %d in %s is outside %d-%d", use.Kind, use.ID, use.File, space.Min, space.Max))
+		if ok && !idInConfiguredSpace(space, use.ID) {
+			joined = errors.Join(joined, fmt.Errorf("%s id %d in %s is outside every configured range", use.Kind, use.ID, use.File))
 		}
 	}
 	return joined
+}
+
+func idInConfiguredSpace(space IDSpace, id int64) bool {
+	if space.Min > 0 && id >= space.Min && id <= space.Max {
+		return true
+	}
+	for _, configured := range space.Groups {
+		if id >= configured.Min && id <= configured.Max {
+			return true
+		}
+	}
+	return false
 }
 
 func NextID(root string, m Manifest, kind, group string) (int64, error) {

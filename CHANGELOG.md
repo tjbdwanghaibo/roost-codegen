@@ -5,17 +5,39 @@
 ## [Unreleased]
 
 ### Changed
+- `project sync` 改为临时项目中完成模板和生成器预演，成功后再以可回滚批次提交，并正确提交生成器判定的孤儿文件删除；`add service/mod/access/transport/saga` 的 manifest、生成文件与 TCP 双配置在失败时恢复，避免半完成工程。
+- 同步/升级提交增加乐观并发校验，提交或回滚期间检测到另一进程/开发者编辑时拒绝覆盖；`roost generate` 也改为临时工程完成全部生成器与不升级版本的 `go mod tidy` 后批量提交，业务输入在运行期间发生变化会拒绝提交。依赖更新同样改为临时工程解析，只提交经过校验的 `go.mod/go.sum`。
+- 修复生成事务同时从模板计划和 tidy 计划登记 `go.mod/go.sum` 时产生的重复提交与伪并发冲突；提交计划现在按目标去重并拒绝内容矛盾的重复项。
+- Component/DAO 与 Entity 的联合接线、endpoint/controller、Skill catalog 等多文件脚手架统一使用带并发校验的可回滚批次；关联名称、Go module path、显式 ID 范围和重复 ID 均在写文件前 fail-fast，阻止路径穿越、声明注入和越界编号。
+- Entity、Nest、Event、Table 四个内嵌生成器移除全局 flag/输出状态与 `log.Fatal` 退出路径，非法参数或业务定义错误统一返回给 roost，由上层完成回滚和清理；进程级 cwd 切换增加串行保护，独立命令的 `-h` 保持成功退出。
+- first-business workflow 现在拒绝空 DAO、Component 骨架的 `Name()`、未调用所属 Component 的 Handler，以及与 Handler 参数不匹配的 Request；DAO scaffold 不再预置业务字段，保持无 preset。
+- Player TCP 增加独立鉴权帧上限、鉴权并发上限、单 IP 连接上限、出站 payload/保留 message ID 校验和 Stop/Accept 栅栏；握手总耗时与调用方写 deadline 均有界，session 读路径使用 RWMutex。Docker 与 Kubernetes 自动为实际所属 Service 声明 player 7000 端口，NetworkPolicy 默认只允许显式标记的调用方命名空间。
+- CLI 要求新项目显式传 `-module`，拒绝多余位置参数和子命令无关 flag；新增 `roost version`、`roost env doctor`，所有业务 scaffold 统一回到唯一的 `project next`。
+- 新手流程改为状态驱动：`project next` 根据真实项目只输出当前一个安全动作；first-business doctor 进一步拒绝只生成未实现的 Component、仍 `return nil` 的 Nest handler 和空 Request，避免“结构齐全但没有业务”的假完成。
+- `add transport tcp` 现在增量补齐开发配置与生产示例的 disabled TCP 配置，保持其他 YAML 文本和注释；`config enable player-tcp` 在鉴权仍为默认拒绝骨架时拒绝开端口，`disable` 提供安全停流。鉴权构造器在 Mod Init 时接收 Viper，便于从 Secret/config 初始化 verifier。
+- DAO 生成物的 BSON import 与当前 core/kit 统一为 `go.mongodb.org/mongo-driver/v2/bson`，不再意外引入已淘汰的 Mongo Driver v1 模块。
+- 默认 EntityKind ID 空间修正为 core 编码允许的 1..255，并对 EntityKind/ComponentType/Protocol 的底层位宽增加 manifest fail-fast 校验；旧的 1000..1999 EntityKind 默认区间会生成无法编译的 uint8 常量。
+- `roost add dao` 统一生成 `<Name>Dao` 类型，修复 Entity wire 期待 `PlayerDao/NewPlayerDao` 而 DAO 实际生成 `Player/NewPlayer` 的跨生成器编译错误。
+- `roost add dao` 的默认骨架不再生成任何业务字段，也不生成与框架私有 `id` 冲突的 `ID` 字段；注释给出字段写法并明确禁止业务声明 `ID/id/tracker` 保留字段。
 - 生成代码统一导入稳定的 `github.com/tjbdwanghaibo/roost-skill/skill`，删除 `/skillv2` 路径；相应把 roost-skill 兼容下限提高到首个提供稳定包的 v1.9.0。
+- `roost add handler` 现在同时校验 nest 生成能力和服务运行时 Mod，避免新手生成可以编译但缺少 WAL/checkpoint 装配的半成品；零基础教程给出完整的 `add mod`、基础设施启动和服务启动顺序。
 - 项目版本策略默认改为 core、kit、skill、codegen 全部跟随 `latest`；明确版本只要不低于兼容下限即可。
-- release-hygiene 增加根模块 `replace` 禁止门禁，防止本地联调路径进入发布 tag。
+- release-hygiene 增加根模块 `replace` 禁止门禁，防止本地联调路径进入发布 tag；CI 显式监听 `v*` tag，确保 tag/module-major 校验不再是不可达步骤。
 - 新项目 `go.mod` 直接 require 三个真实发布 module，不再生成 `v0.0.0 + replace`；`project new/sync/deps` 联合执行 core、kit、skill 的 `@latest` 解析并 `go mod tidy`，失败时恢复原 go.mod/go.sum。新增无运行时副作用的 `internal/frameworkdeps` 类型别名，保证尚未被业务使用的 skill 在 tidy 后仍保留为直接依赖。
 - Entity generator 的 checkpoint、删除 tombstone 和 Remote Entity 路径统一改用 DAO `DirtyTracker()` 方法，不再访问已经私有化的 `Tracker` 字段；DAO 与 Entity 生成物恢复同代可编译。
 
 ### Added
+- 新增 `roost project next [--workflow first-business|player-tcp]`、生成 Makefile 的 `next`/`player-tcp-enable`/`player-tcp-disable`，以及根仓库和生成项目双份 `BEGINNER_WORKBOOK.zh-CN.md`；覆盖安装、文件所有权、首条业务每个编辑点、TCP 鉴权、主动推送、启动、固定排错顺序和发布清单。
+- 第二阶段新增可组合的 `roost add transport tcp`：在已有 `access.player` 上生成标准库 TCP listener、16 字节有界帧、连接硬上限、握手/空闲/写超时、sequence 重放拒绝、小包复用、同步写背压、TCP keepalive/no-delay 和 context 优雅关停；生成的应用鉴权默认 fail-closed 且不会被 sync 覆盖。Transport Runtime 提供一次编码、多会话发布的 `PushPlayer`/`PushSession`，推送 flag 与服务端 sequence 不占用请求序列。新增配置示例、帧/限包/推送生成测试、`new-transport` Make 入口、`roost help transport`、`project doctor --workflow player-tcp` 与 PLAYER_ACCESS_TCP 上线文档。
+- 新增显式首层业务工作流，不引入 preset：`roost add access player` 生成 transport-neutral 玩家协议 Registry 与 Service Mod；`roost add endpoint` 按字段名把 typed Request 接到 Nest Sender；`roost add lifecycle` 生成实例级 Entity load/create/destroy 边界；`roost project doctor --workflow first-business` 检查整链并给出逐项修复命令。
+- 玩家协议 Registry 在启动注册后 Seal 并预组合 middleware，以 atomic immutable snapshot 提供无锁 Dispatch/Encode 热路径；seal 后注册 fail-fast，避免线上动态接线与请求并发竞态。
+- 新增 `roost add skill`，创建中性的 `cube.skill/v2` JSON 骨架与稳定 `/skill` 包的启动期 CompileAll catalog；重复 ID、解析错误和 error diagnostic 均 fail-closed。
+- 生成项目新增 FIRST_BUSINESS、ENTITY_LIFECYCLE、PROTOCOL_TO_NEST、SKILL、TROUBLESHOOTING 五份分层文档，并在 Makefile 暴露 new-access/new-lifecycle/new-endpoint/new-skill。
+- 新增零基础 Entity 聚合工作流：`roost add component <name> --entity <owner>` 自动生成同包 Component、类型安全工厂、Owner 访问器并接入 Entity；`roost add dao <name> --entity <owner>` 自动接入 import、DaoManager、字段 tag 和接口 getter。生成项目新增 `docs/ENTITY_COMPONENT.zh-CN.md`，CLI 新增 `roost help beginner` 和逐步 next 提示。
 - 生成项目新增 `docs/QUICKSTART.zh-CN.md` 零基础教程与 `docs/ROOST_YAML.zh-CN.md` 字段级参考，覆盖全部顶层/嵌套字段、完整示例、Service/Mod/Feature 概念、轻量首次项目、常见错误和阅读路径。
 - `project upgrade` 明确支持旧项目模板迁移，新增 `--dry-run` 预览，并允许先读取低于当前兼容下限的旧版本策略、合并新策略后再校验；生成 Makefile 新增 `project-upgrade`，通过 `roost-codegen@latest` 刷新受控文件，并让 core、kit、skill、codegen 持续跟随最新版本。旧生成 Makefile 会自动获得 `roost-up`、`codegen-up` 等当前目标，自定义 Makefile 则安全拒绝覆盖。
 - 新项目 Makefile 新增 `roost-up`（`GOWORK=off go get -u ./...` + `go mod tidy`）和 `codegen-up`（安装 `roost@latest`）；与只更新三个框架模块的 `deps-update` 分工明确，并同步到内置 help 与项目文档。
-- 安装后的 `roost help` 升级为能力目录，并新增 `roost help <capability>`、`roost help all` 和上下文 `--help`；21 个专题均提供用途、命令、配置/marker 和可复制示例，覆盖项目、全部生成器、版本、Saga、帧同步与部署。
+- 安装后的 `roost help` 升级为能力目录，并新增 `roost help <capability>`、`roost help all` 和上下文 `--help`；28 个专题均提供用途、命令、配置/marker 和可复制示例，覆盖环境、新手路径、项目、全部生成器、版本、Saga、帧同步与部署。
 - 项目生成器新增生产部署基线：Shell 静态构建与 systemd 版本化发布（不可覆盖 release、校验和、原子切换、readiness 失败自动回滚）、distroless 非 root Docker 镜像、Kubernetes Deployment/StatefulSet、独占 WAL PVC、Secret 配置挂载、健康探针、PDB、默认 NetworkPolicy 和安全上下文。
 - 生成项目 README 分为新手快速使用、老手完整使用、框架实现与生产部署三级阅读路径。
 - CI 新增部署 Shell 语法校验、Kubernetes YAML 解码、生产 Docker 镜像构建和发布版本生成项目 smoke test。

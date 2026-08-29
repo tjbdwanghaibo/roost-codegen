@@ -35,6 +35,7 @@ type Manifest struct {
 	Versions   VersionSpec            `yaml:"versions"`
 	SharedMods []string               `yaml:"shared_mods,omitempty"`
 	Services   map[string]ServiceSpec `yaml:"services"`
+	Access     map[string]AccessSpec  `yaml:"access,omitempty"`
 	Features   []string               `yaml:"features,omitempty"`
 	Sagas      []string               `yaml:"sagas,omitempty"`
 	IDs        map[string]IDSpace     `yaml:"ids,omitempty"`
@@ -54,6 +55,14 @@ type VersionSpec struct {
 
 type ServiceSpec struct {
 	Mods []string `yaml:"mods,omitempty"`
+}
+
+// AccessSpec declares an application-owned request boundary. Access layers
+// are deliberately separate from Kit Mods: they translate authenticated
+// sessions and generated protocols into injected Nest senders.
+type AccessSpec struct {
+	Service    string   `yaml:"service"`
+	Transports []string `yaml:"transports,omitempty"`
 }
 
 type IDSpace struct {
@@ -94,7 +103,7 @@ func DefaultManifest(name, module string, services, mods, features []string) Man
 		Features:   uniqueSorted(features),
 		IDs: map[string]IDSpace{
 			"protocol":  {Groups: map[string]IDRange{"game": {Min: 10000, Max: 19999}}},
-			"entity":    {Min: 1000, Max: 1999},
+			"entity":    {Min: 1, Max: 255},
 			"component": {Min: 2000, Max: 2999},
 			"errcode":   {Min: 100000, Max: 199999},
 		},
@@ -158,7 +167,7 @@ func (m Manifest) Validate() error {
 	if !validName(m.Project.Name) {
 		joined = errors.Join(joined, fmt.Errorf("invalid project name %q", m.Project.Name))
 	}
-	if strings.TrimSpace(m.Project.Module) == "" || strings.ContainsAny(m.Project.Module, " \\:") {
+	if !validModulePath(m.Project.Module) {
 		joined = errors.Join(joined, fmt.Errorf("invalid module %q", m.Project.Module))
 	}
 	if len(m.Services) == 0 {
@@ -178,6 +187,37 @@ func (m Manifest) Validate() error {
 		for _, mod := range service.Mods {
 			if shared[mod] {
 				joined = errors.Join(joined, fmt.Errorf("service %s repeats shared mod %q", name, mod))
+			}
+		}
+	}
+	for name, access := range m.Access {
+		if name != "player" {
+			joined = errors.Join(joined, fmt.Errorf("unsupported access layer %q; supported: player", name))
+		}
+		if !validName(access.Service) {
+			joined = errors.Join(joined, fmt.Errorf("access.%s.service is invalid", name))
+		} else if _, exists := m.Services[access.Service]; !exists {
+			joined = errors.Join(joined, fmt.Errorf("access.%s references unknown service %q", name, access.Service))
+		}
+		seenTransports := make(map[string]bool, len(access.Transports))
+		for _, transport := range access.Transports {
+			if transport != "tcp" {
+				joined = errors.Join(joined, fmt.Errorf("access.%s has unsupported transport %q; supported: tcp", name, transport))
+			}
+			if seenTransports[transport] {
+				joined = errors.Join(joined, fmt.Errorf("access.%s repeats transport %q", name, transport))
+			}
+			seenTransports[transport] = true
+		}
+	}
+	if _, enabled := m.Access["player"]; enabled && !contains(m.Features, "protocol") {
+		joined = errors.Join(joined, errors.New("access.player requires the protocol feature"))
+	}
+	if access, enabled := m.Access["player"]; enabled {
+		if service, exists := m.Services[access.Service]; exists {
+			resolved, err := resolveMods(service.Mods)
+			if err == nil && !contains(resolved, "nest") {
+				joined = errors.Join(joined, fmt.Errorf("access.player service %q requires the nest mod", access.Service))
 			}
 		}
 	}
@@ -228,10 +268,16 @@ func (m Manifest) Validate() error {
 			if space.Min <= 0 || space.Max < space.Min {
 				joined = errors.Join(joined, fmt.Errorf("ids.%s has invalid range", kind))
 			}
+			if maximum, bounded := map[string]int64{"entity": 255, "component": 65535, "protocol": 4294967295}[kind]; bounded && space.Max > maximum {
+				joined = errors.Join(joined, fmt.Errorf("ids.%s max %d exceeds framework encoding limit %d", kind, space.Max, maximum))
+			}
 		}
 		for group, r := range space.Groups {
 			if !validName(group) || r.Min <= 0 || r.Max < r.Min {
 				joined = errors.Join(joined, fmt.Errorf("ids.%s.groups.%s has invalid range", kind, group))
+			}
+			if kind == "protocol" && r.Max > 4294967295 {
+				joined = errors.Join(joined, fmt.Errorf("ids.%s.groups.%s max %d exceeds framework encoding limit %d", kind, group, r.Max, uint64(4294967295)))
 			}
 		}
 	}
@@ -239,6 +285,28 @@ func (m Manifest) Validate() error {
 }
 
 func validName(name string) bool { return namePattern.MatchString(strings.TrimSpace(name)) }
+
+func validModulePath(value string) bool {
+	if value == "" || value != strings.TrimSpace(value) || len(value) > 1024 || strings.Contains(value, "//") {
+		return false
+	}
+	for _, r := range value {
+		if r <= ' ' || r == '\\' || r == ':' || r == '"' || r == '\'' {
+			return false
+		}
+	}
+	for _, segment := range strings.Split(value, "/") {
+		if segment == "" || segment == "." || segment == ".." || strings.HasPrefix(segment, ".") || strings.HasSuffix(segment, ".") {
+			return false
+		}
+		for _, r := range segment {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("-._~", r)) {
+				return false
+			}
+		}
+	}
+	return true
+}
 
 func hasReplicationFeature(m Manifest) bool {
 	return contains(m.Features, "replication-quic") || contains(m.Features, "replication-kcp") || contains(m.Features, "replication-udp")

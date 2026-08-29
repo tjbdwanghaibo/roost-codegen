@@ -227,6 +227,13 @@ func renderShellReadme(m Manifest) string {
 
 func renderDockerReadme(m Manifest) string {
 	service := sortedServiceNames(m)[0]
+	playerPort := ""
+	playerNote := ""
+	if player, ok := m.Access["player"]; ok && contains(player.Transports, "tcp") {
+		service = player.Service
+		playerPort = "      -p 7000:7000 \\\n"
+		playerNote = "Player TCP 已声明，因此示例同时发布 7000；若生产配置修改 player_access.tcp.addr，端口映射、LB 和防火墙必须同步修改。"
+	}
 	return replaceDeployTokens(fmt.Sprintf(`# Docker 部署
 
 镜像只包含二进制，不包含生产配置或密钥：
@@ -236,12 +243,12 @@ func renderDockerReadme(m Manifest) string {
       --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
       --cap-drop ALL --security-opt no-new-privileges \
       -p 9100:9100 \
-      -v "$PWD/config.prod.yaml:/etc/roost/config.yaml:ro" \
+%s      -v "$PWD/config.prod.yaml:/etc/roost/config.yaml:ro" \
       -v {{APP}}-wal:/var/lib/roost/wal \
       {{APP}}:v1.0.0 %s --sid 1000 --config /etc/roost/config.yaml
 
-配置必须让 ops 监听 0.0.0.0:9100，日志输出 stdout，WAL 使用挂载卷。镜像 tag 必须不可变，生产流水线应进一步使用 digest、签名和 SBOM。
-`, service, service), m)
+配置必须让 ops 监听 0.0.0.0:9100，日志输出 stdout，WAL 使用挂载卷。%s 镜像 tag 必须不可变，生产流水线应进一步使用 digest、签名和 SBOM。
+`, service, playerPort, service, playerNote), m)
 }
 
 func renderKubernetesNamespace() string {
@@ -263,6 +270,16 @@ automountServiceAccountToken: false
 }
 
 func renderKubernetesNetworkPolicy(m Manifest) string {
+	playerIngress := ""
+	if playerTCPEnabled(m) {
+		playerIngress = `    - from:
+        - namespaceSelector:
+            matchLabels:
+              roost.tjbdwanghaibo.io/player-access: "true"
+      ports:
+        - {protocol: TCP, port: 7000}
+`
+	}
 	return replaceDeployTokens(`apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -283,7 +300,7 @@ spec:
               kubernetes.io/metadata.name: monitoring
       ports:
         - {protocol: TCP, port: 9100}
-`, m)
+`+playerIngress, m)
 }
 
 func renderKubernetesKustomization(resources []string) string {
@@ -321,7 +338,11 @@ func renderKubernetesWorkload(m Manifest, service string) string {
 	fmt.Fprintf(&head, "      serviceAccountName: %s\n", m.Project.Name)
 	head.WriteString("      automountServiceAccountToken: false\n      terminationGracePeriodSeconds: 45\n      securityContext:\n        runAsNonRoot: true\n        runAsUser: 65532\n        runAsGroup: 65532\n        fsGroup: 65532\n        seccompProfile:\n          type: RuntimeDefault\n      containers:\n        - name: server\n")
 	fmt.Fprintf(&head, "          image: ghcr.io/CHANGE_ME/%s:v1.0.0\n          imagePullPolicy: IfNotPresent\n          args: [%q, \"--sid=$(ROOST_SID)\", \"--config=/etc/roost/config.yaml\"]\n", m.Project.Name, service)
-	head.WriteString("          env:\n            - name: ROOST_SID\n              value: \"1000\"\n          ports:\n            - name: ops\n              containerPort: 9100\n              protocol: TCP\n          startupProbe:\n            httpGet: {path: /healthz, port: ops}\n            failureThreshold: 30\n            periodSeconds: 2\n          readinessProbe:\n            httpGet: {path: /readyz, port: ops}\n            periodSeconds: 5\n            timeoutSeconds: 2\n            failureThreshold: 3\n          livenessProbe:\n            httpGet: {path: /healthz, port: ops}\n            periodSeconds: 10\n            timeoutSeconds: 2\n            failureThreshold: 3\n          resources:\n            requests: {cpu: \"250m\", memory: \"256Mi\"}\n            limits: {cpu: \"2\", memory: \"2Gi\"}\n          securityContext:\n            allowPrivilegeEscalation: false\n            readOnlyRootFilesystem: true\n            capabilities:\n              drop: [\"ALL\"]\n          volumeMounts:\n            - {name: config, mountPath: /etc/roost, readOnly: true}\n            - {name: tmp, mountPath: /tmp}\n")
+	head.WriteString("          env:\n            - name: ROOST_SID\n              value: \"1000\"\n          ports:\n            - name: ops\n              containerPort: 9100\n              protocol: TCP\n")
+	if serviceOwnsPlayerTCP(m, service) {
+		head.WriteString("            - name: player-tcp\n              containerPort: 7000\n              protocol: TCP\n")
+	}
+	head.WriteString("          startupProbe:\n            httpGet: {path: /healthz, port: ops}\n            failureThreshold: 30\n            periodSeconds: 2\n          readinessProbe:\n            httpGet: {path: /readyz, port: ops}\n            periodSeconds: 5\n            timeoutSeconds: 2\n            failureThreshold: 3\n          livenessProbe:\n            httpGet: {path: /healthz, port: ops}\n            periodSeconds: 10\n            timeoutSeconds: 2\n            failureThreshold: 3\n          resources:\n            requests: {cpu: \"250m\", memory: \"256Mi\"}\n            limits: {cpu: \"2\", memory: \"2Gi\"}\n          securityContext:\n            allowPrivilegeEscalation: false\n            readOnlyRootFilesystem: true\n            capabilities:\n              drop: [\"ALL\"]\n          volumeMounts:\n            - {name: config, mountPath: /etc/roost, readOnly: true}\n            - {name: tmp, mountPath: /tmp}\n")
 	if stateful {
 		head.WriteString("            - {name: wal, mountPath: /var/lib/roost/wal}\n")
 	}
@@ -339,6 +360,9 @@ func renderKubernetesWorkload(m Manifest, service string) string {
 	head.WriteString("  selector:\n")
 	fmt.Fprintf(&head, "    app.kubernetes.io/name: %s\n    app.kubernetes.io/component: %s\n", m.Project.Name, service)
 	head.WriteString("  ports:\n    - {name: ops, port: 9100, targetPort: ops, protocol: TCP}\n")
+	if serviceOwnsPlayerTCP(m, service) {
+		head.WriteString("    - {name: player-tcp, port: 7000, targetPort: player-tcp, protocol: TCP}\n")
+	}
 	return head.String()
 }
 
@@ -390,7 +414,8 @@ func renderKubernetesReadme(m Manifest) string {
 - 把 ghcr.io/CHANGE_ME/%s:v1.0.0 替换为不可变 image digest。
 - 每个有 nestwal 的实例独占 RWO PVC；扩容时复制 workload 并分配新 SID，不能直接提高 replicas。
 - Secret 不加入 kustomization，也不得提交；示例中的 CHANGE_ME 会让应用 fail-closed。
-- 默认 NetworkPolicy 只允许 roost/monitoring 命名空间访问 ops 9100；接入业务端口前必须按调用方和端口显式扩展策略。
+- 默认 NetworkPolicy 只允许 roost/monitoring 命名空间访问 ops 9100，不把管理端口暴露给公网。
+- 声明 player TCP 时模板会开放 Service 7000，但只允许带 roost.tjbdwanghaibo.io/player-access=true 标签的调用方命名空间；监听端口变化时同步修改 Service、LB 和 NetworkPolicy。
 - /healthz 仅表示进程存活，流量切换必须使用 /readyz；terminationGracePeriodSeconds 必须大于框架总停机预算。
 - 上线前补 NetworkPolicy、镜像签名校验、监控抓取权限以及节点/PVC 故障演练。
 `, services.String(), m.Project.Name, m.Project.Name)
@@ -463,6 +488,16 @@ deploy/k8s 使用 Secret 挂载完整配置，提供 startup/readiness/liveness 
 func serviceUsesPersistentWAL(m Manifest, service string) bool {
 	mods, err := resolveMods(append(append([]string{}, m.SharedMods...), m.Services[service].Mods...))
 	return err == nil && contains(mods, "nestwal")
+}
+
+func serviceOwnsPlayerTCP(m Manifest, service string) bool {
+	access, ok := m.Access["player"]
+	return ok && access.Service == service && contains(access.Transports, "tcp")
+}
+
+func playerTCPEnabled(m Manifest) bool {
+	access, ok := m.Access["player"]
+	return ok && contains(access.Transports, "tcp")
 }
 
 func renderServiceList(m Manifest) string {

@@ -19,18 +19,61 @@ type helpTopic struct {
 
 var helpTopics = []helpTopic{
 	{
-		Name: "project", Aliases: []string{"project-new", "project-sync", "project-diff", "project-doctor", "project-upgrade", "upgrade-project"},
+		Name: "environment", Aliases: []string{"env", "install", "version"},
+		Summary:       "检查本机工具、PATH 与当前 roost-codegen 版本",
+		Usage:         "roost version\nroost env doctor",
+		Configuration: "go 和 git 是必需项；make 和 docker 在使用生成 Makefile、开发依赖或容器部署时需要。检查失败会直接指出缺少的 PATH 工具。",
+		Example:       "go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest\nroost version\nroost env doctor",
+	},
+	{
+		Name: "beginner", Aliases: []string{"start", "quickstart", "newbie"},
+		Summary: "从空目录到第一条玩家协议、Nest 与 Entity 业务链",
+		Usage: `roost project new hello_roost -module example.com/hello_roost -mods configdata
+cd hello_roost
+roost project next
+roost add access player --service game
+roost add entity Player
+roost add component Profile --entity Player
+roost add dao Player --entity Player
+roost add handler RenamePlayer --entity Player --component Profile
+roost add protocol RenamePlayer --group game --handler player
+# 编辑 Request 字段和 handler 参数后：
+roost add endpoint RenamePlayer --handler player
+roost add lifecycle Player --service game
+roost generate
+roost project doctor --workflow first-business
+# 每完成一步都可重新运行：roost project next
+# 需要框架自带 TCP 时，首条业务完成后：
+roost add transport tcp
+# 实现 auth.go 后：roost config enable player-tcp
+make dev-up
+make run SERVICE=game`,
+		Configuration: `不需要先记住全部命令：每完成一步运行 roost project next，它只显示当前一步、原因、复查命令和对应文档。access player 生成传输无关的协议边界；Entity 是锁与生命周期边界；Component 写玩法方法；持久化字段放 DAO 并只通过生成 mutator 修改。完整逐步说明见 docs/BEGINNER_WORKBOOK.zh-CN.md。`,
+		Example: `// profile_component.go
+func (component *ProfileComponent) Rename(name string) error {
+    component.Owner().Dao().SetName(name)
+    return nil
+}
+
+// game/handler/profile.go
+//roost:nest rollback=undo durability=strict
+func handlerRenamePlayer(target player.IProfileEntity, name string) error {
+    return target.ProfileComp().Rename(name)
+}`,
+	},
+	{
+		Name: "project", Aliases: []string{"project-new", "project-sync", "project-diff", "project-doctor", "project-next", "project-upgrade", "upgrade-project"},
 		Summary: "创建、同步、检查和升级完整 Roost 工程",
-		Usage: `roost project new <name> [-module path] [-out dir] [-services a,b] [-mods a,b] [-features a,b]
-roost project sync|diff|doctor [--root dir]
+		Usage: `roost project new <name> -module <go-module> [-out dir] [-services a,b] [-mods a,b] [-features a,b]
+roost project sync|diff|doctor|next [--root dir]
+roost project next [--workflow first-business|player-tcp]
+roost project doctor --workflow first-business
 roost project upgrade [--root dir] [--dry-run] [-core version] [-kit version] [-skill version] [-codegen version]
 make project-upgrade`,
-		Configuration: `项目声明位于 roost.yaml：project 定义名称/module，versions 定义 latest 或最低版本，shared_mods/services 定义装配，features 定义生成能力，sagas 定义已生成 Saga，ids 定义编号空间。新项目会生成 docs/ROOST_YAML.zh-CN.md 字段级参考和 docs/QUICKSTART.zh-CN.md 零基础教程。sync/upgrade 只覆盖 codegen 受控文件；project-upgrade 始终通过 @latest 运行，并将 core、kit、skill、codegen 策略全部更新为 latest。`,
+		Configuration: `-module 必填，防止项目意外使用框架作者的仓库命名空间。默认 -out=<name>、-services=game、features=protocol,config,entity,nest,event,dao,errcode；不传 -mods 时启用除 saga 外的生产基础 Mod，新手建议显式使用 -mods configdata。project next 根据项目真实文件计算进度，只给一个当前动作，不会替业务决定字段或生成 preset；默认先完成 first-business，再进入可选 player-tcp。项目声明位于 roost.yaml。sync 在同级临时副本完成全部生成和所有权预检后提交；失败回滚已写文件，并拒绝覆盖提交期间发生的并发修改。upgrade 只覆盖 codegen 受控文件。`,
 		Example: `roost project new planet -module example.com/planet -services game,gate
 cd planet
-make dev-up
-make generate
-make run SERVICE=game
+roost project next
 
 # 旧项目执行一次，升级后即可使用 make project-upgrade
 go run github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest project upgrade --root . --dry-run -core latest -kit latest -skill latest -codegen latest
@@ -44,7 +87,7 @@ make deps-update
 make roost-up
 make codegen-up
 roost project upgrade -core latest -kit latest -skill latest -codegen latest`,
-		Configuration: fmt.Sprintf(`roost.yaml 的 versions.* 默认是 latest。deps-update 只联合解析 core/kit/skill；roost-up 执行 GOWORK=off go get -u ./... 与 go mod tidy，更新所有被项目引用的依赖；codegen-up 执行 go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest，更新本机 CLI。go.mod 保存具体版本，roost.yaml 保存更新策略。兼容下限：core %s、kit %s、skill %s、codegen %s。明确版本表示 MVS 下限，不是上限。`, minimumVersions.Core, minimumVersions.Kit, minimumVersions.Skill, minimumVersions.Codegen),
+		Configuration: fmt.Sprintf(`roost.yaml 的 versions.* 默认是 latest。deps-update 在临时项目联合解析 core/kit/skill，只提交最终 go.mod/go.sum；失败或并发变化不会覆盖原文件。roost-up 执行 GOWORK=off go get -u ./... 与 go mod tidy，更新所有被项目引用的依赖；codegen-up 执行 go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest，更新本机 CLI。go.mod 保存具体版本，roost.yaml 保存更新策略。兼容下限：core %s、kit %s、skill %s、codegen %s。明确版本表示 MVS 下限，不是上限。`, minimumVersions.Core, minimumVersions.Kit, minimumVersions.Skill, minimumVersions.Codegen),
 		Example: `versions:
   core: latest
   kit: latest
@@ -59,7 +102,7 @@ make codegen-up`,
 		Name: "generate", Aliases: []string{"gen"},
 		Summary:       "按依赖顺序运行项目启用的全部生成器",
 		Usage:         `roost generate [--changed] [--dry-run] [--check] [--force] [--root dir]`,
-		Configuration: `执行顺序为 DAO → Event → Errcode → Protocol → Entity → Nest → Attribute → Config → WebRoute。--check 在临时副本生成并检查差异；--changed 根据 git 变更缩小范围。`,
+		Configuration: `执行顺序为 DAO → Event → Errcode → Protocol → Entity → Nest → Attribute → Config → WebRoute。普通生成在同级临时项目完成全部生成器和 GOWORK=off go mod tidy，全部成功后才以可回滚批次提交生成物与 go.mod/go.sum；不会主动升级框架，也不会因后置生成器失败留下前置生成物。--check 在临时副本生成并检查差异；--changed 根据原项目 git 变更缩小范围。`,
 		Example: `roost generate --dry-run
 roost generate
 roost generate --check`,
@@ -67,18 +110,73 @@ roost generate --check`,
 	{
 		Name: "add", Aliases: []string{"scaffold"},
 		Summary:       "生成业务骨架并分配需要的 ID",
-		Usage:         `roost add <service|mod|module|protocol|entity|component|event|table|dao|webroute|errcode|saga> <name> [flags]`,
-		Configuration: `通用参数：--root、--service、--mods、--steps、--group、--id。骨架文件归业务所有，不会被 project sync 覆盖；创建后运行 roost generate。`,
+		Usage:         `roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|event|table|dao|webroute|errcode|saga> <name> [flags]`,
+		Configuration: `通用参数：--root、--service、--mods、--steps、--group、--id；Component/DAO 可用 --entity 自动接入所属 Entity；protocol 用 --handler 选择 controller domain；endpoint 用 --handler、--protocol、--nest-handler 接线；handler 使用 --entity 和 --component 生成正确 Nest 锁目标。骨架文件归业务所有，不会被 project sync 覆盖；创建后运行 roost generate。`,
 		Example: `roost add entity player
-roost add dao player
-roost add protocol use_item -group game
+roost add component profile --entity player
+roost add dao player --entity player
+roost add mod nest -service game
+roost add handler rename_player --entity player --component profile
+roost add access player --service game
+roost add protocol rename_player -group game --handler player
+roost add endpoint rename_player --handler player
+roost add lifecycle player
+roost add skill fireball
 roost add saga cross_server_trade -service game -steps reserve,deduct,deliver`,
+	},
+	{
+		Name: "access", Aliases: []string{"player-access", "gateway-access"},
+		Summary: "生成已认证玩家协议边界并装配到指定 Service",
+		Usage: `roost add access player --service <service>
+roost generate`,
+		Configuration: `当前 access 名仅支持 player。它写入 roost.yaml access.player.service，启用 protocol/nest，并给目标 Service 补 Nest 运行依赖；生成并发安全的 ProtocolRegistry、typed binding 聚合和 access.player Mod。用 add transport tcp 生成生产约束的应用接入适配器。`,
+		Example: `roost add access player --service game
+roost add protocol RenamePlayer --group game --handler player
+roost add endpoint RenamePlayer --handler player`,
+	},
+	{
+		Name: "transport", Aliases: []string{"tcp", "player-tcp", "gateway-tcp"},
+		Summary: "为 player access 生成有界 TCP listener、帧协议和 fail-closed 鉴权边界",
+		Usage: `roost add transport tcp [--service <service>]
+roost project doctor --workflow player-tcp`,
+		Configuration: `要求先 add access player。生成代码提供 16 字节有界帧、全局/单 IP 连接上限、独立 handshake 并发与字节上限、handshake/idle/write timeout、sequence 防重放、同步写背压、TCP keepalive、优雅关停，以及 PushPlayer/PushSession 主动发布；auth.go 归应用所有且默认拒绝。完整 disabled 配置会自动写入，完成鉴权后用 config enable player-tcp 开启。ROOST_PLAYER_TOKEN 环境变量可供 cmd/playerprobe 做最小鉴权验收；生产鉴权仍需安全评审。Docker/Kubernetes 模板会发布 7000，Kubernetes 仅允许带 player-access 标签的来源 namespace。`,
+		Example: `roost add access player --service game
+roost add transport tcp
+# 实现 internal/access/player/tcp/auth.go
+roost config enable player-tcp
+roost project doctor --workflow player-tcp
+# 安全地设置 ROOST_PLAYER_TOKEN 后：go run ./cmd/playerprobe -addr 127.0.0.1:7000`,
+	},
+	{
+		Name: "lifecycle", Aliases: []string{"entity-lifecycle"},
+		Summary:       "生成 Entity 登录加载、首次创建和销毁边界",
+		Usage:         `roost add lifecycle <entity> [--entity <entity>] [--service <service>]`,
+		Configuration: `生成 Get/Create/GetOrCreate/Destroy 和 FromRegistry。它通过实例级 entity.runtime 与 checkpoint loader 工作；普通玩法读写仍走 Nest Sender。GetOrCreate 只把确切的未找到视为可创建，不吞数据库或解码错误。`,
+		Example: `roost add lifecycle Player --service game
+# 应用初始化：lifecycle.FromRegistry(registry)`,
+	},
+	{
+		Name: "endpoint", Aliases: []string{"protocol-endpoint", "protocol-to-nest"},
+		Summary:       "把 typed 玩家协议映射到生成的 Nest Sender",
+		Usage:         `roost add endpoint <name> --handler <controller-domain> [--protocol <name>] [--nest-handler <name>]`,
+		Configuration: `要求 access.player、已有 protocol 和 Nest handler。第一个 Nest 参数是由 context.PlayerID 定位的 Entity；其余命名参数按名称映射到 Request 字段。controller 从 Registry 注入 nest.Client，不直接访问 EntityManager。`,
+		Example: `roost add endpoint RenamePlayer --handler player
+roost add endpoint EquipItem --handler inventory --protocol EquipItem --nest-handler Equip`,
+	},
+	{
+		Name: "skill", Aliases: []string{"skills", "ability"},
+		Summary:       "生成稳定 roost-skill JSON 骨架和启动期编译目录",
+		Usage:         `roost add skill <name>`,
+		Configuration: `创建 game/skills/<name>.json；首次创建同时生成 catalog.go。空骨架只 finish，不预设伤害、目标或资源规则。CompileAll 使用稳定 /skill import，对所有嵌入定义严格 Parse/Compile，重复 ID 或 error diagnostic 启动失败。`,
+		Example: `roost add skill Fireball
+# 编辑 game/skills/fireball.json
+# 启动时：skills.CompileAll(skill.DefaultCompileEnvironment())`,
 	},
 	{
 		Name: "mods", Aliases: []string{"mod", "kit-mods"},
 		Summary: "配置并自动补齐 Kit Mod 依赖",
 		Usage: `roost add mod <name> -service <service>
-roost project new <name> -mods <comma-separated-mods>`,
+roost project new <name> -module <go-module> -mods <comma-separated-mods>`,
 		Configuration: `可用 Mod：lock、ops、statslog、configdata、etcd、redis、mongo、nats、sync、remote_entity、checkpoint、nestwal、nest、saga。生成器会递归补齐依赖，例如 nest → nestwal → checkpoint/nats → mongo/redis。`,
 		Example: `roost add mod saga -service game
 # roost.yaml
@@ -88,9 +186,10 @@ services:
 	},
 	{
 		Name: "dao", Aliases: []string{"database"},
-		Summary:       "生成私有存储、getter/mutator、dirty、patch、undo 和持久化代码",
-		Usage:         `go run github.com/tjbdwanghaibo/roost-codegen/cmd/dao@latest -def ./db/def -out ./db -pkg db [-force]`,
-		Configuration: `定义使用 //cube:dao coll=<collection> db=<database> [dbscope=sid|global]。字段一旦写 dao tag 就必须声明 persist/sync 意图；支持 persist、sync、nopersist、nosync、map=fast、map=sharded 和 -。无 tag 默认 persist+sync。字段与 tracker 均为私有，业务通过生成方法访问。`,
+		Summary: "生成私有存储、getter/mutator、dirty、patch、undo 和持久化代码",
+		Usage: `roost add dao <name> --entity <owner>
+go run github.com/tjbdwanghaibo/roost-codegen/cmd/dao@latest -def ./db/def -out ./db -pkg db [-force]`,
+		Configuration: `--entity 会自动把 DAO import、DaoManager、dao tag 和接口 getter 接入 Entity；省略时只创建独立 DAO。定义使用 //cube:dao coll=<collection> db=<database> [dbscope=sid|global]。字段一旦写 dao tag 就必须声明 persist/sync 意图；支持 persist、sync、nopersist、nosync、map=fast、map=sharded 和 -。不要声明 ID/id/tracker 保留字段。字段与 tracker 均为私有，业务通过生成方法访问。`,
 		Example: `//cube:dao coll=players db=game dbscope=sid
 type PlayerDao struct {
     Name  string          ` + "`dao:\"persist,sync\"`" + `
@@ -99,13 +198,16 @@ type PlayerDao struct {
 
 dao.SetName("alice")
 dao.SetItems(1001, 3)
-name := dao.Name()`,
+name := dao.GetName()`,
 	},
 	{
 		Name: "entity", Aliases: []string{"entities"},
-		Summary:       "生成 Entity 工厂、组件/DAO 装配、Snapshot 和生命周期 hook",
-		Usage:         `go run github.com/tjbdwanghaibo/roost-codegen/cmd/entity@latest -dir ./game/entities [-output file] [-force]`,
-		Configuration: `Entity 使用 //cube:entity entityKind=<const>，字段使用 comp:"<type>" 或 dao:"<collection>"。可配置 remote=managed、sync=true、syncTopic、syncPacker、subjectPacker。DAO tracker 统一经 DirtyTracker() 访问。`,
+		Summary: "生成 Entity 工厂、组件/DAO 装配、Snapshot 和生命周期 hook",
+		Usage: `roost add entity <name>
+roost add component <name> --entity <owner>
+roost add dao <name> --entity <owner>
+roost generate`,
+		Configuration: `高层 add 命令自动分配 ID、注册 Component 工厂、生成窄 Entity 接口，并更新 Entity 的 ComponentManager/DaoManager 与字段 tag；Entity wire 生成 getter。只有一个 Entity 时 Component 可省略 --entity；多个时拒绝猜测。底层 Entity marker 使用 //cube:entity entityKind=<const>，还可配置 remote=managed、sync=true、syncTopic、syncPacker、subjectPacker。`,
 		Example: `//cube:entity entityKind=EntityKindPlayer
 type Player struct {
     *entity.EntityBase
@@ -213,7 +315,7 @@ roost generate`,
 	{
 		Name: "replication", Aliases: []string{"udp", "kcp", "quic", "lockstep"},
 		Summary: "生成 UDP/KCP/QUIC 帧同步 Transport 装配入口",
-		Usage: `roost project new <name> -features replication-udp,replication-kcp,replication-quic
+		Usage: `roost project new <name> -module <go-module> -features replication-udp,replication-kcp,replication-quic
 roost project sync`,
 		Configuration: `feature 生成 internal/transport/generated.go：QUIC DATAGRAM、KCP reliable stream、UDP datagram 与 ReliableSender 组合。监听、TLS、票据、密钥和 Session 绑定由网关接入层提供。`,
 		Example: `features:
@@ -223,10 +325,15 @@ roost project sync`,
 	},
 	{
 		Name: "config", Aliases: []string{"config-check"},
-		Summary:       "检查服务 YAML 和生产危险默认值",
-		Usage:         `roost config check --service <name> [--production] [--file path] [--root dir]`,
-		Configuration: `配置必须是合法 YAML 并包含 sid。--production 拒绝 CHANGE_ME、localhost、127.0.0.1 和 dev- 值；外部 Mongo/Redis/NATS 拓扑仍需启动探针验证。`,
+		Summary: "检查服务 YAML，并安全启停 player TCP",
+		Usage: `roost config check --service <name> [--production] [--file path] [--root dir]
+roost config enable player-tcp [--service <name>] [--file path]
+roost config disable player-tcp [--service <name>] [--file path]`,
+		Configuration: `add transport tcp 会自动把禁用状态的完整配置补进开发和生产示例，不覆盖其他 YAML 内容。enable 会先检查 auth.go 不再是默认拒绝骨架，再只修改 enabled 标量；disable 始终可用。check 要求合法 YAML 和 sid，--production 还拒绝危险默认值。`,
 		Example: `roost config check --service game
+roost config enable player-tcp --service game
+roost project doctor --workflow player-tcp
+roost config disable player-tcp --service game
 roost config check --service game --production --file configs/service/config.game.prod.yaml`,
 	},
 	{
@@ -307,6 +414,15 @@ func runContextHelp(command []string, stdout io.Writer) error {
 		printHelpOverview(stdout)
 		return nil
 	}
+	// Config subcommands share one safety contract. Prefer it over the
+	// player-tcp alias so `config enable player-tcp --help` explains the
+	// fail-closed enable/disable behavior rather than only the transport shape.
+	if command[0] == "config" {
+		if topic, ok := findHelpTopic("config"); ok {
+			printHelpTopic(stdout, topic)
+			return nil
+		}
+	}
 	joined := strings.Join(command, "-")
 	for _, candidate := range []string{joined, command[len(command)-1], command[0]} {
 		if topic, ok := findHelpTopic(candidate); ok {
@@ -340,6 +456,10 @@ func printHelpOverview(w io.Writer) {
 	fmt.Fprintln(w, "  roost help <能力>                  显示配置、命令和示例")
 	fmt.Fprintln(w, "  roost help all                     显示全部专题")
 	fmt.Fprintln(w, "  roost <顶级命令> --help            显示对应专题")
+	fmt.Fprintln(w, "  roost version                      显示已安装版本")
+	fmt.Fprintln(w, "  roost env doctor                   检查本机工具和 PATH")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "第一次使用: roost help beginner")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "能力:")
 	width := 0
@@ -352,7 +472,7 @@ func printHelpOverview(w io.Writer) {
 		fmt.Fprintf(w, "  %-*s  %s\n", width, topic.Name, topic.Summary)
 	}
 	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "示例: roost help dao | roost help nest | roost help versions")
+	fmt.Fprintln(w, "示例: roost help beginner | roost help entity | roost help versions")
 	fmt.Fprintln(w, "完整文档: README.md、docs/CODEGEN_REFERENCE.zh-CN.md、docs/PROJECT_GENERATOR.zh-CN.md")
 }
 

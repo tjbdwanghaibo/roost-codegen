@@ -1,12 +1,17 @@
 # roost-codegen
 
-roost 框架的项目脚手架与代码生成工具链：用源码里的标记注释（`//cube:dao`、`//roost:nest` 等）驱动一组 Go 代码生成器，把持久化、同步、协议、事件、配置表这些"写错就丢数据"的样板代码变成可重复生成、可 CI 校验的产物。当前源码面向下一生产版本 **v1.7.0**；已发布稳定版为 v1.6.0。
+roost 框架的项目脚手架与代码生成工具链：用源码里的标记注释（`//cube:dao`、`//roost:nest` 等）驱动一组 Go 代码生成器，把持久化、同步、协议、事件、配置表这些"写错就丢数据"的样板代码变成可重复生成、可 CI 校验的产物。版本与升级记录以 [CHANGELOG](CHANGELOG.md) 和仓库 release/tag 为准；生成器会在运行前校验框架兼容下限。
 
 生成物依赖 [cube-core](https://github.com/tjbdwanghaibo/cube-core) 运行时（`checkpoint`、`entity`、`nest`、`fmap` 等包），见[与 cube-core 的关系](#学习路径与-cube-core-的关系)。
 
-文档按三级使用：新手先看 [Roost 五分钟快速开始](https://github.com/tjbdwanghaibo/cube-core/blob/main/docs/QUICKSTART.md)；熟练用户看 [项目生成器完整说明](docs/PROJECT_GENERATOR.zh-CN.md)；维护者再看生成器的关键实现细节和 [Roost 实现原理](https://github.com/tjbdwanghaibo/cube-core/blob/main/docs/INTERNALS.md)。
+文档按三级使用：完全新手先看 [小白逐步操作手册](docs/BEGINNER_WORKBOOK.zh-CN.md)，并在项目里反复运行
+`roost project next`；熟练用户看 [项目生成器完整说明](docs/PROJECT_GENERATOR.zh-CN.md)；维护者再看生成器的
+关键实现细节和 [Roost 实现原理](https://github.com/tjbdwanghaibo/cube-core/blob/main/docs/INTERNALS.md)。
 
-逐个命令、marker、输入输出和完整用例见 [全功能使用手册与用例](docs/CODEGEN_REFERENCE.zh-CN.md)；cfggen 的 schema 字段级参考见 [CFGGEN_META](docs/CFGGEN_META.zh-CN.md)。
+完全第一次使用先看 [小白逐步操作手册](docs/BEGINNER_WORKBOOK.zh-CN.md)；
+逐个命令、marker、输入输出和完整用例见 [全功能使用手册与用例](docs/CODEGEN_REFERENCE.zh-CN.md)；
+玩家 TCP listener、鉴权、主动推送与生产验收见 [Player TCP 接入](docs/PLAYER_ACCESS_TCP.zh-CN.md)；
+cfggen 的 schema 字段级参考见 [CFGGEN_META](docs/CFGGEN_META.zh-CN.md)。
 
 ## 生成器总览
 
@@ -58,7 +63,9 @@ go run github.com/tjbdwanghaibo/roost-codegen/cmd/cfggen -meta ./configs/schema/
 或安装本地命令：
 
     go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest
-    roost help
+    roost version
+    roost env doctor
+    roost help beginner
 
 Windows 下使用仓库内脚本（不修改现有 `GOBIN`/`GOPATH`，只把 `go install` 实际使用的 Go bin 目录追加进用户 PATH）：
 
@@ -73,6 +80,13 @@ Windows 下使用仓库内脚本（不修改现有 `GOBIN`/`GOPATH`，只把 `go
 
 ```bash
 roost help                    # 能力总览
+roost help beginner           # 从空项目到玩家协议/Nest/Entity 的完整路径
+roost help environment        # 版本、Go/Git/Make/Docker 与 PATH 自检
+roost help access             # 玩家接入层与 transport 边界
+roost help transport          # 有界 TCP、鉴权、主动推送和探针
+roost help endpoint           # Protocol 到 Nest Sender 接线
+roost help lifecycle          # Entity 加载、创建、销毁
+roost help skill              # 稳定 roost-skill JSON 与 catalog
 roost help dao                # DAO 配置、tag、命令和例子
 roost help entity             # Entity marker 和装配例子
 roost help nest               # handler、rollback、durability
@@ -85,7 +99,7 @@ roost project deps --help     # 等价于 roost help versions
 roost add dao --help          # 等价于 roost help dao
 ```
 
-内置专题包括：`project`、`versions`、`generate`、`add`、`mods`、`dao`、`entity`、`nest`、`protocol`、`cfggen`、`tablegen`、`eventgen`、`attribute`、`webroute`、`errcode`、`saga`、`replication`、`config`、`id`、`format`、`deploy`。常用别名也可查询，例如 `roost help table`、`roost help event`、`roost help k8s`。
+内置专题包括：`environment`、`beginner`、`project`、`versions`、`generate`、`add`、`mods`、`access`、`transport`、`lifecycle`、`endpoint`、`skill`、`dao`、`entity`、`nest`、`protocol`、`cfggen`、`tablegen`、`eventgen`、`attribute`、`webroute`、`errcode`、`saga`、`replication`、`config`、`id`、`format`、`deploy`。常用别名也可查询，例如 `roost help start`、`roost help player-tcp`、`roost help protocol-to-nest`、`roost help k8s`。
 
 专题输出固定包含四部分：用途、命令、配置/标记和示例。未知能力会失败并提示先运行 `roost help`，适合脚本和 CI 发现拼写错误。
 
@@ -111,12 +125,21 @@ go run github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest project upgrade -
 
 创建新项目（生成 `roost.yaml` 描述 Service、Kit Mod、生成能力、版本和 ID 空间）：
 
-    roost project new planet -services game,gate \
+    roost project new planet -module github.com/your-account/planet -services game,gate \
       -mods configdata,etcd,redis,mongo,nats,sync,remote_entity
 
-完全新手建议先使用 `-mods configdata` 创建轻量项目。生成结果内含
-`docs/QUICKSTART.zh-CN.md` 零基础教程和 `docs/ROOST_YAML.zh-CN.md` 全字段参考，
+完全新手可以先使用 `-mods configdata` 创建轻量项目来学习生成流程。生成结果内含
+`docs/QUICKSTART.zh-CN.md` 零基础教程、`docs/BEGINNER_WORKBOOK.zh-CN.md` 逐步操作手册、
+`docs/FIRST_BUSINESS.zh-CN.md` 第一条完整业务链和
+`docs/ROOST_YAML.zh-CN.md` 全字段参考，
 不需要先理解全部 MongoDB、Redis、NATS、Nest WAL 和跨服能力。
+进入项目后的第一条命令应是 `roost project next`（或 `make next`）；它根据真实进度只给一个动作和原因。
+默认严格 doctor 会验证完整业务链，因此不要把尚未填写业务方法的空骨架误判成已完成。
+开始生成 Nest handler 前，
+执行 `roost add access player --service game`；它会补齐 Nest 运行依赖，生成器也会校验，避免产生半成品配置。
+需要真实 TCP 接入时再执行 `roost add transport tcp`；生成层提供有界帧、连接/超时限制、背压和优雅关停，
+并自动把 disabled 配置加入 Service。应用实现默认拒绝的鉴权文件后执行
+`roost config enable player-tcp`，无需手工合并 YAML。
 
 `-features`（生成哪些代码：13 个开关）与 `-mods`（运行时装配哪些 Kit Mod：14 个，依赖自动展开）的完整清单见 [docs/PROJECT_GENERATOR.zh-CN.md](docs/PROJECT_GENERATOR.zh-CN.md) 第 4、5 节。
 
@@ -155,7 +178,7 @@ type EquipInfo struct {
 
 或独立运行 dao 生成器：
 
-    go run github.com/tjbdwanghaibo/roost-codegen/cmd/dao@v1.7.0 -def ./db/def -out ./db
+    go run github.com/tjbdwanghaibo/roost-codegen/cmd/dao@latest -def ./db/def -out ./db
 
 输出（输出目录需能推断出包名，即已有至少一个非生成的 `.go` 文件，否则用 `-pkg` 指定）：
 
@@ -317,7 +340,7 @@ type (
 
 ## roost CLI 统一命令
 
-    roost project new <name>            # 脚手架新项目
+    roost project new <name> -module <path> # 脚手架新项目；module 必填
     roost project sync|diff|doctor
     roost project upgrade [--root dir] [-core version] [-kit version] [-skill version] [-codegen version]
     roost generate                      # 按序执行 roost.yaml 启用的全部生成器
@@ -325,10 +348,38 @@ type (
     roost generate --check              # CI 门禁：临时副本中重新生成并比对
     roost generate --dry-run            # 打印生成计划
     roost generate --force              # 内容未变也重写输出
-    roost add service|mod|module|protocol|entity|component|event|table|dao|webroute|errcode|saga
+    roost add service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|event|table|dao|webroute|errcode|saga
     roost config check --service <name>
+    roost config enable|disable player-tcp
+    roost project next [--workflow first-business|player-tcp]
     roost id next <kind> | roost id check
     roost format check
+
+零基础首层业务不需要手写协议 Registry、Entity 工厂、Manager、import、字段 tag 或 Sender 接线：
+
+    roost add access player --service game
+    roost add transport tcp
+    roost add entity Player
+    roost add component Profile --entity Player
+    roost add dao Player --entity Player
+    roost add handler RenamePlayer --entity Player --component Profile
+    roost add protocol RenamePlayer --group game --handler player
+    # 编辑 Request 字段和 handler 参数后
+    roost add endpoint RenamePlayer --handler player
+    roost add lifecycle Player --service game
+    roost generate
+    roost project doctor --workflow first-business
+
+Component 与 DAO 会自动挂到目标 Entity；Component 同时生成 `IProfileEntity` 这类窄接口，
+Entity wire 生成对应 Component/DAO getter。业务在
+Component 中写玩法方法，通过 DAO 的 `SetXxx` 等生成方法更新状态；Nest handler 进入前
+已经持有 Entity 锁，不要在业务层重复加锁。生成项目中的
+`docs/FIRST_BUSINESS.zh-CN.md` 提供完整可复制例子；`docs/PROTOCOL_TO_NEST.zh-CN.md` 解释边界契约，
+`docs/PLAYER_ACCESS_TCP.zh-CN.md` 解释可运行 TCP 接入、帧协议、鉴权和上线验证。
+
+`internal/frameworkdeps/generated.go` 只导入稳定包
+`github.com/tjbdwanghaibo/roost-skill/skill`。旧项目若还保留 `/skillv2`，运行
+`make project-upgrade`（或 `roost project sync`）会迁移受控生成文件。
 
 Saga 脚手架：
 
@@ -372,7 +423,9 @@ func handlerTransfer(owner BagOwner, target TargetOwner, itemID int64) error { /
 
 ### 内容哈希幂等与 `--check` 门禁
 
-每个生成器写文件都走 `internal/genutil.WriteIfChanged`：内容与磁盘一致就不写，mtime 不动，重复生成对增量构建零扰动。这也是 `roost generate --check` 的基础：它把项目复制到临时目录（跳过 `.git`/`bin`/`dist`/`log`），在副本里跑全部生成器，对含 `Code generated` 头的文件（以及 `configs/data/*.json`、`docs/generated/`）做 SHA-256 快照比对——有差异即报 `generated files are stale: ...` 并失败，工作区不被修改。CI 里把它作为"生成物必须已提交且最新"的门禁。
+每个生成器写文件都走 `internal/genutil.WriteIfChanged`：内容与磁盘一致就不写，mtime 不动，重复生成对增量构建零扰动。普通 `roost generate` 会把项目复制到同级临时目录（跳过 `.git`/`bin`/`dist`/`log` 和 codegen 临时目录），完成全部生成器与 `GOWORK=off go mod tidy`，然后一次提交生成物及 `go.mod/go.sum`。提交计划去重并保存旧内容用于回滚；如果生成期间业务定义、配置或目标文件被另一进程修改，会拒绝覆盖并要求重跑。框架依赖解析也在临时项目进行，只把最终依赖文件写回。
+
+`roost generate --check` 使用同一隔离机制，在副本里跑全部生成器，对含 `Code generated` 头的文件（以及 `configs/data/*.json`、`docs/generated/`）做 SHA-256 快照比对——有差异即报 `generated files are stale: ...` 并失败，工作区不被修改。CI 里把它作为"生成物必须已提交且最新"的门禁。
 
 ### `-force` 在编排层与单生成器的差别
 
@@ -398,7 +451,7 @@ func handlerTransfer(owner BagOwner, target TargetOwner, itemID int64) error { /
 3. **读实现**：每个生成器都是同一结构：`parse.go`（标记/AST → 中间定义）→ `gen.go` + `template_*.go`（text/template → `format.Source` → `WriteIfChanged`）→ `main.go`（flag 与文件编排）。从 `internal/dao` 读起，其余生成器同构。
 4. **编排层**：`internal/roost/generate.go`（顺序、`--changed`/`--check`/`--force`）、`manifest.go`（roost.yaml 校验）、`add.go`（脚手架）、`id.go`（ID 空间扫描）。
 
-**与 cube-core 的关系**：roost-codegen 只在**生成期**运行，本身不被业务依赖；生成出来的代码在**运行期**依赖 cube-core 提供的接口与容器——`checkpoint.DirtyTracker`/`DirtyHook`/`PersistPatch`（脏追踪与落库 patch）、`entity.DaoInterface`（DAO 生命周期）、`nest.RollbackTx`/`RollbackSnapshotter`/`CommitParticipant`（事务回滚与提交参与者）、`fmap`（三种 map 实现）、`migration.MigrateDAO`（schema 迁移），以及 `go.mongodb.org/mongo-driver/bson`。升级 cube-core 后重新生成即可让产物对齐新接口；更新策略由 `roost.yaml` 的 `versions` 字段统一管理，默认跟随 `latest`，也允许使用不低于兼容下限的明确版本。
+**与 cube-core 的关系**：roost-codegen 只在**生成期**运行，本身不被业务依赖；生成出来的代码在**运行期**依赖 cube-core 提供的接口与容器——`checkpoint.DirtyTracker`/`DirtyHook`/`PersistPatch`（脏追踪与落库 patch）、`entity.DaoInterface`（DAO 生命周期）、`nest.RollbackTx`/`RollbackSnapshotter`/`CommitParticipant`（事务回滚与提交参与者）、`fmap`（三种 map 实现）、`migration.MigrateDAO`（schema 迁移），以及 `go.mongodb.org/mongo-driver/v2/bson`。升级 cube-core 后重新生成即可让产物对齐新接口；更新策略由 `roost.yaml` 的 `versions` 字段统一管理，默认跟随 `latest`，也允许使用不低于兼容下限的明确版本。
 
 ## 从 v1.4 升级到 v1.5
 

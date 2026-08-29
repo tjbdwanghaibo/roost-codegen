@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,6 +30,10 @@ type HandlerEvent struct {
 
 // scanGameDir walks gameDir for DealEventXXX methods and generates handler code.
 func scanGameDir(gameDir string, eventPkg string, force bool) error {
+	return scanGameDirTo(gameDir, eventPkg, force, io.Discard)
+}
+
+func scanGameDirTo(gameDir string, eventPkg string, force bool, stdout io.Writer) error {
 	var allHandlers []HandlerInfo
 
 	err := filepath.Walk(gameDir, func(path string, info os.FileInfo, err error) error {
@@ -92,7 +97,7 @@ func scanGameDir(gameDir string, eventPkg string, force bool) error {
 			return fmt.Errorf("generate handler %s: %w", key.receiver, err)
 		}
 		if changed {
-			fmt.Printf("generated: %s\n", outFile)
+			fmt.Fprintf(stdout, "generated: %s\n", outFile)
 		}
 	}
 

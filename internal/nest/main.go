@@ -16,21 +16,28 @@ package nest
 import (
 	"flag"
 	"fmt"
-	"log"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-func main() {
-	dir := flag.String("dir", ".", "directory to scan for //roost:nest markers")
-	force := flag.Bool("force", false, "force regeneration even if unchanged")
-	sender := flag.Bool("sender", true, "generate sender package (default: true)")
-	flag.Parse()
+func run(args []string, stdout io.Writer) error {
+	flags := flag.NewFlagSet("nest", flag.ContinueOnError)
+	flags.SetOutput(stdout)
+	dir := flags.String("dir", ".", "directory to scan for //roost:nest markers")
+	force := flags.Bool("force", false, "force regeneration even if unchanged")
+	sender := flags.Bool("sender", true, "generate sender package (default: true)")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments %q", flags.Args())
+	}
 
 	absDir, err := filepath.Abs(*dir)
 	if err != nil {
-		log.Fatalf("resolve dir: %v", err)
+		return fmt.Errorf("resolve dir: %w", err)
 	}
 	generateBootstrap := filepath.Base(absDir) == "game"
 	var moduleRoot string
@@ -38,7 +45,7 @@ func main() {
 	if generateBootstrap {
 		moduleRoot, modulePath, err = findModuleInfo(absDir)
 		if err != nil {
-			log.Fatalf("find module: %v", err)
+			return fmt.Errorf("find module: %w", err)
 		}
 	}
 
@@ -95,7 +102,7 @@ func main() {
 			return fmt.Errorf("generate %s: %w", outFile, err)
 		}
 		if changed {
-			fmt.Printf("generated: %s\n", outFile)
+			fmt.Fprintf(stdout, "generated: %s\n", outFile)
 			totalGenerated++
 		}
 
@@ -111,7 +118,7 @@ func main() {
 				return fmt.Errorf("generate sender %s: %w", senderFile, err)
 			}
 			if changed {
-				fmt.Printf("generated: %s\n", senderFile)
+				fmt.Fprintf(stdout, "generated: %s\n", senderFile)
 				totalGenerated++
 			}
 			syncSenderDir := filepath.Join(outDir, "syncsender")
@@ -124,7 +131,7 @@ func main() {
 				return fmt.Errorf("generate syncsender %s: %w", syncSenderFile, err)
 			}
 			if changed {
-				fmt.Printf("generated: %s\n", syncSenderFile)
+				fmt.Fprintf(stdout, "generated: %s\n", syncSenderFile)
 				totalGenerated++
 			}
 		}
@@ -132,27 +139,28 @@ func main() {
 		return nil
 	})
 	if err != nil {
-		log.Fatalf("walk: %v", err)
+		return fmt.Errorf("walk: %w", err)
 	}
 	if generateBootstrap {
 		bootstrapDir := filepath.Join(absDir, "bootstrap")
 		if err := os.MkdirAll(bootstrapDir, 0755); err != nil {
-			log.Fatalf("mkdir bootstrap: %v", err)
+			return fmt.Errorf("mkdir bootstrap: %w", err)
 		}
 		outFile := filepath.Join(bootstrapDir, "nest.go")
 		changed, err := generateBootstrapNest(bootstrapRegs, outFile, *force)
 		if err != nil {
-			log.Fatalf("generate bootstrap %s: %v", outFile, err)
+			return fmt.Errorf("generate bootstrap %s: %w", outFile, err)
 		}
 		if changed {
-			fmt.Printf("generated: %s\n", outFile)
+			fmt.Fprintf(stdout, "generated: %s\n", outFile)
 			totalGenerated++
 		}
 	}
 
 	if totalGenerated == 0 {
-		fmt.Println("all files up to date")
+		fmt.Fprintln(stdout, "all files up to date")
 	}
+	return nil
 }
 
 func hasReceiverHandler(funcs []*FuncInfo) bool {

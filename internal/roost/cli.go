@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 )
 
@@ -36,6 +38,10 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return runConfig(args[1:], stdout, stderr)
 	case "id":
 		return runID(args[1:], stdout, stderr)
+	case "version":
+		return runVersion(args[1:], stdout)
+	case "env":
+		return runEnvironment(args[1:], stdout)
 	case "format":
 		if len(args) != 2 || args[1] != "check" {
 			return errors.New("usage: roost format check")
@@ -59,12 +65,12 @@ func Run(args []string, stdout, stderr io.Writer) error {
 
 func runProject(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: roost project <new|sync|diff|doctor|upgrade|deps>")
+		return errors.New("usage: roost project <new|sync|diff|doctor|next|upgrade|deps>")
 	}
 	switch args[0] {
 	case "new":
 		if len(args) < 2 || strings.HasPrefix(args[1], "-") {
-			return errors.New("usage: roost project new <name> [flags]")
+			return errors.New("usage: roost project new <name> -module <go-module> [flags]")
 		}
 		fs := flag.NewFlagSet("project new", flag.ContinueOnError)
 		fs.SetOutput(stderr)
@@ -80,6 +86,12 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
+		if fs.NArg() != 0 {
+			return fmt.Errorf("unexpected arguments %q; usage: roost project new <name> -module <go-module> [flags]", fs.Args())
+		}
+		if strings.TrimSpace(*module) == "" {
+			return fmt.Errorf("-module is required so generated imports do not use someone else's repository; example: roost project new %s -module github.com/<your-account>/%s", args[1], toSnake(args[1]))
+		}
 		result, target, err := NewProject(NewOptions{Name: toSnake(args[1]), Module: *module, Out: *out, Services: splitList(*services), Mods: splitList(*mods), Features: splitList(*features), Versions: VersionSpec{Core: *core, Kit: *kit, Skill: *skill, Codegen: *codegen}})
 		if err != nil {
 			return err
@@ -88,24 +100,37 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
+		printSyncResult(stdout, result)
+		fmt.Fprintf(stdout, "project files ready: %s\n", target)
 		if err := UpdateFrameworkDependencies(target, manifest, stdout, stderr); err != nil {
 			return fmt.Errorf("project files created at %s but framework resolution failed; after connectivity recovers run roost project deps --root %s: %w", target, target, err)
 		}
-		printSyncResult(stdout, result)
 		fmt.Fprintf(stdout, "project ready: %s\n", target)
 		return nil
-	case "sync", "diff", "doctor", "upgrade", "deps":
+	case "sync", "diff", "doctor", "next", "upgrade", "deps":
 		fs := flag.NewFlagSet("project "+args[0], flag.ContinueOnError)
 		fs.SetOutput(stderr)
 		rootFlag := fs.String("root", ".", "project directory")
 		strict := fs.Bool("strict", true, "include generated freshness checks")
 		jsonOutput := fs.Bool("json", false, "JSON output")
+		workflow := fs.String("workflow", "", "validate a complete workflow (first-business or player-tcp)")
 		dryRun := fs.Bool("dry-run", false, "preview an upgrade without writing files or resolving dependencies")
 		core := fs.String("core", "", "new core version")
 		kit := fs.String("kit", "", "new kit version")
 		skill := fs.String("skill", "", "new skill version")
 		codegen := fs.String("codegen", "", "new codegen version")
 		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return fmt.Errorf("unexpected arguments %q", fs.Args())
+		}
+		allowed := map[string][]string{
+			"sync": {"root"}, "diff": {"root"}, "doctor": {"root", "strict", "json", "workflow"},
+			"next": {"root", "workflow"}, "deps": {"root"},
+			"upgrade": {"root", "dry-run", "core", "kit", "skill", "codegen"},
+		}
+		if err := rejectUnsupportedFlags(fs, allowed[args[0]]...); err != nil {
 			return err
 		}
 		root, err := projectRoot(*rootFlag)
@@ -130,7 +155,9 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 		case "diff":
 			return DiffProject(root, stdout)
 		case "doctor":
-			return Doctor(root, *strict, *jsonOutput, stdout)
+			return DoctorWithOptions(root, DoctorOptions{Strict: *strict, JSONOutput: *jsonOutput, Workflow: *workflow}, stdout)
+		case "next":
+			return PrintNextStep(root, *workflow, stdout)
 		case "deps":
 			manifest, err := LoadManifest(root)
 			if err != nil {
@@ -152,10 +179,11 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 			if _, _, err := planManifestSync(root, m); err != nil {
 				return fmt.Errorf("preflight project upgrade: %w", err)
 			}
-			if err := saveManifest(root, m); err != nil {
+			manifestBefore, err := os.ReadFile(filepath.Join(root, ManifestName))
+			if err != nil {
 				return err
 			}
-			result, err := SyncProject(root)
+			result, err := commitManifestSyncResult(root, manifestBefore, m)
 			if err != nil {
 				return err
 			}
@@ -184,16 +212,19 @@ func runGenerate(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments %q", fs.Args())
+	}
 	root, err := projectRoot(*rootFlag)
 	if err != nil {
 		return err
 	}
-	return Generate(root, GenerateOptions{Changed: *changed, Check: *check, DryRun: *dry, Force: *force, Stdout: stdout})
+	return GenerateTransactional(root, GenerateOptions{Changed: *changed, Check: *check, DryRun: *dry, Force: *force, Stdout: stdout}, stderr)
 }
 
 func runAdd(args []string, stdout, stderr io.Writer) error {
 	if len(args) < 2 {
-		return errors.New("usage: roost add <service|mod|module|protocol|entity|component|event|table|dao|webroute|errcode|saga> <name> [flags]")
+		return errors.New("usage: roost add <service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|event|table|dao|webroute|errcode|saga> <name> [flags]")
 	}
 	fs := flag.NewFlagSet("add "+args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -202,27 +233,121 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	mods := fs.String("mods", "", "comma-separated Kit mods")
 	steps := fs.String("steps", "", "comma-separated Saga steps")
 	group := fs.String("group", "", "ID allocation group")
+	entityName := fs.String("entity", "", "owning Entity for component/DAO wiring")
+	componentName := fs.String("component", "", "Component capability for a Nest handler")
+	handlerDomain := fs.String("handler", "", "protocol controller domain")
+	protocolName := fs.String("protocol", "", "protocol name for an endpoint")
+	nestHandler := fs.String("nest-handler", "", "Nest handler name for an endpoint")
 	id := fs.Int64("id", 0, "explicit numeric ID")
 	if err := fs.Parse(args[2:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments %q", fs.Args())
+	}
+	allowed := map[string][]string{
+		"service": {"root", "mods"}, "mod": {"root", "service"}, "access": {"root", "service"},
+		"transport": {"root", "service"}, "module": {"root"},
+		"protocol": {"root", "group", "handler", "id"}, "entity": {"root", "id"},
+		"component": {"root", "entity", "id"}, "handler": {"root", "entity", "component"},
+		"lifecycle": {"root", "entity", "service"}, "endpoint": {"root", "handler", "protocol", "nest-handler"},
+		"skill": {"root"}, "event": {"root"}, "table": {"root"}, "dao": {"root", "entity"},
+		"webroute": {"root"}, "errcode": {"root", "id"}, "saga": {"root", "service", "steps"},
+	}
+	if err := rejectUnsupportedFlags(fs, allowed[args[0]]...); err != nil {
 		return err
 	}
 	root, err := projectRoot(*rootFlag)
 	if err != nil {
 		return err
 	}
-	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitList(*steps), Group: *group, ID: *id})
+	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitList(*steps), Group: *group, Entity: *entityName, Component: *componentName, Handler: *handlerDomain, Protocol: *protocolName, NestHandler: *nestHandler, ID: *id})
 	if err != nil {
 		return err
 	}
 	for _, path := range paths {
 		fmt.Fprintf(stdout, "created/updated: %s\n", path)
 	}
+	if args[0] == "entity" || args[0] == "component" || args[0] == "dao" || args[0] == "handler" || args[0] == "lifecycle" || args[0] == "endpoint" {
+		fmt.Fprintln(stdout, "next: roost project next")
+	}
+	if args[0] == "access" || args[0] == "transport" || args[0] == "protocol" {
+		fmt.Fprintln(stdout, "next: roost project next")
+	}
+	if args[0] == "skill" {
+		fmt.Fprintln(stdout, "next: edit game/skills/<name>.json, then compile it through game/skills.CompileAll")
+		fmt.Fprintln(stdout, "guide: docs/SKILL.zh-CN.md")
+	}
 	return nil
 }
 
 func runConfig(args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] != "check" {
-		return errors.New("usage: roost config check --service <name> [--production]")
+	if len(args) == 0 {
+		return errors.New("usage: roost config <check|enable|disable> [player-tcp] [flags]")
+	}
+	if args[0] == "enable" || args[0] == "disable" {
+		if len(args) < 2 || args[1] != "player-tcp" {
+			return fmt.Errorf("usage: roost config %s player-tcp [--service <name>] [--file <path>]", args[0])
+		}
+		fs := flag.NewFlagSet("config "+args[0]+" player-tcp", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		rootFlag := fs.String("root", ".", "project directory")
+		service := fs.String("service", "", "service name; defaults to access.player.service")
+		file := fs.String("file", "", "explicit service config path")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return fmt.Errorf("unexpected arguments %q", fs.Args())
+		}
+		root, err := projectRoot(*rootFlag)
+		if err != nil {
+			return err
+		}
+		manifest, err := LoadManifest(root)
+		if err != nil {
+			return err
+		}
+		access, exists := manifest.Access["player"]
+		if !exists || !contains(access.Transports, "tcp") {
+			return errors.New("player TCP is not generated; run: roost add access player --service <service>, then roost add transport tcp")
+		}
+		targetService := toSnake(*service)
+		if targetService == "" {
+			targetService = access.Service
+		}
+		if targetService != access.Service {
+			return fmt.Errorf("player access belongs to service %q, not %q", access.Service, targetService)
+		}
+		enabled := args[0] == "enable"
+		if enabled {
+			authPath := filepath.Join(root, "internal", "access", "player", "tcp", "auth.go")
+			auth, readErr := os.ReadFile(authPath)
+			if readErr != nil {
+				return fmt.Errorf("read player TCP authenticator: %w", readErr)
+			}
+			if !playerTCPAuthenticatorImplemented(auth) {
+				return errors.New("refusing to enable player TCP: auth.go is still the fail-closed skeleton or does not consume a named token parameter; implement and review internal/access/player/tcp/auth.go first")
+			}
+		}
+		path, err := ensurePlayerTCPConfig(root, targetService, *file, enabled)
+		if err != nil {
+			return err
+		}
+		state := "disabled"
+		if enabled {
+			state = "enabled"
+		}
+		fmt.Fprintf(stdout, "player TCP %s: %s\n", state, filepath.ToSlash(path))
+		if enabled {
+			fmt.Fprintln(stdout, "next: roost project doctor --workflow player-tcp")
+		} else {
+			fmt.Fprintln(stdout, "listener remains fail-closed until explicitly enabled again")
+		}
+		return nil
+	}
+	if args[0] != "check" {
+		return errors.New("usage: roost config <check|enable|disable> [player-tcp] [flags]")
 	}
 	fs := flag.NewFlagSet("config check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -232,6 +357,9 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	file := fs.String("file", "", "explicit config path")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments %q", fs.Args())
 	}
 	root, err := projectRoot(*rootFlag)
 	if err != nil {
@@ -267,6 +395,14 @@ func runID(args []string, stdout, stderr io.Writer) error {
 	}
 	if err := fs.Parse(parseArgs); err != nil {
 		return err
+	}
+	if args[0] == "check" {
+		if fs.NArg() != 0 {
+			return fmt.Errorf("unexpected arguments %q", fs.Args())
+		}
+		if err := rejectUnsupportedFlags(fs, "root"); err != nil {
+			return err
+		}
 	}
 	root, err := projectRoot(*rootFlag)
 	if err != nil {
@@ -308,8 +444,79 @@ func normalizeNextIDArgs(args []string) []string {
 }
 
 func printMakeHelp(w io.Writer) {
-	fmt.Fprint(w, `Targets: sync project-upgrade deps-update roost-up codegen-up doctor generate generate-changed check-generated config-check id-check build run test test-race new-saga ci dev-up dev-down dev-logs
+	fmt.Fprint(w, `Targets: next sync project-upgrade deps-update roost-up codegen-up doctor generate generate-changed check-generated config-check player-tcp-enable player-tcp-disable id-check build run test test-race ci dev-up dev-down dev-logs
+Scaffolds: new-entity NAME=Player | new-component NAME=Profile ENTITY=Player | new-handler NAME=RenamePlayer ENTITY=Player COMPONENT=Profile | new-dao NAME=Player ENTITY=Player
 `)
 }
 
-var _ = os.Stdout
+func rejectUnsupportedFlags(fs *flag.FlagSet, allowed ...string) error {
+	set := make(map[string]bool, len(allowed))
+	for _, name := range allowed {
+		set[name] = true
+	}
+	var unsupported []string
+	fs.Visit(func(current *flag.Flag) {
+		if !set[current.Name] {
+			unsupported = append(unsupported, "-"+current.Name)
+		}
+	})
+	if len(unsupported) > 0 {
+		return fmt.Errorf("unsupported flags for %s: %s", fs.Name(), strings.Join(unsupported, ", "))
+	}
+	return nil
+}
+
+func runVersion(args []string, stdout io.Writer) error {
+	if len(args) != 0 {
+		return errors.New("usage: roost version")
+	}
+	version := "development"
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		version = info.Main.Version
+	}
+	fmt.Fprintf(stdout, "roost-codegen %s\n", version)
+	return nil
+}
+
+func runEnvironment(args []string, stdout io.Writer) error {
+	if len(args) != 1 || args[0] != "doctor" {
+		return errors.New("usage: roost env doctor")
+	}
+	var missingRequired []string
+	for _, item := range []struct {
+		name     string
+		required bool
+	}{{"go", true}, {"git", true}, {"make", false}, {"docker", false}} {
+		path, err := exec.LookPath(item.name)
+		status := "OK"
+		detail := path
+		if err != nil {
+			if item.required {
+				status = "FAIL"
+				missingRequired = append(missingRequired, item.name)
+			} else {
+				status = "WARN"
+			}
+			detail = "not found in PATH"
+		}
+		fmt.Fprintf(stdout, "%-4s %-8s %s\n", status, item.name, detail)
+	}
+	if raw, err := exec.Command("go", "env", "GOPROXY", "GOBIN", "GOPATH").Output(); err == nil {
+		values := strings.Split(strings.TrimSpace(string(raw)), "\n")
+		labels := []string{"GOPROXY", "GOBIN", "GOPATH"}
+		for index, label := range labels {
+			value := ""
+			if index < len(values) {
+				value = strings.TrimSpace(values[index])
+			}
+			if label == "GOBIN" && value == "" {
+				value = "<empty; go install uses GOPATH/bin>"
+			}
+			fmt.Fprintf(stdout, "INFO %-8s %s\n", label, value)
+		}
+	}
+	if len(missingRequired) > 0 {
+		return fmt.Errorf("required tools missing from PATH: %s", strings.Join(missingRequired, ", "))
+	}
+	return nil
+}

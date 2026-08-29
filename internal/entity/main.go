@@ -23,18 +23,25 @@ package entity
 import (
 	"flag"
 	"fmt"
-	"log"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 )
 
-func main() {
-	dir := flag.String("dir", "", "directory to scan (default: GOFILE dir or cwd)")
-	output := flag.String("output", "", "output file (default: <entity>_gen_wire.go)")
-	force := flag.Bool("force", false, "force regeneration even if unchanged")
-	flag.Parse()
+func run(args []string, stdout io.Writer) error {
+	flags := flag.NewFlagSet("entity", flag.ContinueOnError)
+	flags.SetOutput(stdout)
+	dir := flags.String("dir", "", "directory to scan (default: GOFILE dir or cwd)")
+	output := flags.String("output", "", "output file (default: <entity>_gen_wire.go)")
+	force := flags.Bool("force", false, "force regeneration even if unchanged")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments %q", flags.Args())
+	}
 
 	// Determine scan directory
 	scanDir := *dir
@@ -49,26 +56,26 @@ func main() {
 
 	scanDir, err := filepath.Abs(scanDir)
 	if err != nil {
-		log.Fatalf("failed to resolve dir: %v", err)
+		return fmt.Errorf("resolve dir: %w", err)
 	}
 
 	scanDirs := []string{scanDir}
 	if *output == "" {
 		scanDirs, err = findEntityDirs(scanDir)
 		if err != nil {
-			log.Fatalf("scan error: %v", err)
+			return fmt.Errorf("scan entities: %w", err)
 		}
 	}
 	if len(scanDirs) == 0 {
-		fmt.Printf("no entity markers found in %s\n", scanDir)
-		return
+		fmt.Fprintf(stdout, "no entity markers found in %s\n", scanDir)
+		return nil
 	}
 
 	for _, dir := range scanDirs {
 		// Parse all .go files in the directory
 		entities, pkg, err := parseDir(dir)
 		if err != nil {
-			log.Fatalf("parse error: %v", err)
+			return fmt.Errorf("parse %s: %w", dir, err)
 		}
 		if len(entities) == 0 {
 			continue
@@ -83,15 +90,16 @@ func main() {
 
 			changed, err := generate(ent, pkg, outFile, *force)
 			if err != nil {
-				log.Fatalf("generate %s: %v", ent.Name, err)
+				return fmt.Errorf("generate %s: %w", ent.Name, err)
 			}
 			if changed {
-				fmt.Printf("generated: %s\n", outFile)
+				fmt.Fprintf(stdout, "generated: %s\n", outFile)
 			} else {
-				fmt.Printf("unchanged: %s\n", outFile)
+				fmt.Fprintf(stdout, "unchanged: %s\n", outFile)
 			}
 		}
 	}
+	return nil
 }
 
 func findEntityDirs(root string) ([]string, error) {
