@@ -33,6 +33,7 @@ type Manifest struct {
 	Schema     int                    `yaml:"schema"`
 	Project    ProjectSpec            `yaml:"project"`
 	Versions   VersionSpec            `yaml:"versions"`
+	CICD       CICDSpec               `yaml:"cicd"`
 	SharedMods []string               `yaml:"shared_mods,omitempty"`
 	Services   map[string]ServiceSpec `yaml:"services"`
 	Access     map[string]AccessSpec  `yaml:"access,omitempty"`
@@ -51,6 +52,15 @@ type VersionSpec struct {
 	Kit     string `yaml:"kit"`
 	Skill   string `yaml:"skill"`
 	Codegen string `yaml:"codegen"`
+}
+
+// CICDSpec contains only non-secret delivery policy. Credentials, production
+// configuration and kubeconfig belong to protected deployment environments.
+type CICDSpec struct {
+	Provider     string   `yaml:"provider"`
+	Registry     string   `yaml:"registry"`
+	Environments []string `yaml:"environments"`
+	Deploy       []string `yaml:"deploy"`
 }
 
 type ServiceSpec struct {
@@ -98,6 +108,7 @@ func DefaultManifest(name, module string, services, mods, features []string) Man
 		Schema:     1,
 		Project:    ProjectSpec{Name: name, Module: module},
 		Versions:   VersionSpec{Core: "latest", Kit: "latest", Skill: "latest", Codegen: "latest"},
+		CICD:       defaultCICDSpec(),
 		SharedMods: shared,
 		Services:   svc,
 		Features:   uniqueSorted(features),
@@ -135,7 +146,7 @@ func decodeManifest(root string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, fmt.Errorf("read %s: %w", path, err)
 	}
-	var manifest Manifest
+	manifest := Manifest{CICD: defaultCICDSpec()}
 	decoder := yaml.NewDecoder(strings.NewReader(string(raw)))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&manifest); err != nil {
@@ -243,6 +254,32 @@ func (m Manifest) Validate() error {
 			joined = errors.Join(joined, err)
 		}
 	}
+	if m.CICD.Provider != "github" {
+		joined = errors.Join(joined, fmt.Errorf("cicd.provider must be github; got %q", m.CICD.Provider))
+	}
+	if m.CICD.Registry != "ghcr" {
+		joined = errors.Join(joined, fmt.Errorf("cicd.registry must be ghcr; got %q", m.CICD.Registry))
+	}
+	for _, required := range []string{"staging", "production"} {
+		if !contains(m.CICD.Environments, required) {
+			joined = errors.Join(joined, fmt.Errorf("cicd.environments must contain %q", required))
+		}
+	}
+	for _, required := range []string{"shell", "docker", "k8s"} {
+		if !contains(m.CICD.Deploy, required) {
+			joined = errors.Join(joined, fmt.Errorf("cicd.deploy must contain %q", required))
+		}
+	}
+	for _, environment := range m.CICD.Environments {
+		if !validName(environment) {
+			joined = errors.Join(joined, fmt.Errorf("invalid cicd environment %q", environment))
+		}
+	}
+	for _, deploy := range m.CICD.Deploy {
+		if deploy != "shell" && deploy != "docker" && deploy != "k8s" {
+			joined = errors.Join(joined, fmt.Errorf("unsupported cicd deploy target %q", deploy))
+		}
+	}
 	for _, sagaName := range m.Sagas {
 		if !validName(sagaName) {
 			joined = errors.Join(joined, fmt.Errorf("invalid saga %q", sagaName))
@@ -282,6 +319,15 @@ func (m Manifest) Validate() error {
 		}
 	}
 	return joined
+}
+
+func defaultCICDSpec() CICDSpec {
+	return CICDSpec{
+		Provider:     "github",
+		Registry:     "ghcr",
+		Environments: []string{"staging", "production"},
+		Deploy:       []string{"shell", "docker", "k8s"},
+	}
 }
 
 func validName(name string) bool { return namePattern.MatchString(strings.TrimSpace(name)) }

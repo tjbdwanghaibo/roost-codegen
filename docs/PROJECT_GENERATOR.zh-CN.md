@@ -576,6 +576,20 @@ v1.7.0 起，新项目同时生成三套部署入口：
 | `Dockerfile`、`deploy/docker/` | 容器 | distroless nonroot、不包含配置、只读根文件系统运行示例、版本 ldflags |
 | `deploy/k8s/` | Kubernetes/Kustomize | Secret 挂载、探针、资源预算、PDB、安全上下文；nestwal 使用 StatefulSet+RWO PVC |
 
+新项目还会生成 `.github/workflows/ci.yml`、`dependency-update.yml`、`release.yml`、`deploy-shell.yml`、`deploy-docker.yml`、`deploy-k8s.yml` 和 `security.yml`。普通 CI 使用已经提交的 `go.mod/go.sum`，不会执行 `deps-update` 或 `go get -u`；追踪最新框架由独立依赖升级流水线完成并创建 PR。Release 构建一次不可变二进制包和 OCI 镜像，Shell 使用版本包，Docker 与 Kubernetes 使用同一个镜像 digest。
+
+本地交付检查和三种部署入口：
+
+```bash
+make cicd-check
+make release-check VERSION=v1.2.0
+make deploy-shell SERVICE=game SID=1000 VERSION=v1.2.0 CONFIG=/etc/roost/game.yaml
+make deploy-docker IMAGE=ghcr.io/example/planet@sha256:<digest> ENV_FILE=/etc/roost/planet.env
+make deploy-k8s ENV=staging IMAGE=ghcr.io/example/planet@sha256:<digest>
+```
+
+Shell 和 Docker 生产部署默认使用带 `roost-shell`、`roost-docker` 标签的 self-hosted runner；Kubernetes 使用带 `roost-k8s` 标签且具有目标集群最小 RBAC 的 runner。请在仓库设置中创建 `staging` 和 `production` Environment，并为 production 配置审批。生产 Secret、SSH 凭据、kubeconfig 和配置文件不得写入 `roost.yaml` 或仓库。
+
 生成器不会把 `secret.<service>.example.yaml` 加入 kustomization，也不会覆盖本地 Secret。部署前复制为 `.local.yaml`、替换所有 `CHANGE_ME`，单独 apply。生产镜像只构建一次，环境差异通过配置挂载解决。
 
 ```bash

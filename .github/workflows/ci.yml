@@ -7,6 +7,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -19,13 +23,16 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: true
       - run: go mod download
       - run: go mod verify
+      - if: runner.os == 'Linux'
+        name: validate GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
       - run: go mod tidy
       - run: git diff --exit-code -- go.mod go.sum
       - run: go test ./...
@@ -33,13 +40,15 @@ jobs:
         run: go vet ./...
       - if: runner.os == 'Linux'
         run: go test -race ./internal/nest ./internal/project ./internal/protocol ./internal/roost
+      - if: runner.os == 'Linux'
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
   generated-project-release-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: true
@@ -85,6 +94,18 @@ jobs:
           for script in deploy/shell/*.sh; do
             sh -n "$script"
           done
+          shellcheck deploy/shell/*.sh deploy/docker/*.sh deploy/k8s/*.sh
+      - name: validate generated compose and kubernetes manifests
+        working-directory: ${{ runner.temp }}/planet
+        env:
+          ROOST_IMAGE: ghcr.io/example/planet@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          ROOST_CONFIG_ROOT: configs/service
+        run: |
+          docker compose -f deploy/docker/docker-compose.prod.yaml config --quiet
+          kubectl kustomize deploy/k8s/overlays/staging > "${RUNNER_TEMP}/staging.yaml"
+          kubectl kustomize deploy/k8s/overlays/production > "${RUNNER_TEMP}/production.yaml"
+          docker run --rm -i ghcr.io/yannh/kubeconform:v0.7.0-alpine -strict -summary < "${RUNNER_TEMP}/staging.yaml"
+          docker run --rm -i ghcr.io/yannh/kubeconform:v0.7.0-alpine -strict -summary < "${RUNNER_TEMP}/production.yaml"
       - name: build production container
         working-directory: ${{ runner.temp }}/planet
         run: docker build --build-arg VERSION=ci -t planet:ci .
@@ -92,7 +113,7 @@ jobs:
   release-hygiene:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: root module has no local replace
         run: |
           if grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod; then

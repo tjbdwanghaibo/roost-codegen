@@ -268,6 +268,11 @@ make generate。未知字段会直接报错，避免拼写错误被静默忽略�
       kit: latest
       skill: latest
       codegen: latest
+    cicd:
+      provider: github
+      registry: ghcr
+      environments: [staging, production]
+      deploy: [shell, docker, k8s]
     shared_mods:
       - lock
       - ops
@@ -327,6 +332,7 @@ make generate。未知字段会直接报错，避免拼写错误被静默忽略�
 | schema | 是 | 清单格式版本，当前只能为 1 | 其他值拒绝加载 |
 | project | 是 | 项目身份和 Go module | 影响 import、应用名和生成路径 |
 | versions | 是 | core、kit、skill、codegen 更新策略 | deps、sync、CI 和 Makefile 使用 |
+| cicd | 是 | GitHub Actions、GHCR 和部署目标声明，不包含任何密钥 | 生成可复现 CI、Release 和三种部署流水线 |
 | shared_mods | 否 | 每个进程只装配一次的共享 Mod | 进入 App 根容器，不得在 Service 重复 |
 | services | 是 | 可启动 Service 及各自 Mod；至少一个 | 生成启动入口、配置和 bootstrap |
 | access | 否 | 已认证请求边界、所属 Service 与显式 transport | 生成 player runtime、binding、listener 与装配 |
@@ -357,7 +363,20 @@ latest 是持续更新策略，不会原样写进 go.mod。project deps 会在�
 只把本次选中的具体版本写入 go.mod/go.sum；失败或并发变化不覆盖原文件，这样一次测试和发布仍然
 可复现。明确版本是 Go MVS 下限，不是禁止更高传递版本的上限。
 
-## 5. shared_mods 与 services
+## 5. cicd
+
+| 字段 | 当前值 | 含义 |
+| --- | --- | --- |
+| cicd.provider | github | 生成 GitHub Actions workflow |
+| cicd.registry | ghcr | Release 镜像推送到 GitHub Container Registry |
+| cicd.environments | staging、production | 两级晋级环境；production 应在仓库设置审批 |
+| cicd.deploy | shell、docker、k8s | 同时生成三种生产交付方式 |
+
+cicd 只声明非敏感策略。SSH 密钥、生产配置、registry token、kubeconfig 和 Secret 只能放在 GitHub
+Environment、self-hosted runner 或外部 Secret 系统中。普通 ci.yml 使用已经提交的 go.mod/go.sum；追踪
+latest 由 dependency-update.yml 创建 PR，release.yml 和三个 deploy workflow 只消费不可变版本或 digest。
+
+## 6. shared_mods 与 services
 
 shared_mods 适合 lock、ops、statslog 等进程级能力。services 是名称到配置的 map：
 
@@ -397,7 +416,7 @@ feature，并要求目标 Service 有 nest Mod。access.player.transports 是显
 | nest | Nest 调度接入 | nestwal |
 | saga | 跨服务 Saga 编排 | nestwal |
 
-## 6. features
+## 7. features
 
 features 只控制生成期形态，不会自动启动同名基础设施：
 
@@ -428,7 +447,7 @@ features 只控制生成期形态，不会自动启动同名基础设施：
 Feature 和 Mod 必须分别理解：config feature 生成配置代码，configdata mod 在运行时加载配置；
 nest feature 生成 handler/注册代码，nest mod 装配运行引擎。
 
-## 7. sagas
+## 8. sagas
 
 sagas 是 roost add saga 生成过的定义名称列表：
 
@@ -439,7 +458,7 @@ sagas 是 roost add saga 生成过的定义名称列表：
 不要只手工添加名字；使用 roost add saga，让定义文件、Service 的 saga mod、依赖和 bootstrap
 一起更新。删除前确认没有运行中的旧 definition version。
 
-## 8. ids
+## 9. ids
 
 普通编号空间使用 min/max 闭区间：
 
@@ -461,7 +480,7 @@ ComponentType 不能超过 65535；Protocol 消息 ID 不能超过 4294967295。
     roost id next entity
     roost id check
 
-## 9. 常用修改流程
+## 10. 常用修改流程
 
     roost project diff
     make sync
@@ -472,7 +491,7 @@ ComponentType 不能超过 65535；Protocol 消息 ID 不能超过 4294967295。
 project diff 只预览受控模板；sync 不覆盖业务拥有的 Service 实现和配置。升级整个模板使用
 make project-upgrade，更新框架依赖使用 make deps-update，更新完整项目依赖图使用 make roost-up。
 
-## 10. 常见错误
+## 11. 常见错误
 
 - cannot unmarshal / field not found：字段拼写错误或当前 schema 不支持；不要忽略。
 - repeats shared mod：把该 Mod 只保留在 shared_mods 或 Service 一处。

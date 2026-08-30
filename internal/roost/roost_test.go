@@ -165,6 +165,9 @@ func TestUpgradeCanReadVersionsBelowCurrentFloor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode legacy manifest for upgrade: %v", err)
 	}
+	if manifest.CICD.Provider != "github" || !contains(manifest.CICD.Deploy, "shell") || !contains(manifest.CICD.Deploy, "docker") || !contains(manifest.CICD.Deploy, "k8s") {
+		t.Fatalf("legacy manifest did not receive production CI/CD defaults: %+v", manifest.CICD)
+	}
 	mergeVersions(&manifest.Versions, VersionSpec{Core: "latest", Kit: "latest", Skill: "latest", Codegen: "latest"})
 	if err := saveManifest(root, manifest); err != nil {
 		t.Fatalf("save upgraded manifest: %v", err)
@@ -181,6 +184,29 @@ func TestProductionConfigRejectsDevelopmentValues(t *testing.T) {
 	}
 	if err := CheckConfig(path, true); err == nil {
 		t.Fatal("expected production config rejection")
+	}
+}
+
+func TestConfigCheckAllValidatesEveryDeclaredService(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Services: []string{"game", "gate"}, Mods: []string{"configdata"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := Run([]string{"config", "check", "--root", root, "--all"}, &output, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	for _, service := range []string{"game", "gate"} {
+		if !strings.Contains(output.String(), "config."+service+".yaml") {
+			t.Errorf("all-service config output missing %s:\n%s", service, output.String())
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "configs", "service", "config.gate.yaml"), []byte("invalid: ["), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"config", "check", "--root", root, "--all"}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "service gate") {
+		t.Fatalf("invalid secondary service config was not reported: %v", err)
 	}
 }
 
@@ -1233,8 +1259,120 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 		}
 	}
 	ci := string(plan[".github/workflows/ci.yml"].Body)
-	if !strings.Contains(ci, "make deps-update") {
-		t.Fatalf("generated CI does not test the latest framework set:\n%s", ci)
+	if strings.Contains(ci, "make deps-update") || strings.Contains(ci, "go get -u") {
+		t.Fatalf("ordinary generated CI must use the committed dependency graph:\n%s", ci)
+	}
+	for _, want := range []string{"go mod verify", "go test -race ./...", "docker compose", "kubectl kustomize"} {
+		if !strings.Contains(ci, want) {
+			t.Errorf("generated CI missing %q:\n%s", want, ci)
+		}
+	}
+	for _, path := range []string{
+		".github/workflows/dependency-update.yml",
+		".github/workflows/release.yml",
+		".github/workflows/deploy-shell.yml",
+		".github/workflows/deploy-docker.yml",
+		".github/workflows/deploy-k8s.yml",
+		".github/dependabot.yml",
+		".github/actionlint.yaml",
+		"deploy/docker/docker-compose.prod.yaml",
+		"deploy/docker/deploy.sh",
+		"deploy/docker/rollback.sh",
+		"deploy/k8s/deploy.sh",
+		"deploy/k8s/overlays/staging/kustomization.yaml",
+		"deploy/k8s/overlays/production/kustomization.yaml",
+		"cmd/healthprobe/main.go",
+	} {
+		if _, ok := plan[path]; !ok {
+			t.Errorf("generated CI/CD plan missing %s", path)
+		} else if strings.HasSuffix(path, ".yml") {
+			assertYAMLDocuments(t, path, plan[path].Body)
+			if strings.HasPrefix(path, ".github/workflows/") {
+				assertWorkflowActionsPinned(t, path, plan[path].Body)
+			}
+		}
+	}
+	dependencyUpdate := string(plan[".github/workflows/dependency-update.yml"].Body)
+	if !strings.Contains(dependencyUpdate, "project upgrade") || !strings.Contains(dependencyUpdate, "gh pr create") {
+		t.Fatalf("dependency updates must be isolated in a tested pull request workflow:\n%s", dependencyUpdate)
+	}
+	release := string(plan[".github/workflows/release.yml"].Body)
+	for _, want := range []string{"linux/amd64,linux/arm64", "SHA256SUMS", "attest-build-provenance", "sbom: true", "gh release create"} {
+		if !strings.Contains(release, want) {
+			t.Errorf("generated release workflow missing %q:\n%s", want, release)
+		}
+	}
+}
+
+func assertWorkflowActionsPinned(t *testing.T, path string, body []byte) {
+	t.Helper()
+	for lineNumber, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "- uses: ") && !strings.HasPrefix(line, "uses: ") {
+			continue
+		}
+		parts := strings.SplitN(line, "@", 2)
+		if len(parts) != 2 || strings.HasPrefix(strings.TrimSpace(parts[1]), "./") {
+			continue
+		}
+		ref := strings.Fields(parts[1])[0]
+		if len(ref) != 40 || strings.Trim(ref, "0123456789abcdef") != "" {
+			t.Errorf("%s:%d action is not pinned to a full commit SHA: %s", path, lineNumber+1, line)
+		}
+	}
+}
+
+func TestRepositoryWorkflowsAreValidAndPinned(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("repository has no workflows")
+	}
+	for _, path := range paths {
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		assertYAMLDocuments(t, filepath.ToSlash(path), raw)
+		assertWorkflowActionsPinned(t, filepath.ToSlash(path), raw)
+	}
+}
+
+func FuzzValidModulePath(f *testing.F) {
+	for _, seed := range []string{"example.com/planet", "github.com/acme/game-server", "", "../escape", "C:\\repo", "example.com//bad"} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, value string) {
+		_ = validModulePath(value)
+	})
+}
+
+func FuzzManifestDecode(f *testing.F) {
+	valid, err := DefaultManifest("planet", "example.com/planet", nil, nil, nil).Marshal()
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(valid)
+	f.Add([]byte("schema: [\x00"))
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		manifest := Manifest{CICD: defaultCICDSpec()}
+		decoder := yaml.NewDecoder(bytes.NewReader(raw))
+		decoder.KnownFields(true)
+		if decoder.Decode(&manifest) == nil {
+			_ = manifest.Validate()
+		}
+	})
+}
+
+func BenchmarkRenderProject(b *testing.B) {
+	manifest := DefaultManifest("planet", "example.com/planet", []string{"game", "gate"}, nil, nil)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if _, err := renderProject(manifest); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -1248,6 +1386,7 @@ func TestGeneratedBeginnerAndManifestDocumentationIsComplete(t *testing.T) {
 	for _, want := range []string{
 		"schema", "project.name", "project.module", "versions.core", "versions.kit",
 		"versions.skill", "versions.codegen", "shared_mods", "services.<name>.mods",
+		"cicd.provider", "cicd.registry", "cicd.environments", "cicd.deploy",
 		"access.player.service", "features", "sagas", "ids", "groups", "min", "max", "完整示例",
 		"Feature 和 Mod 必须分别理解", "roost id next protocol -group game",
 		minimumVersions.Core, minimumVersions.Kit, minimumVersions.Skill, minimumVersions.Codegen,

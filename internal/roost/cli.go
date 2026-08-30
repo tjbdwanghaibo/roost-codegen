@@ -12,6 +12,8 @@ import (
 	"strings"
 )
 
+var buildVersion string
+
 func Run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		printHelpOverview(stdout)
@@ -55,12 +57,33 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		}
 		fmt.Fprintln(stdout, "Go files are formatted")
 		return nil
+	case "framework":
+		return runFramework(args[1:], stdout, stderr)
 	case "help-make":
 		printMakeHelp(stdout)
 		return nil
 	default:
 		return fmt.Errorf("unknown command %q; run roost help", args[0])
 	}
+}
+
+func runFramework(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 || args[0] != "verify" {
+		return errors.New("usage: roost framework verify [--manifest path] [--expected-codegen version] [--lock path] [--github-output path]")
+	}
+	fs := flag.NewFlagSet("framework verify", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	manifest := fs.String("manifest", "ci/framework-release.yaml", "framework release manifest")
+	expected := fs.String("expected-codegen", "", "required codegen version, normally the release tag")
+	lock := fs.String("lock", "framework-lock.json", "output lock file; empty disables it")
+	githubOutput := fs.String("github-output", "", "optional GitHub Actions output file")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments %q", fs.Args())
+	}
+	return VerifyFrameworkRelease(*manifest, *expected, *lock, *githubOutput, stdout)
 }
 
 func runProject(args []string, stdout, stderr io.Writer) error {
@@ -353,6 +376,7 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	rootFlag := fs.String("root", ".", "project directory")
 	service := fs.String("service", "", "service name")
+	all := fs.Bool("all", false, "check every service config declared in roost.yaml")
 	production := fs.Bool("production", false, "enforce production-safe values")
 	file := fs.String("file", "", "explicit config path")
 	if err := fs.Parse(args[1:]); err != nil {
@@ -364,6 +388,25 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	root, err := projectRoot(*rootFlag)
 	if err != nil {
 		return err
+	}
+	if *all {
+		if *service != "" || *file != "" {
+			return errors.New("--all cannot be combined with --service or --file")
+		}
+		manifest, loadErr := LoadManifest(root)
+		if loadErr != nil {
+			return loadErr
+		}
+		var joined error
+		for _, name := range sortedServiceNames(manifest) {
+			path := filepath.Join(root, "configs", "service", "config."+name+".yaml")
+			if checkErr := CheckConfig(path, *production); checkErr != nil {
+				joined = errors.Join(joined, fmt.Errorf("service %s: %w", name, checkErr))
+				continue
+			}
+			fmt.Fprintf(stdout, "config ok: %s\n", filepath.ToSlash(path))
+		}
+		return joined
 	}
 	path := *file
 	if path == "" {
@@ -444,7 +487,7 @@ func normalizeNextIDArgs(args []string) []string {
 }
 
 func printMakeHelp(w io.Writer) {
-	fmt.Fprint(w, `Targets: next sync project-upgrade deps-update roost-up codegen-up doctor generate generate-changed check-generated config-check player-tcp-enable player-tcp-disable id-check build run test test-race ci dev-up dev-down dev-logs
+	fmt.Fprint(w, `Targets: next sync project-upgrade deps-update roost-up codegen-up doctor generate generate-changed check-generated config-check config-check-all player-tcp-enable player-tcp-disable id-check build run test test-race ci cicd-check release-check image-build compose-check k8s-render k8s-check deploy-shell rollback-shell deploy-docker rollback-docker deploy-k8s rollback-k8s dev-up dev-down dev-logs
 Scaffolds: new-entity NAME=Player | new-component NAME=Profile ENTITY=Player | new-handler NAME=RenamePlayer ENTITY=Player COMPONENT=Profile | new-dao NAME=Player ENTITY=Player
 `)
 }
@@ -471,7 +514,9 @@ func runVersion(args []string, stdout io.Writer) error {
 		return errors.New("usage: roost version")
 	}
 	version := "development"
-	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+	if buildVersion != "" {
+		version = buildVersion
+	} else if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
 		version = info.Main.Version
 	}
 	fmt.Fprintf(stdout, "roost-codegen %s\n", version)

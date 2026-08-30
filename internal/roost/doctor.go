@@ -72,6 +72,7 @@ func DoctorWithOptions(root string, options DoctorOptions, stdout io.Writer) err
 	} else {
 		report.Items = append(report.Items, CheckItem{Name: "ids", Status: StatusOK, Detail: "no conflicts"})
 	}
+	report.Items = append(report.Items, checkCICDTemplates(root)...)
 	if workflow := strings.TrimSpace(options.Workflow); workflow != "" {
 		items, workflowErr := checkWorkflow(root, m, workflow)
 		if workflowErr != nil {
@@ -84,6 +85,14 @@ func DoctorWithOptions(root string, options DoctorOptions, stdout io.Writer) err
 			report.Items = append(report.Items, CheckItem{Name: "generated", Status: StatusFail, Detail: err.Error()})
 		} else {
 			report.Items = append(report.Items, CheckItem{Name: "generated", Status: StatusOK, Detail: "up to date"})
+		}
+		var diff bytes.Buffer
+		if err := DiffProject(root, &diff); err != nil {
+			report.Items = append(report.Items, CheckItem{Name: "project-templates", Status: StatusFail, Detail: err.Error()})
+		} else if !strings.Contains(diff.String(), "summary: 0 file(s) would change") {
+			report.Items = append(report.Items, CheckItem{Name: "project-templates", Status: StatusFail, Detail: "managed templates are stale; run make sync"})
+		} else {
+			report.Items = append(report.Items, CheckItem{Name: "project-templates", Status: StatusOK, Detail: "up to date"})
 		}
 	}
 	if options.JSONOutput {
@@ -101,6 +110,40 @@ func DoctorWithOptions(root string, options DoctorOptions, stdout io.Writer) err
 		}
 	}
 	return errors.Join(failed...)
+}
+
+func checkCICDTemplates(root string) []CheckItem {
+	paths := []string{
+		".github/workflows/ci.yml",
+		".github/workflows/dependency-update.yml",
+		".github/workflows/release.yml",
+		".github/workflows/deploy-shell.yml",
+		".github/workflows/deploy-docker.yml",
+		".github/workflows/deploy-k8s.yml",
+		"deploy/shell/rollback.sh",
+		"deploy/docker/docker-compose.prod.yaml",
+		"deploy/k8s/overlays/staging/kustomization.yaml",
+		"deploy/k8s/overlays/production/kustomization.yaml",
+	}
+	items := make([]CheckItem, 0, len(paths)+1)
+	for _, rel := range paths {
+		if info, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil || !info.Mode().IsRegular() {
+			detail := "missing; run make sync"
+			if err != nil && !os.IsNotExist(err) {
+				detail = err.Error()
+			}
+			items = append(items, CheckItem{Name: "cicd:" + rel, Status: StatusFail, Detail: detail})
+		} else {
+			items = append(items, CheckItem{Name: "cicd:" + rel, Status: StatusOK, Detail: "present"})
+		}
+	}
+	ci, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
+	if err == nil && (bytes.Contains(ci, []byte("make deps-update")) || bytes.Contains(ci, []byte("go get -u"))) {
+		items = append(items, CheckItem{Name: "cicd:reproducible", Status: StatusFail, Detail: "ordinary CI must not resolve latest dependencies; run make sync"})
+	} else if err == nil {
+		items = append(items, CheckItem{Name: "cicd:reproducible", Status: StatusOK, Detail: "ordinary CI uses committed go.mod/go.sum"})
+	}
+	return items
 }
 
 func checkWorkflow(root string, manifest Manifest, workflow string) ([]CheckItem, error) {

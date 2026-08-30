@@ -8,15 +8,23 @@ import (
 
 func renderProductionDeployment(m Manifest) map[string]string {
 	files := map[string]string{
-		"deploy/shell/build.sh":           renderShellBuild(m),
-		"deploy/shell/install.sh":         renderShellInstall(m),
-		"deploy/shell/healthcheck.sh":     renderShellHealthcheck(),
-		"deploy/shell/README.md":          renderShellReadme(m),
-		"deploy/docker/README.md":         renderDockerReadme(m),
-		"deploy/k8s/namespace.yaml":       renderKubernetesNamespace(),
-		"deploy/k8s/service-account.yaml": renderKubernetesServiceAccount(m),
-		"deploy/k8s/network-policy.yaml":  renderKubernetesNetworkPolicy(m),
-		"deploy/k8s/README.md":            renderKubernetesReadme(m),
+		"deploy/shell/build.sh":                             renderShellBuild(m),
+		"deploy/shell/install.sh":                           renderShellInstall(m),
+		"deploy/shell/rollback.sh":                          renderShellRollback(m),
+		"deploy/shell/healthcheck.sh":                       renderShellHealthcheck(),
+		"deploy/shell/README.md":                            renderShellReadme(m),
+		"deploy/docker/README.md":                           renderDockerReadme(m),
+		"deploy/docker/docker-compose.prod.yaml":            renderProductionCompose(m),
+		"deploy/docker/env.example":                         renderDockerEnvExample(),
+		"deploy/docker/deploy.sh":                           renderDockerDeployScript(m),
+		"deploy/docker/rollback.sh":                         renderDockerRollbackScript(m),
+		"deploy/k8s/namespace.yaml":                         renderKubernetesNamespace(),
+		"deploy/k8s/service-account.yaml":                   renderKubernetesServiceAccount(m),
+		"deploy/k8s/network-policy.yaml":                    renderKubernetesNetworkPolicy(m),
+		"deploy/k8s/README.md":                              renderKubernetesReadme(m),
+		"deploy/k8s/deploy.sh":                              renderKubernetesDeployScript(m),
+		"deploy/k8s/overlays/staging/kustomization.yaml":    renderKubernetesOverlay("staging"),
+		"deploy/k8s/overlays/production/kustomization.yaml": renderKubernetesOverlay("production"),
 	}
 
 	services := sortedServiceNames(m)
@@ -213,6 +221,61 @@ printf 'ready: %s\n' "$URL"
 `
 }
 
+func renderShellRollback(m Manifest) string {
+	value := replaceDeployTokens(`#!/usr/bin/env sh
+set -eu
+
+if [ "$(id -u)" -ne 0 ]; then
+  printf 'rollback.sh must run as root\n' >&2
+  exit 1
+fi
+if [ "$#" -ne 3 ]; then
+  printf 'usage: %s <service> <sid> <version>\n' "$0" >&2
+  exit 2
+fi
+SERVICE=$1
+SID=$2
+VERSION=$3
+case " {{SERVICES}} " in *" $SERVICE "*) ;; *) printf 'unknown service: %s\n' "$SERVICE" >&2; exit 2;; esac
+case "$SID" in *[!0-9]*|'0'|'') printf 'sid must be a positive integer\n' >&2; exit 2;; esac
+case "$VERSION" in *[!a-zA-Z0-9._-]*|'') printf 'invalid version\n' >&2; exit 2;; esac
+
+INSTANCE={{APP}}-$SERVICE-$SID
+APP_ROOT=${APP_ROOT:-/opt/roost/$INSTANCE}
+TARGET=$APP_ROOT/releases/$VERSION
+CURRENT=$APP_ROOT/current
+[ -d "$TARGET" ] || { printf 'release not installed: %s\n' "$TARGET" >&2; exit 2; }
+PREVIOUS=$(readlink -f "$CURRENT" 2>/dev/null || true)
+[ "$PREVIOUS" != "$TARGET" ] || { printf 'release %s is already current\n' "$VERSION"; exit 0; }
+NEXT=$APP_ROOT/.current.$$
+trap 'rm -f "$NEXT"' EXIT HUP INT TERM
+ln -s "$TARGET" "$NEXT"
+mv -Tf "$NEXT" "$CURRENT"
+systemctl restart "$INSTANCE.service"
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+HEALTH_URL=${HEALTH_URL:-http://127.0.0.1:9100/readyz}
+HEALTH_ATTEMPTS=${HEALTH_ATTEMPTS:-30}
+attempt=1
+while [ "$attempt" -le "$HEALTH_ATTEMPTS" ]; do
+  if sh "$ROOT/deploy/shell/healthcheck.sh" "$HEALTH_URL" >/dev/null 2>&1; then
+    printf 'rolled back %s to %s\n' "$INSTANCE" "$VERSION"
+    exit 0
+  fi
+  attempt=$((attempt + 1))
+  sleep 1
+done
+if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ]; then
+  ln -s "$PREVIOUS" "$NEXT"
+  mv -Tf "$NEXT" "$CURRENT"
+  systemctl restart "$INSTANCE.service" || true
+fi
+printf 'rollback target failed readiness; restored previous release\n' >&2
+exit 1
+`, m)
+	return strings.ReplaceAll(value, "{{SERVICES}}", strings.Join(sortedServiceNames(m), " "))
+}
+
 func renderShellReadme(m Manifest) string {
 	return replaceDeployTokens(`# Shell/systemd 部署
 
@@ -220,8 +283,9 @@ func renderShellReadme(m Manifest) string {
 2. 从 configs/service/config.<service>.prod.example.yaml 复制生产配置，替换全部 CHANGE_ME，为每个 SID 设置独占 WAL 目录。
 3. 执行 sudo sh deploy/shell/install.sh <service> <sid> <version> <config>。
 4. 用 sh deploy/shell/healthcheck.sh 验证 readiness。
+5. 需要人工回退时执行 sudo sh deploy/shell/rollback.sh <service> <sid> <installed-version>。
 
-安装器把二进制和配置写入不可变版本化 releases 目录并生成 SHA256SUMS，原子切换 current，创建专用 systemd unit、非登录用户、只读系统保护和 SIGTERM 45 秒停机预算。同一版本名拒绝覆盖。readiness 未在预算内成功时自动切回上一 release；首次安装失败则停服。多实例部署必须使用不同 SID、配置文件和 WAL 目录；不要让两个进程共享 WAL。可用 HEALTH_URL/HEALTH_ATTEMPTS 覆盖探测地址和次数。
+安装器把二进制和配置写入不可变版本化 releases 目录并生成 SHA256SUMS，原子切换 current，创建专用 systemd unit、非登录用户、只读系统保护和 SIGTERM 45 秒停机预算。同一版本名拒绝覆盖。readiness 未在预算内成功时自动切回上一 release；首次安装失败则停服。rollback.sh 只允许切换到已经安装且不可变的版本，目标版本 readiness 失败会恢复原版本。多实例部署必须使用不同 SID、配置文件和 WAL 目录；不要让两个进程共享 WAL。可用 HEALTH_URL/HEALTH_ATTEMPTS 覆盖探测地址和次数。
 `, m)
 }
 
@@ -248,7 +312,128 @@ func renderDockerReadme(m Manifest) string {
       {{APP}}:v1.0.0 %s --sid 1000 --config /etc/roost/config.yaml
 
 配置必须让 ops 监听 0.0.0.0:9100，日志输出 stdout，WAL 使用挂载卷。%s 镜像 tag 必须不可变，生产流水线应进一步使用 digest、签名和 SBOM。
+
+生产 Compose：
+
+    cp deploy/docker/env.example deploy/docker/.env.production
+    # 编辑 ROOST_CONFIG_ROOT，准备每个 Service 的 config.<service>.yaml
+    ROOST_IMAGE=ghcr.io/example/{{APP}}@sha256:<digest> sh deploy/docker/deploy.sh
+    sh deploy/docker/rollback.sh
+
+deploy.sh 要求 digest，使用容器内 /app/healthprobe 等待所有实例 readiness，并记录 current/previous image。生产 workflow 使用受保护 Environment 和带 roost-docker 标签的 self-hosted runner。
 `, service, playerPort, service, playerNote), m)
+}
+
+func renderDockerDeployScript(m Manifest) string {
+	return replaceDeployTokens(`#!/usr/bin/env sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+COMPOSE=$ROOT/deploy/docker/docker-compose.prod.yaml
+STATE_DIR=${ROOST_DEPLOY_STATE_DIR:-$ROOT/.roost-deploy}
+ENV_FILE=${ROOST_ENV_FILE:-$ROOT/deploy/docker/.env.production}
+: "${ROOST_IMAGE:?ROOST_IMAGE must contain an immutable ghcr.io image digest}"
+case "$ROOST_IMAGE" in *@sha256:*) ;; *) printf 'ROOST_IMAGE must use an immutable digest\n' >&2; exit 2;; esac
+[ -f "$ENV_FILE" ] || { printf 'environment file not found: %s\n' "$ENV_FILE" >&2; exit 2; }
+
+mkdir -p "$STATE_DIR"
+PREVIOUS=
+if [ -f "$STATE_DIR/current-image" ]; then
+  PREVIOUS=$(sed -n '1p' "$STATE_DIR/current-image")
+fi
+printf '%s\n' "$ROOST_IMAGE" > "$STATE_DIR/pending-image"
+
+cd "$ROOT"
+export ROOST_IMAGE
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE" config --quiet
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE" pull
+if docker compose --env-file "$ENV_FILE" -f "$COMPOSE" up -d --remove-orphans --wait --wait-timeout 120; then
+  mv "$STATE_DIR/pending-image" "$STATE_DIR/current-image"
+  [ -z "$PREVIOUS" ] || printf '%s\n' "$PREVIOUS" > "$STATE_DIR/previous-image"
+  printf 'deployed {{APP}} image %s\n' "$ROOST_IMAGE"
+  exit 0
+fi
+
+printf 'deployment failed readiness\n' >&2
+rm -f "$STATE_DIR/pending-image"
+if [ -n "$PREVIOUS" ]; then
+  ROOST_IMAGE=$PREVIOUS sh "$ROOT/deploy/docker/rollback.sh"
+fi
+exit 1
+`, m)
+}
+
+func renderDockerEnvExample() string {
+	return `# Copy to .env.production on the deployment host. Do not commit it.
+# This directory contains one config.<service>.yaml for every generated service.
+ROOST_CONFIG_ROOT=/etc/roost
+`
+}
+
+func renderDockerRollbackScript(m Manifest) string {
+	return replaceDeployTokens(`#!/usr/bin/env sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+COMPOSE=$ROOT/deploy/docker/docker-compose.prod.yaml
+STATE_DIR=${ROOST_DEPLOY_STATE_DIR:-$ROOT/.roost-deploy}
+ENV_FILE=${ROOST_ENV_FILE:-$ROOT/deploy/docker/.env.production}
+if [ -z "${ROOST_IMAGE:-}" ]; then
+  [ -f "$STATE_DIR/previous-image" ] || { printf 'no previous image recorded\n' >&2; exit 2; }
+  ROOST_IMAGE=$(sed -n '1p' "$STATE_DIR/previous-image")
+fi
+case "$ROOST_IMAGE" in *@sha256:*) ;; *) printf 'rollback image must use an immutable digest\n' >&2; exit 2;; esac
+
+cd "$ROOT"
+export ROOST_IMAGE
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE" pull
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE" up -d --remove-orphans --wait --wait-timeout 120
+printf '%s\n' "$ROOST_IMAGE" > "$STATE_DIR/current-image"
+printf 'rolled back {{APP}} to %s\n' "$ROOST_IMAGE"
+`, m)
+}
+
+func renderKubernetesOverlay(environment string) string {
+	return fmt.Sprintf(`# Code generated by roost-codegen. DO NOT EDIT.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../..
+commonLabels:
+  roost.tjbdwanghaibo.io/environment: %s
+`, environment)
+}
+
+func renderKubernetesDeployScript(m Manifest) string {
+	return replaceDeployTokens(`#!/usr/bin/env sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+ENVIRONMENT=${ENVIRONMENT:-staging}
+: "${ROOST_IMAGE:?ROOST_IMAGE must contain an immutable ghcr.io image digest}"
+case "$ENVIRONMENT" in staging|production) ;; *) printf 'ENVIRONMENT must be staging or production\n' >&2; exit 2;; esac
+case "$ROOST_IMAGE" in *@sha256:*) ;; *) printf 'ROOST_IMAGE must use an immutable digest\n' >&2; exit 2;; esac
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT HUP INT TERM
+cp -R "$ROOT/deploy/k8s" "$WORK/k8s"
+cd "$WORK/k8s/overlays/$ENVIRONMENT"
+kubectl kustomize . >/dev/null
+if command -v kustomize >/dev/null 2>&1; then
+  kustomize edit set image ghcr.io/CHANGE_ME/{{APP}}="$ROOST_IMAGE"
+else
+  printf 'kustomize CLI is required for an immutable image deployment\n' >&2
+  exit 2
+fi
+kubectl kustomize . > "$WORK/rendered.yaml"
+kubectl apply --server-side --dry-run=server -f "$WORK/rendered.yaml" >/dev/null
+kubectl apply --server-side -f "$WORK/rendered.yaml"
+
+kubectl -n roost get deployment,statefulset -l app.kubernetes.io/name={{APP}} -o name | while IFS= read -r workload; do
+  [ -z "$workload" ] || kubectl -n roost rollout status "$workload" --timeout=180s
+done
+printf 'deployed {{APP}} image %s to %s\n' "$ROOST_IMAGE" "$ENVIRONMENT"
+`, m)
 }
 
 func renderKubernetesNamespace() string {
@@ -402,11 +587,11 @@ func renderKubernetesReadme(m Manifest) string {
 	}
 	return fmt.Sprintf(`# Kubernetes 部署
 
-模板默认每个 Service 一个副本和唯一 SID，避免多个 writer 共享身份或 WAL。先创建配置 Secret，再应用 Kustomize：
+模板默认每个 Service 一个副本和唯一 SID，避免多个 writer 共享身份或 WAL。先创建配置 Secret，再选择 staging/production overlay。生产流水线使用不可变 digest 和 deploy.sh：
 
 %s
     kubectl apply -f deploy/k8s/secret.<service>.local.yaml
-    kubectl apply -k deploy/k8s
+    ENVIRONMENT=staging ROOST_IMAGE=ghcr.io/example/%s@sha256:<digest> sh deploy/k8s/deploy.sh
     kubectl -n roost rollout status <deployment-or-statefulset>/%s-<service>
 
 生产要求：
@@ -418,7 +603,7 @@ func renderKubernetesReadme(m Manifest) string {
 - 声明 player TCP 时模板会开放 Service 7000，但只允许带 roost.tjbdwanghaibo.io/player-access=true 标签的调用方命名空间；监听端口变化时同步修改 Service、LB 和 NetworkPolicy。
 - /healthz 仅表示进程存活，流量切换必须使用 /readyz；terminationGracePeriodSeconds 必须大于框架总停机预算。
 - 上线前补 NetworkPolicy、镜像签名校验、监控抓取权限以及节点/PVC 故障演练。
-`, services.String(), m.Project.Name, m.Project.Name)
+`, services.String(), m.Project.Name, m.Project.Name, m.Project.Name)
 }
 
 func renderImplementationGuide(m Manifest) string {
@@ -464,17 +649,25 @@ func renderDeploymentGuide(m Manifest) string {
 3. 先看 readiness 再接流量；SIGTERM 后等待 checkpoint、WAL、NATS 和服务 Shutdown 收敛。
 4. 发布前执行 make ci、配置检查、数据库迁移检查和故障演练；镜像使用不可变 digest。
 
+## CI/CD 流水线
+
+- .github/workflows/ci.yml 只使用已提交的 go.mod/go.sum，不在普通 PR 中解析 latest。
+- dependency-update.yml 定时更新 codegen、框架和项目依赖，通过完整测试后创建 PR。
+- release.yml 在 vMAJOR.MINOR.PATCH tag 上构建 Linux amd64/arm64 包、SHA256SUMS 和多架构 OCI 镜像，并生成 SBOM/provenance。
+- deploy-shell.yml、deploy-docker.yml、deploy-k8s.yml 只部署不可变版本或 digest；production 必须在 GitHub Environment 配置审批。
+- staging 和 production 晋级同一制品，不能按环境重新编译。
+
 ## Shell/systemd
 
-使用 deploy/shell/build.sh 与 install.sh。适合物理机或 VM；systemd 负责重启、停机预算、用户隔离和文件系统保护。
+使用 deploy/shell/build.sh、install.sh 与 rollback.sh。适合物理机或 VM；systemd 负责重启、停机预算、用户隔离和文件系统保护。CI 默认使用带 roost-shell 标签的 Linux self-hosted runner，避免在 GitHub 中保存长期 SSH 私钥。
 
 ## Docker
 
-Dockerfile 生成不包含配置的 distroless 非 root 镜像。运行时只读根文件系统，外挂配置和 WAL volume，丢弃 Linux capabilities。
+Dockerfile 生成不包含配置的 distroless 非 root 镜像，并包含独立 healthprobe。deploy/docker/docker-compose.prod.yaml 用同一 digest 启动各 Service，运行时只读根文件系统，外挂配置和独占 WAL volume，丢弃 Linux capabilities。deploy.sh 保存前一个 digest并在 readiness 失败时调用 rollback.sh。
 
 ## Kubernetes
 
-deploy/k8s 使用 Secret 挂载完整配置，提供 startup/readiness/liveness probe、资源上下限、PDB、非 root/只读根文件系统。带 nestwal 的 Service 使用单副本 StatefulSet 和独占 PVC；无状态 Service 使用单副本 Deployment，确认 SID 分配策略后再扩容。
+deploy/k8s 使用 base 与 overlays/staging、overlays/production，Secret 挂载完整配置，提供 startup/readiness/liveness probe、资源上下限、PDB、非 root/只读根文件系统。deploy.sh 要求不可变镜像 digest，先 server-side dry-run 再 apply 并等待 rollout。带 nestwal 的 Service 使用单副本 StatefulSet 和独占 PVC；无状态 Service 使用单副本 Deployment，确认 SID 分配策略后再扩容。
 
 ## 灰度、升级和回滚
 

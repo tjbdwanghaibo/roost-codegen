@@ -7,6 +7,8 @@ roost 框架的项目脚手架与代码生成工具链：用源码里的标记�
 文档按三级使用：完全新手先看 [小白逐步操作手册](docs/BEGINNER_WORKBOOK.zh-CN.md)，并在项目里反复运行
 `roost project next`；熟练用户看 [项目生成器完整说明](docs/PROJECT_GENERATOR.zh-CN.md)；维护者再看生成器的
 关键实现细节和 [Roost 实现原理](https://github.com/tjbdwanghaibo/cube-core/blob/main/docs/INTERNALS.md)。
+框架仓库与生成项目的质量门禁、兼容矩阵、依赖升级、Release，以及 Shell/Docker/Kubernetes 三种交付方式见
+[CI/CD P0/P1 实施方案](docs/CI_CD_IMPLEMENTATION.zh-CN.md)。
 
 完全第一次使用先看 [小白逐步操作手册](docs/BEGINNER_WORKBOOK.zh-CN.md)；
 逐个命令、marker、输入输出和完整用例见 [全功能使用手册与用例](docs/CODEGEN_REFERENCE.zh-CN.md)；
@@ -99,7 +101,7 @@ roost project deps --help     # 等价于 roost help versions
 roost add dao --help          # 等价于 roost help dao
 ```
 
-内置专题包括：`environment`、`beginner`、`project`、`versions`、`generate`、`add`、`mods`、`access`、`transport`、`lifecycle`、`endpoint`、`skill`、`dao`、`entity`、`nest`、`protocol`、`cfggen`、`tablegen`、`eventgen`、`attribute`、`webroute`、`errcode`、`saga`、`replication`、`config`、`id`、`format`、`deploy`。常用别名也可查询，例如 `roost help start`、`roost help player-tcp`、`roost help protocol-to-nest`、`roost help k8s`。
+内置专题包括：`environment`、`beginner`、`project`、`versions`、`framework-release`、`generate`、`add`、`mods`、`access`、`transport`、`lifecycle`、`endpoint`、`skill`、`dao`、`entity`、`nest`、`protocol`、`cfggen`、`tablegen`、`eventgen`、`attribute`、`webroute`、`errcode`、`saga`、`replication`、`config`、`id`、`format`、`deploy`。常用别名也可查询，例如 `roost help start`、`roost help release-train`、`roost help player-tcp`、`roost help protocol-to-nest`、`roost help k8s`。
 
 专题输出固定包含四部分：用途、命令、配置/标记和示例。未知能力会失败并提示先运行 `roost help`，适合脚本和 CI 发现拼写错误。
 
@@ -143,7 +145,27 @@ go run github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest project upgrade -
 
 `-features`（生成哪些代码：13 个开关）与 `-mods`（运行时装配哪些 Kit Mod：14 个，依赖自动展开）的完整清单见 [docs/PROJECT_GENERATOR.zh-CN.md](docs/PROJECT_GENERATOR.zh-CN.md) 第 4、5 节。
 
-新项目的 `roost.yaml` 默认将 core、kit、skill、codegen 都声明为 `latest`。`project new/sync/deps` 会把 core、kit、skill 作为三个直接依赖一次性执行 `go get ...@latest`，再 `go mod tidy`；因此 kit/skill 的旧下限不会把底层 core 降级。Go 不允许在 `go.mod` 的 `require` 中写查询值 `latest`，所以落盘的是本次解析出的具体版本与 `go.sum`，策略仍保存在 `roost.yaml`。CI 会重新解析最新版本，发布构建则使用该次已经解析并测试过的具体依赖图。
+新项目的 `roost.yaml` 默认将 core、kit、skill、codegen 都声明为 `latest`。`project new/sync/deps` 会把 core、kit、skill 作为三个直接依赖一次性执行 `go get ...@latest`，再 `go mod tidy`；因此 kit/skill 的旧下限不会把底层 core 降级。Go 不允许在 `go.mod` 的 `require` 中写查询值 `latest`，所以落盘的是本次解析出的具体版本与 `go.sum`，策略仍保存在 `roost.yaml`。普通 PR CI 只验证已经提交的具体依赖图；每周 `dependency-update.yml` 才会解析 latest、执行完整测试并创建升级 PR，正式发布继续使用已评审和测试过的同一依赖图。
+
+每个新项目默认生成可直接启用的 CI/CD：
+
+- `ci.yml`：Linux/Windows、race、生成幂等、全 Service 配置、ShellCheck、Compose、Kustomize 和镜像构建。
+- `security.yml`：govulncheck、Dependency Review 和 CodeQL。
+- `release.yml`：Linux amd64/arm64 包、SHA256、SBOM、provenance 和多架构 GHCR 镜像。
+- `deploy-shell.yml`、`deploy-docker.yml`、`deploy-k8s.yml`：使用 staging/production Environment 晋级同一不可变制品。
+
+所有第三方 GitHub Action 固定完整 commit SHA，并由 Dependabot 提交升级 PR。执行 `make cicd-check` 可在提交前检查业务代码和三套部署模板；具体 runner、Environment 和 Secret 配置见生成项目的 `docs/DEPLOYMENT.zh-CN.md`。
+
+框架维护者发布 codegen 前还要执行发布列车校验：
+
+```bash
+roost framework verify --manifest ci/framework-release.yaml --expected-codegen v1.10.0 --lock framework-lock.json
+```
+
+tag 触发的 `framework-release` workflow 会锁定 core/kit/skill 精确版本，拒绝 replace 和框架内部伪版本，
+按清单中的 `consumer_go` 动态矩阵生成真实消费项目，并对 Linux、Windows、macOS CLI 做 smoke。通过受保护 Environment
+后才发布多平台压缩包、checksum、SBOM、provenance 和 framework-lock。详细约束见
+[CI/CD P0/P1/P2 实施方案](docs/CI_CD_IMPLEMENTATION.zh-CN.md)。
 
 ### 2. 写一个带 dao 标记的 struct
 

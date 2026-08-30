@@ -24,7 +24,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	// Keep the file present so Docker's deterministic `COPY go.mod go.sum ./`
 	// works before the first local `go mod tidy`. Sync never overwrites it.
 	add("go.sum", "", false)
-	add(".gitignore", "bin/\ndist/\nlog/\n.env\n*.local.yaml\ndeploy/k8s/secret.*.local.yaml\n.idea/\n.vscode/\n", false)
+	add(".gitignore", "bin/\ndist/\nlog/\n.roost-deploy/\n.env\ndeploy/docker/.env.*\n*.local.yaml\ndeploy/k8s/secret.*.local.yaml\n.idea/\n.vscode/\n", false)
 	add("Makefile", renderMakefile(m), true)
 	add("README.md", renderProjectReadme(m), false)
 	add("docs/QUICKSTART.zh-CN.md", renderBeginnerQuickstart(m), true)
@@ -39,6 +39,14 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	add("docs/TROUBLESHOOTING.zh-CN.md", renderTroubleshootingGuide(m), true)
 	add("docs/USAGE.zh-CN.md", renderUsage(m), true)
 	add(".github/workflows/ci.yml", renderCI(m), true)
+	add(".github/workflows/dependency-update.yml", renderDependencyUpdateCI(m), true)
+	add(".github/workflows/release.yml", renderReleaseCI(m), true)
+	add(".github/workflows/deploy-shell.yml", renderShellDeployCI(m), true)
+	add(".github/workflows/deploy-docker.yml", renderDockerDeployCI(m), true)
+	add(".github/workflows/deploy-k8s.yml", renderKubernetesDeployCI(m), true)
+	add(".github/workflows/security.yml", renderGeneratedSecurityCI(), true)
+	add(".github/dependabot.yml", renderDependabot(), true)
+	add(".github/actionlint.yaml", renderActionlintConfig(), true)
 	add("deploy/dev/docker-compose.yaml", renderCompose(m), true)
 	add("Dockerfile", renderDockerfile(m), true)
 	for path, body := range renderProductionDeployment(m) {
@@ -48,6 +56,9 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	add("docs/IMPLEMENTATION.zh-CN.md", renderImplementationGuide(m), true)
 	add("docs/DEPLOYMENT.zh-CN.md", renderDeploymentGuide(m), true)
 	if err := addGo("main.go", renderMain(m), false); err != nil {
+		return nil, err
+	}
+	if err := addGo("cmd/healthprobe/main.go", renderHealthProbe(), true); err != nil {
 		return nil, err
 	}
 	if err := addGo("internal/bootstrap/generated.go", renderBootstrap(m), true); err != nil {
@@ -438,12 +449,16 @@ NEXT_WORKFLOW ?=
 SID ?= 1000
 CONFIG ?= configs/service/config.$(SERVICE).yaml
 VERSION ?= dev
+ENV ?= staging
+IMAGE ?=
+ENV_FILE ?= deploy/docker/.env.production
+WORKLOAD ?=
 COMMIT := $(shell git rev-parse --short HEAD)
 BUILD_TIME := $(shell git show -s --format=%%cI HEAD)
 DIRTY := $(shell git status --porcelain)
 LDFLAGS := -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Version=$(VERSION) -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Commit=$(COMMIT) -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.BuildTime=$(BUILD_TIME) -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Dirty=$(DIRTY)
 
-.PHONY: help sync project-upgrade deps-update roost-up codegen-up next doctor fmt fmt-check vet test test-race build run generate generate-changed check-generated config-check player-tcp-enable player-tcp-disable id-check ci dev-up dev-down dev-logs clean
+.PHONY: help sync project-upgrade deps-update roost-up codegen-up next doctor fmt fmt-check vet test test-race build run generate generate-changed check-generated config-check config-check-all player-tcp-enable player-tcp-disable id-check ci cicd-check release-check image-build compose-check k8s-render k8s-check deploy-shell rollback-shell deploy-docker rollback-docker deploy-k8s rollback-k8s dev-up dev-down dev-logs clean
 .PHONY: new-service add-mod new-access new-transport new-module new-protocol new-entity new-component new-handler new-lifecycle new-endpoint new-skill new-event new-table new-dao new-webroute new-errcode new-saga
 
 help:
@@ -485,6 +500,8 @@ check-generated:
 	$(ROOST) generate --check
 config-check:
 	$(ROOST) config check --service $(SERVICE)
+config-check-all:
+	$(ROOST) config check --all
 player-tcp-enable:
 	$(ROOST) config enable player-tcp --service $(SERVICE)
 player-tcp-disable:
@@ -527,7 +544,32 @@ new-errcode:
 	$(ROOST) add errcode $(NAME)
 new-saga:
 	$(ROOST) add saga $(NAME) -service $(SERVICE) -steps $(STEPS)
-ci: fmt-check vet test test-race check-generated config-check id-check
+ci: fmt-check vet test test-race check-generated config-check-all id-check
+cicd-check: ci compose-check k8s-check
+release-check: cicd-check
+	@test -z "$(DIRTY)" || (echo "release requires a clean worktree"; exit 1)
+	@echo "$(VERSION)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$$' || (echo "VERSION must be vMAJOR.MINOR.PATCH"; exit 1)
+image-build:
+	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t $(APP_NAME):$(VERSION) .
+compose-check:
+	ROOST_IMAGE=ghcr.io/example/$(APP_NAME)@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ROOST_CONFIG_ROOT=configs/service docker compose -f deploy/docker/docker-compose.prod.yaml config --quiet
+k8s-render:
+	kubectl kustomize deploy/k8s/overlays/$(ENV)
+k8s-check:
+	kubectl kustomize deploy/k8s/overlays/staging >/dev/null
+	kubectl kustomize deploy/k8s/overlays/production >/dev/null
+deploy-shell:
+	sudo sh deploy/shell/install.sh $(SERVICE) $(SID) $(VERSION) $(CONFIG)
+rollback-shell:
+	sudo sh deploy/shell/rollback.sh $(SERVICE) $(SID) $(VERSION)
+deploy-docker:
+	ROOST_IMAGE=$(IMAGE) ROOST_ENV_FILE=$(ENV_FILE) sh deploy/docker/deploy.sh
+rollback-docker:
+	ROOST_ENV_FILE=$(ENV_FILE) sh deploy/docker/rollback.sh
+deploy-k8s:
+	ENVIRONMENT=$(ENV) ROOST_IMAGE=$(IMAGE) sh deploy/k8s/deploy.sh
+rollback-k8s:
+	kubectl -n roost rollout undo $(WORKLOAD)
 dev-up:
 	docker compose -f deploy/dev/docker-compose.yaml up -d
 dev-down:
@@ -551,38 +593,96 @@ func codegenVersion(m Manifest) string {
 }
 
 func renderCI(m Manifest) string {
-	return fmt.Sprintf(`# Code generated by roost-codegen. DO NOT EDIT.
+	return replaceDeployTokens(`# Code generated by roost-codegen. DO NOT EDIT.
 name: ci
 on:
   push:
+    branches: [main, master]
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  quality:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: true
       - name: release module has no replace
+        shell: bash
         run: |
           if grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod; then
             echo "project go.mod must use published modules without replace"
             exit 1
           fi
-      - name: resolve latest framework releases
-        run: make deps-update
       - run: go mod download
+      - run: go mod verify
+      - name: validate GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: module files are tidy
+        shell: bash
+        run: |
+          cp go.mod "${RUNNER_TEMP}/go.mod.before"
+          cp go.sum "${RUNNER_TEMP}/go.sum.before"
+          GOWORK=off go mod tidy
+          cmp go.mod "${RUNNER_TEMP}/go.mod.before"
+          cmp go.sum "${RUNNER_TEMP}/go.sum.before"
+      - run: go test ./...
+      - if: runner.os == 'Linux'
+        run: go vet ./...
+      - if: runner.os == 'Linux'
+        run: go test -race ./...
+
+  generated-and-deployment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - run: go mod verify
+      - name: generated files and project configuration are current
+        run: |
+          make check-generated
+          make config-check-all
+          make id-check
       - name: deployment shell syntax
         run: |
           for script in deploy/shell/*.sh; do
             sh -n "$script"
           done
+          shellcheck deploy/shell/*.sh deploy/docker/*.sh deploy/k8s/*.sh
+      - name: production compose renders
+        env:
+          ROOST_IMAGE: ghcr.io/example/{{APP}}@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          ROOST_CONFIG_ROOT: configs/service
+        run: docker compose -f deploy/docker/docker-compose.prod.yaml config --quiet
+      - name: kubernetes manifests render
+        run: |
+          kubectl kustomize deploy/k8s/overlays/staging > "${RUNNER_TEMP}/staging.yaml"
+          kubectl kustomize deploy/k8s/overlays/production > "${RUNNER_TEMP}/production.yaml"
+          docker run --rm -i ghcr.io/yannh/kubeconform:v0.7.0-alpine -strict -summary < "${RUNNER_TEMP}/staging.yaml"
+          docker run --rm -i ghcr.io/yannh/kubeconform:v0.7.0-alpine -strict -summary < "${RUNNER_TEMP}/production.yaml"
       - name: production container builds
-        run: docker build --build-arg VERSION=ci -t %s:ci .
-      - run: make ci
-`, m.Project.Name)
+        run: docker build --build-arg VERSION=ci -t {{APP}}:ci .
+`, m)
 }
 
 func renderCompose(m Manifest) string {
@@ -638,16 +738,56 @@ ARG COMMIT=unknown
 ARG BUILD_TIME=unknown
 RUN CGO_ENABLED=0 go build -trimpath \
     -ldflags "-s -w -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Version=${VERSION} -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Commit=${COMMIT} -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.BuildTime=${BUILD_TIME}" \
-    -o /out/%s .
+    -o /out/%s . && \
+    CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/healthprobe ./cmd/healthprobe
 %s
 
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --chown=65532:65532 --from=build /out/%s /app/%s
+COPY --chown=65532:65532 --from=build /out/healthprobe /app/healthprobe
 %s%s
 USER nonroot:nonroot
 ENTRYPOINT ["/app/%s"]
 `, m.Project.Name, walBuild, m.Project.Name, m.Project.Name, walRuntime, exposedPorts, m.Project.Name)
+}
+
+func renderHealthProbe() string {
+	return `// Code generated by roost-codegen. DO NOT EDIT.
+package main
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"os"
+	"time"
+)
+
+func main() {
+	url := "http://127.0.0.1:9100/readyz"
+	if len(os.Args) == 2 {
+		url = os.Args[1]
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		fmt.Fprintln(os.Stderr, resp.Status)
+		os.Exit(1)
+	}
+}
+`
 }
 
 func renderProjectReadme(m Manifest) string {

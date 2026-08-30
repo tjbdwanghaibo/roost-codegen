@@ -99,6 +99,19 @@ make roost-up
 make codegen-up`,
 	},
 	{
+		Name: "framework-release", Aliases: []string{"framework", "release-train", "framework-lock"},
+		Summary: "校验 core、kit、skill 精确发布集合并生成不可变框架锁",
+		Usage: `roost framework verify --manifest ci/framework-release.yaml --expected-codegen v1.10.0 --lock framework-lock.json
+roost framework verify --github-output "$GITHUB_OUTPUT"`,
+		Configuration: `ci/framework-release.yaml 只能使用 vMAJOR.MINOR.PATCH，不能使用 latest 或伪版本。verify 从 Go module proxy 获取三个已发布模块，校验 module path、checksum、replace 和框架内部伪版本依赖，然后生成 framework-lock.json。codegen release workflow 只有在完整生成项目兼容矩阵通过后才进入受保护 framework-release Environment。`,
+		Example: `schema: 1
+codegen: v1.10.0
+framework: {core: v1.9.1, kit: v1.9.2, skill: v1.9.1}
+consumer_go: [1.25.x, 1.26.x]
+
+roost framework verify --expected-codegen v1.10.0`,
+	},
+	{
 		Name: "generate", Aliases: []string{"gen"},
 		Summary:       "按依赖顺序运行项目启用的全部生成器",
 		Usage:         `roost generate [--changed] [--dry-run] [--check] [--force] [--root dir]`,
@@ -327,10 +340,12 @@ roost project sync`,
 		Name: "config", Aliases: []string{"config-check"},
 		Summary: "检查服务 YAML，并安全启停 player TCP",
 		Usage: `roost config check --service <name> [--production] [--file path] [--root dir]
+roost config check --all [--production] [--root dir]
 roost config enable player-tcp [--service <name>] [--file path]
 roost config disable player-tcp [--service <name>] [--file path]`,
 		Configuration: `add transport tcp 会自动把禁用状态的完整配置补进开发和生产示例，不覆盖其他 YAML 内容。enable 会先检查 auth.go 不再是默认拒绝骨架，再只修改 enabled 标量；disable 始终可用。check 要求合法 YAML 和 sid，--production 还拒绝危险默认值。`,
-		Example: `roost config check --service game
+		Example: `roost config check --all
+roost config check --service game
 roost config enable player-tcp --service game
 roost project doctor --workflow player-tcp
 roost config disable player-tcp --service game
@@ -358,14 +373,14 @@ roost format check`,
 		Name: "deploy", Aliases: []string{"deployment", "docker", "kubernetes", "k8s", "shell"},
 		Summary: "生成 Shell/systemd、Docker 和 Kubernetes 生产部署基线",
 		Usage: `roost project sync
-make build
-docker build -t <app>:<version> .
-kubectl apply -k deploy/k8s`,
-		Configuration: `Shell 使用版本化 release、校验和、原子切换和 readiness 回滚；Docker 使用 distroless nonroot；K8s 挂载 Secret、配置探针/PDB/NetworkPolicy，带 WAL 的服务使用 StatefulSet 与独占 RWO PVC。`,
-		Example: `sh deploy/shell/build.sh
-docker build --build-arg VERSION=v1.0.0 -t planet:v1.0.0 .
-kubectl apply -f deploy/k8s/secret.game.local.yaml
-kubectl apply -k deploy/k8s`,
+make cicd-check
+make image-build VERSION=v1.0.0
+make k8s-render ENV=staging`,
+		Configuration: `生成项目包含可复现 CI、独立依赖升级、Release，以及 Shell、Docker、K8s 三套受保护环境部署 workflow。Shell 使用不可变 release、校验和、原子切换和 readiness 回滚；Docker 使用 digest、distroless nonroot 和 Compose 健康检查；K8s 使用 staging/production overlay、server-side dry-run、探针/PDB/NetworkPolicy，带 WAL 的服务使用 StatefulSet 与独占 RWO PVC。普通 CI 不解析 latest。`,
+		Example: `make cicd-check
+make deploy-shell SERVICE=game SID=1000 VERSION=v1.0.0 CONFIG=/etc/roost/game.yaml
+make deploy-docker IMAGE=ghcr.io/example/planet@sha256:<digest> ENV_FILE=/etc/roost/planet.env
+make deploy-k8s ENV=staging IMAGE=ghcr.io/example/planet@sha256:<digest>`,
 	},
 }
 

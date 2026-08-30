@@ -12,7 +12,7 @@ func TestHelpCatalogIsCompleteAndUnique(t *testing.T) {
 	}
 	names := helpTopicNames()
 	for _, required := range []string{
-		"environment", "beginner", "project", "versions", "generate", "add", "mods", "dao", "entity", "nest",
+		"environment", "beginner", "project", "versions", "framework-release", "generate", "add", "mods", "dao", "entity", "nest",
 		"access", "transport", "lifecycle", "endpoint", "skill", "protocol", "cfggen", "tablegen", "eventgen", "attribute", "webroute",
 		"errcode", "saga", "replication", "config", "id", "format", "deploy",
 	} {
@@ -70,6 +70,7 @@ func TestHelpAliasesAndContextCommands(t *testing.T) {
 		{args: []string{"project", "upgrade", "--help"}, want: "project - "},
 		{args: []string{"project", "deps", "--help"}, want: "versions - "},
 		{args: []string{"project", "next", "--help"}, want: "project - "},
+		{args: []string{"framework", "verify", "--help"}, want: "framework-release - "},
 		{args: []string{"config", "check", "-h"}, want: "config - "},
 		{args: []string{"config", "enable", "player-tcp", "--help"}, want: "config - "},
 		{args: []string{"id", "next", "--help"}, want: "id - "},

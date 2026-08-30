@@ -1,0 +1,96 @@
+name: framework-compat
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+
+concurrency:
+  group: framework-compat-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  generated-consumer:
+    strategy:
+      fail-fast: false
+      matrix:
+        dependency-set: [minimum, released, source-head]
+        scenario: [minimal, full]
+        consumer-go: ["1.25.x", "1.26.x"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: build current generator
+        run: go build -o "${RUNNER_TEMP}/roost" ./cmd/roost
+      - name: generate scenario
+        env:
+          SET: ${{ matrix.dependency-set }}
+          SCENARIO: ${{ matrix.scenario }}
+        run: |
+          version_args=()
+          if [ "$SET" = minimum ]; then
+            version_args=(-roost-core-version v1.8.0 -roost-kit-version v1.8.0 -roost-skill-version v1.9.0 -codegen-version v1.7.0)
+          fi
+          mods=configdata
+          services=game
+          if [ "$SCENARIO" = full ]; then
+            mods=configdata,etcd,redis,mongo,nats,sync,remote_entity,checkpoint,nestwal,nest,saga
+            services=game,gate
+          fi
+          "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -mods "$mods" -services "$services" "${version_args[@]}"
+          if [ "$SCENARIO" = full ]; then
+            cd "${RUNNER_TEMP}/planet"
+            "${RUNNER_TEMP}/roost" add access player --service gate
+            "${RUNNER_TEMP}/roost" add transport tcp
+            "${RUNNER_TEMP}/roost" add entity Player
+            "${RUNNER_TEMP}/roost" add component Profile --entity Player
+            "${RUNNER_TEMP}/roost" add dao Player --entity Player
+            "${RUNNER_TEMP}/roost" add handler RenamePlayer --entity Player --component Profile
+            "${RUNNER_TEMP}/roost" add protocol RenamePlayer --group game --handler player
+            "${RUNNER_TEMP}/roost" add lifecycle Player --service game
+            "${RUNNER_TEMP}/roost" add endpoint RenamePlayer --handler player
+            "${RUNNER_TEMP}/roost" add skill Fireball
+            "${RUNNER_TEMP}/roost" add saga GuildTransfer -service game -steps debit,credit
+            "${RUNNER_TEMP}/roost" generate
+          fi
+      - name: use current framework source without committing replace
+        if: matrix.dependency-set == 'source-head'
+        working-directory: ${{ runner.temp }}/planet
+        run: |
+          git clone --depth=1 https://github.com/tjbdwanghaibo/cube-core.git "${RUNNER_TEMP}/cube-core"
+          git clone --depth=1 https://github.com/tjbdwanghaibo/cube-kit.git "${RUNNER_TEMP}/cube-kit"
+          git clone --depth=1 https://github.com/tjbdwanghaibo/roost-skill.git "${RUNNER_TEMP}/roost-skill"
+          go mod edit -replace github.com/tjbdwanghaibo/cube-core="${RUNNER_TEMP}/cube-core"
+          go mod edit -replace github.com/tjbdwanghaibo/cube-kit="${RUNNER_TEMP}/cube-kit"
+          go mod edit -replace github.com/tjbdwanghaibo/roost-skill="${RUNNER_TEMP}/roost-skill"
+      - name: select generated-project Go compatibility version
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ matrix.consumer-go }}
+          cache-dependency-path: ${{ runner.temp }}/planet/go.sum
+      - name: compile generated consumer and check idempotence
+        working-directory: ${{ runner.temp }}/planet
+        run: |
+          GOWORK=off go mod tidy
+          GOWORK=off go mod verify
+          "${RUNNER_TEMP}/roost" generate --check
+          GOWORK=off go test ./...
+          GOWORK=off go vet ./...
+          for script in deploy/shell/*.sh deploy/docker/*.sh deploy/k8s/*.sh; do sh -n "$script"; done
+          ROOST_IMAGE=ghcr.io/example/planet@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ROOST_CONFIG_ROOT=configs/service docker compose -f deploy/docker/docker-compose.prod.yaml config --quiet
+          kubectl kustomize deploy/k8s/overlays/staging >/dev/null
+      - name: source replaces remain temporary
+        if: matrix.dependency-set == 'source-head'
+        working-directory: ${{ runner.temp }}/planet
+        run: go mod edit -dropreplace github.com/tjbdwanghaibo/cube-core -dropreplace github.com/tjbdwanghaibo/cube-kit -dropreplace github.com/tjbdwanghaibo/roost-skill
