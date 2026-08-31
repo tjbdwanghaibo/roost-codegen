@@ -4,34 +4,33 @@ package testdata
 import (
 	"fmt"
 	"github.com/tjbdwanghaibo/cube-core/checkpoint"
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	fmap "github.com/tjbdwanghaibo/cube-core/map"
 	"github.com/tjbdwanghaibo/cube-core/migration"
 	"github.com/tjbdwanghaibo/cube-core/nest"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"sort"
 )
 
 // HeroDao is the DAO for collection "heroes".
 type HeroDao struct {
-	id                int64
-	tracker           checkpoint.DirtyTracker
-	persistPatchSet   map[string]any
-	persistPatchUnset []string
-	persistPatchFull  map[string]bool
-	name              string
-	level             int32
-	exp               int64
-	loginAt           int64
-	items             *fmap.SmallSafeMap[int64, int32]
-	friends           []int64
-	pos               Position
-	equips            *fmap.SmallSafeMap[int64, *EquipInfo]
+	id      int64
+	tracker dataengine.Tracker
+	name    string
+	level   int32
+	exp     int64
+	loginAt int64
+	items   *fmap.SmallSafeMap[int64, int32]
+	friends []int64
+	pos     Position
+	equips  *fmap.SmallSafeMap[int64, *EquipInfo]
 }
 
 // Ensure interface compliance.
 var _ entity.DaoInterface = (*HeroDao)(nil)
 var _ nest.RollbackSnapshotter = (*HeroDao)(nil)
-var _ nest.CommitParticipant = (*HeroDao)(nil)
+var _ nest.MutationParticipant = (*HeroDao)(nil)
 
 const (
 	HeroDaoDBName               = "game"
@@ -56,9 +55,9 @@ func (d *HeroDao) SchemaVersion() uint32             { return HeroDaoSchemaVersi
 func (d *HeroDao) Migrate(raw []byte, from uint32) ([]byte, error) {
 	return migration.MigrateDAO(d.CollName(), raw, from, HeroDaoSchemaVersion)
 }
-func (d *HeroDao) Dirty() entity.IDirty                   { return &d.tracker }
-func (d *HeroDao) CleanDirty()                            { d.tracker.SelfClean(); d.clearPersistPathPatch() }
-func (d *HeroDao) DirtyTracker() *checkpoint.DirtyTracker { return &d.tracker }
+func (d *HeroDao) Dirty() entity.IDirty              { return &d.tracker }
+func (d *HeroDao) CleanDirty()                       { d.tracker.SelfClean() }
+func (d *HeroDao) DirtyTracker() *dataengine.Tracker { return &d.tracker }
 
 const (
 	heroDaoFieldName    uint64 = 1 << iota
@@ -72,134 +71,110 @@ const (
 )
 
 func (d *HeroDao) markNameDirty() {
-	d.tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldName)
+	if err := nest.MarkPersist(d, heroDaoFieldName); err != nil {
+		panic(fmt.Errorf("HeroDao: mark Name persistence: %w", err))
+	}
+	d.tracker.MarkSync(heroDaoFieldName)
 }
 
 func (d *HeroDao) markLevelDirty() {
-	d.tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldLevel)
+	if err := nest.MarkPersist(d, heroDaoFieldLevel); err != nil {
+		panic(fmt.Errorf("HeroDao: mark Level persistence: %w", err))
+	}
+	d.tracker.MarkSync(heroDaoFieldLevel)
 }
 
 func (d *HeroDao) markExpDirty() {
-	d.tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldExp)
+	if err := nest.MarkPersist(d, heroDaoFieldExp); err != nil {
+		panic(fmt.Errorf("HeroDao: mark Exp persistence: %w", err))
+	}
+	d.tracker.MarkSync(heroDaoFieldExp)
 }
 
 func (d *HeroDao) markLoginAtDirty() {
-	d.tracker.MarkScope(checkpoint.DirtyPersist, heroDaoFieldLoginAt)
+	if err := nest.MarkPersist(d, heroDaoFieldLoginAt); err != nil {
+		panic(fmt.Errorf("HeroDao: mark LoginAt persistence: %w", err))
+	}
 }
 
 func (d *HeroDao) markItemsDirty() {
-	d.tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldItems)
+	if err := nest.MarkPersist(d, heroDaoFieldItems); err != nil {
+		panic(fmt.Errorf("HeroDao: mark Items persistence: %w", err))
+	}
+	d.tracker.MarkSync(heroDaoFieldItems)
 }
 
 func (d *HeroDao) markFriendsDirty() {
-	d.tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldFriends)
+	if err := nest.MarkPersist(d, heroDaoFieldFriends); err != nil {
+		panic(fmt.Errorf("HeroDao: mark Friends persistence: %w", err))
+	}
+	d.tracker.MarkSync(heroDaoFieldFriends)
 }
 
 func (d *HeroDao) markPosDirty() {
-	d.tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldPos)
+	if err := nest.MarkPersist(d, heroDaoFieldPos); err != nil {
+		panic(fmt.Errorf("HeroDao: mark Pos persistence: %w", err))
+	}
+	d.tracker.MarkSync(heroDaoFieldPos)
 }
 
 func (d *HeroDao) markEquipsDirty() {
-	d.tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, heroDaoFieldEquips)
-}
-
-func (d *HeroDao) recordPersistPatchSet(field string, path string, value any) {
-	if path == "" {
-		d.recordPersistPatchFull(field)
-		return
+	if err := nest.MarkPersist(d, heroDaoFieldEquips); err != nil {
+		panic(fmt.Errorf("HeroDao: mark Equips persistence: %w", err))
 	}
-	if d.persistPatchSet == nil {
-		d.persistPatchSet = make(map[string]any)
-	}
-	d.persistPatchSet[path] = value
-	for i := 0; i < len(d.persistPatchUnset); {
-		if d.persistPatchUnset[i] == path {
-			d.persistPatchUnset = append(d.persistPatchUnset[:i], d.persistPatchUnset[i+1:]...)
-			continue
-		}
-		i++
-	}
-}
-
-func (d *HeroDao) recordPersistPatchUnset(field string, path string) {
-	if path == "" {
-		d.recordPersistPatchFull(field)
-		return
-	}
-	delete(d.persistPatchSet, path)
-	d.persistPatchUnset = append(d.persistPatchUnset, path)
-}
-
-func (d *HeroDao) recordPersistPatchFull(field string) {
-	if field == "" {
-		return
-	}
-	if d.persistPatchFull == nil {
-		d.persistPatchFull = make(map[string]bool)
-	}
-	d.persistPatchFull[field] = true
-}
-
-func (d *HeroDao) hasPersistPathPatch(field string) bool {
-	return checkpoint.PersistPatchHasPath(d.persistPatchSet, d.persistPatchUnset, field)
-}
-
-func (d *HeroDao) appendPersistPathPatch(patch *checkpoint.PersistPatch, fullFields map[string]bool) {
-	for path, value := range d.persistPatchSet {
-		if checkpoint.PersistPatchPathCovered(path, fullFields) {
-			continue
-		}
-		patch.Set[path] = value
-	}
-	for _, path := range d.persistPatchUnset {
-		if checkpoint.PersistPatchPathCovered(path, fullFields) {
-			continue
-		}
-		patch.Unset = append(patch.Unset, path)
-	}
-	d.clearPersistPathPatch()
-}
-
-func (d *HeroDao) clearPersistPathPatch() {
-	d.persistPatchSet = nil
-	d.persistPatchUnset = nil
-	d.persistPatchFull = nil
+	d.tracker.MarkSync(heroDaoFieldEquips)
 }
 
 func (d *HeroDao) markItemsKeyDirty(key int64, val int32) {
 	if path, ok := checkpoint.MapPatchPath("items", key); ok {
-		d.recordPersistPatchSet("items", path, val)
+		if err := nest.MarkPersistSet(d, heroDaoFieldItems, path, val); err != nil {
+			panic(fmt.Errorf("HeroDao: mark Items key persistence: %w", err))
+		}
 	} else {
-		d.recordPersistPatchFull("items")
+		if err := nest.MarkPersistFull(d, heroDaoFieldItems, "items"); err != nil {
+			panic(fmt.Errorf("HeroDao: mark Items persistence: %w", err))
+		}
 	}
-	d.markItemsDirty()
+	d.tracker.MarkSync(heroDaoFieldItems)
 }
 
 func (d *HeroDao) markItemsKeyDeleted(key int64) {
 	if path, ok := checkpoint.MapPatchPath("items", key); ok {
-		d.recordPersistPatchUnset("items", path)
+		if err := nest.MarkPersistUnset(d, heroDaoFieldItems, path); err != nil {
+			panic(fmt.Errorf("HeroDao: mark Items delete persistence: %w", err))
+		}
 	} else {
-		d.recordPersistPatchFull("items")
+		if err := nest.MarkPersistFull(d, heroDaoFieldItems, "items"); err != nil {
+			panic(fmt.Errorf("HeroDao: mark Items persistence: %w", err))
+		}
 	}
-	d.markItemsDirty()
+	d.tracker.MarkSync(heroDaoFieldItems)
 }
 
 func (d *HeroDao) markEquipsKeyDirty(key int64, val *EquipInfo) {
 	if path, ok := checkpoint.MapPatchPath("equips", key); ok {
-		d.recordPersistPatchSet("equips", path, val)
+		if err := nest.MarkPersistSet(d, heroDaoFieldEquips, path, val); err != nil {
+			panic(fmt.Errorf("HeroDao: mark Equips key persistence: %w", err))
+		}
 	} else {
-		d.recordPersistPatchFull("equips")
+		if err := nest.MarkPersistFull(d, heroDaoFieldEquips, "equips"); err != nil {
+			panic(fmt.Errorf("HeroDao: mark Equips persistence: %w", err))
+		}
 	}
-	d.markEquipsDirty()
+	d.tracker.MarkSync(heroDaoFieldEquips)
 }
 
 func (d *HeroDao) markEquipsKeyDeleted(key int64) {
 	if path, ok := checkpoint.MapPatchPath("equips", key); ok {
-		d.recordPersistPatchUnset("equips", path)
+		if err := nest.MarkPersistUnset(d, heroDaoFieldEquips, path); err != nil {
+			panic(fmt.Errorf("HeroDao: mark Equips delete persistence: %w", err))
+		}
 	} else {
-		d.recordPersistPatchFull("equips")
+		if err := nest.MarkPersistFull(d, heroDaoFieldEquips, "equips"); err != nil {
+			panic(fmt.Errorf("HeroDao: mark Equips persistence: %w", err))
+		}
 	}
-	d.markEquipsDirty()
+	d.tracker.MarkSync(heroDaoFieldEquips)
 }
 
 // Init wires dirty callbacks for nested structs and map values.
@@ -524,26 +499,22 @@ func (d *HeroDao) setEquipsRawMap(src map[int64]*EquipInfo) {
 
 // --- Marshal (persist fields) ---
 
-// CaptureRollbackState is side-effect free. It includes transient and
-// sync-only fields plus pending path-patch state; persistence Marshal methods
-// are intentionally not reused because some of them consume patch metadata.
+// CaptureRollbackState is side-effect free and includes transient and
+// sync-only fields. Persistence changes live in RollbackTx, not in the DAO.
 func (d *HeroDao) CaptureRollbackState() ([]byte, error) {
 	type rollbackDoc struct {
-		Id         int64                `bson:"_id"`
-		PatchSet   map[string]any       `bson:"_rollback_patch_set"`
-		PatchUnset []string             `bson:"_rollback_patch_unset"`
-		PatchFull  map[string]bool      `bson:"_rollback_patch_full"`
-		Name       string               `bson:"name"`
-		Level      int32                `bson:"level"`
-		Exp        int64                `bson:"exp"`
-		LoginAt    int64                `bson:"login_at"`
-		Items      map[int64]int32      `bson:"items"`
-		Friends    []int64              `bson:"friends"`
-		Pos        Position             `bson:"pos"`
-		Equips     map[int64]*EquipInfo `bson:"equips"`
+		Id      int64                `bson:"_id"`
+		Name    string               `bson:"name"`
+		Level   int32                `bson:"level"`
+		Exp     int64                `bson:"exp"`
+		LoginAt int64                `bson:"login_at"`
+		Items   map[int64]int32      `bson:"items"`
+		Friends []int64              `bson:"friends"`
+		Pos     Position             `bson:"pos"`
+		Equips  map[int64]*EquipInfo `bson:"equips"`
 	}
 	doc := rollbackDoc{
-		Id: d.id, PatchSet: d.persistPatchSet, PatchUnset: d.persistPatchUnset, PatchFull: d.persistPatchFull,
+		Id:      d.id,
 		Name:    d.name,
 		Level:   d.level,
 		Exp:     d.exp,
@@ -558,27 +529,21 @@ func (d *HeroDao) CaptureRollbackState() ([]byte, error) {
 
 func (d *HeroDao) RestoreRollbackState(raw []byte) error {
 	type rollbackDoc struct {
-		Id         int64                `bson:"_id"`
-		PatchSet   map[string]any       `bson:"_rollback_patch_set"`
-		PatchUnset []string             `bson:"_rollback_patch_unset"`
-		PatchFull  map[string]bool      `bson:"_rollback_patch_full"`
-		Name       string               `bson:"name"`
-		Level      int32                `bson:"level"`
-		Exp        int64                `bson:"exp"`
-		LoginAt    int64                `bson:"login_at"`
-		Items      map[int64]int32      `bson:"items"`
-		Friends    []int64              `bson:"friends"`
-		Pos        Position             `bson:"pos"`
-		Equips     map[int64]*EquipInfo `bson:"equips"`
+		Id      int64                `bson:"_id"`
+		Name    string               `bson:"name"`
+		Level   int32                `bson:"level"`
+		Exp     int64                `bson:"exp"`
+		LoginAt int64                `bson:"login_at"`
+		Items   map[int64]int32      `bson:"items"`
+		Friends []int64              `bson:"friends"`
+		Pos     Position             `bson:"pos"`
+		Equips  map[int64]*EquipInfo `bson:"equips"`
 	}
 	var doc rollbackDoc
 	if err := bson.Unmarshal(raw, &doc); err != nil {
 		return err
 	}
 	d.id = doc.Id
-	d.persistPatchSet = doc.PatchSet
-	d.persistPatchUnset = doc.PatchUnset
-	d.persistPatchFull = doc.PatchFull
 	d.name = doc.Name
 	d.level = doc.Level
 	d.exp = doc.Exp
@@ -607,31 +572,47 @@ func (d *HeroDao) marshalCommitState() ([]byte, error) {
 	return bson.Marshal(doc)
 }
 
-func (d *HeroDao) PrepareCommit(tx *nest.RollbackTx) error {
-	if tx == nil || !d.tracker.HasPersistDirty() {
-		return nil
+func (d *HeroDao) PrepareMutation(change nest.PersistChange) (dataengine.Mutation, error) {
+	version := d.tracker.Version()
+	mutation := dataengine.Mutation{
+		Key: dataengine.DocumentKey{
+			Database: d.DbName(), Scope: dataengine.DatabaseScope(d.DbScope()),
+			Resource: d.CollName(), ID: d.Id(),
+		},
+		Kind: dataengine.MutationPatch, ExpectedVersion: version, NextVersion: version + 1,
+		Mask: change.Mask, Schema: HeroDaoSchemaVersion, Codec: "bson-v2",
 	}
-	data, err := d.marshalCommitState()
+	if change.Delete {
+		mutation.Kind = dataengine.MutationDelete
+		return mutation, nil
+	}
+	if version == 0 || change.Mask == dataengine.AllFields {
+		data, err := d.marshalCommitState()
+		if err != nil {
+			return dataengine.Mutation{}, fmt.Errorf("prepare put %s/%d: %w", d.CollName(), d.id, err)
+		}
+		mutation.Kind = dataengine.MutationPut
+		mutation.Data = data
+		return mutation, nil
+	}
+	patch, err := d.marshalPersistPatchBSON(change)
 	if err != nil {
-		return fmt.Errorf("prepare commit %s/%d: %w", d.CollName(), d.id, err)
+		return dataengine.Mutation{}, fmt.Errorf("prepare patch %s/%d: %w", d.CollName(), d.id, err)
 	}
-	return tx.AddMutation(nest.EntityMutation{
-		EntityID: d.id, Database: d.DbName(), DatabaseScope: uint8(d.DbScope()), Resource: d.CollName(), Version: d.tracker.Version() + 1,
-		Mask:   d.tracker.PersistDirtyMask(),
-		Schema: HeroDaoSchemaVersion, Codec: "bson-full-v1", Data: data,
-	})
+	mutation.Patch = patch
+	return mutation, nil
+}
+
+func (d *HeroDao) AcceptMutation(mutation dataengine.Mutation) error {
+	return d.tracker.AcceptVersion(mutation.ExpectedVersion, mutation.NextVersion)
 }
 
 func (d *HeroDao) Marshal() []byte {
-	return d.MarshalPersist(checkpoint.DirtyAll)
+	return d.MarshalPersist(dataengine.AllFields)
 }
 
 func (d *HeroDao) MarshalPersist(mask uint64) []byte {
-	data := d.marshalPersistData(mask)
-	if mask == checkpoint.DirtyAll {
-		d.clearPersistPathPatch()
-	}
-	return data
+	return d.marshalPersistData(mask)
 }
 
 func (d *HeroDao) marshalPersistData(mask uint64) []byte {
@@ -659,51 +640,86 @@ func (d *HeroDao) marshalPersistData(mask uint64) []byte {
 	return data
 }
 
-func (d *HeroDao) MarshalPersistPatch(mask uint64) checkpoint.PersistPatch {
-	patch := checkpoint.PersistPatch{
-		Set:      make(map[string]any),
-		FullData: d.marshalPersistData(checkpoint.DirtyAll),
-	}
-	if mask == 0 || mask == checkpoint.DirtyAll {
-		d.clearPersistPathPatch()
-		return patch
-	}
-	fullFields := make(map[string]bool)
-	if mask&heroDaoFieldName != 0 {
-		patch.Set["name"] = d.name
-	}
-	if mask&heroDaoFieldLevel != 0 {
-		patch.Set["level"] = d.level
-	}
-	if mask&heroDaoFieldExp != 0 {
-		patch.Set["exp"] = d.exp
-	}
-	if mask&heroDaoFieldLoginAt != 0 {
-		patch.Set["login_at"] = d.loginAt
-	}
-	if mask&heroDaoFieldItems != 0 {
-		if d.persistPatchFull["items"] || !d.hasPersistPathPatch("items") {
-			patch.Set["items"] = d.heroDaoItemsRawMap()
-			fullFields["items"] = true
+func (d *HeroDao) persistChangeHasPath(change nest.PersistChange, field string) bool {
+	prefix := field + "."
+	for path := range change.Set {
+		if path == field || len(path) > len(prefix) && path[:len(prefix)] == prefix {
+			return true
 		}
 	}
-	if mask&heroDaoFieldFriends != 0 {
-		patch.Set["friends"] = d.friends
-	}
-	if mask&heroDaoFieldPos != 0 {
-		patch.Set["pos"] = d.pos
-	}
-	if mask&heroDaoFieldEquips != 0 {
-		if d.persistPatchFull["equips"] || !d.hasPersistPathPatch("equips") {
-			patch.Set["equips"] = d.heroDaoEquipsRawMap()
-			fullFields["equips"] = true
+	for _, path := range change.Unset {
+		if path == field || len(path) > len(prefix) && path[:len(prefix)] == prefix {
+			return true
 		}
 	}
-	d.appendPersistPathPatch(&patch, fullFields)
-	if len(patch.Set) == 0 {
-		patch.Set = nil
+	return false
+}
+
+func (d *HeroDao) persistChangePathCovered(change nest.PersistChange, path string) bool {
+	for field := range change.FullFields {
+		prefix := field + "."
+		if path == field || len(path) > len(prefix) && path[:len(prefix)] == prefix {
+			return true
+		}
 	}
-	return patch
+	return false
+}
+
+func (d *HeroDao) marshalPersistPatchBSON(change nest.PersistChange) (dataengine.FieldPatch, error) {
+	set := make(map[string]any, len(change.Set)+len(change.FullFields))
+	if change.Mask&heroDaoFieldName != 0 {
+		set["name"] = d.name
+	}
+	if change.Mask&heroDaoFieldLevel != 0 {
+		set["level"] = d.level
+	}
+	if change.Mask&heroDaoFieldExp != 0 {
+		set["exp"] = d.exp
+	}
+	if change.Mask&heroDaoFieldLoginAt != 0 {
+		set["login_at"] = d.loginAt
+	}
+	if change.Mask&heroDaoFieldItems != 0 {
+		_, full := change.FullFields["items"]
+		if full || !d.persistChangeHasPath(change, "items") {
+			set["items"] = d.heroDaoItemsRawMap()
+		}
+	}
+	if change.Mask&heroDaoFieldFriends != 0 {
+		set["friends"] = d.friends
+	}
+	if change.Mask&heroDaoFieldPos != 0 {
+		set["pos"] = d.pos
+	}
+	if change.Mask&heroDaoFieldEquips != 0 {
+		_, full := change.FullFields["equips"]
+		if full || !d.persistChangeHasPath(change, "equips") {
+			set["equips"] = d.heroDaoEquipsRawMap()
+		}
+	}
+	for path, value := range change.Set {
+		if !d.persistChangePathCovered(change, path) {
+			set[path] = value
+		}
+	}
+	var raw []byte
+	if len(set) != 0 {
+		keys := make([]string, 0, len(set))
+		for path := range set {
+			keys = append(keys, path)
+		}
+		sort.Strings(keys)
+		doc := make(bson.D, 0, len(keys))
+		for _, path := range keys {
+			doc = append(doc, bson.E{Key: path, Value: set[path]})
+		}
+		var err error
+		raw, err = bson.Marshal(doc)
+		if err != nil {
+			return dataengine.FieldPatch{}, err
+		}
+	}
+	return dataengine.FieldPatch{SetBSON: raw, Unset: append([]string(nil), change.Unset...)}, nil
 }
 
 func (d *HeroDao) MarshalSync(mask uint64) []byte {
@@ -898,6 +914,6 @@ func (d *HeroDao) RestorePersisted(raw []byte, schemaVersion uint32, version uin
 
 // compile-time import guards
 var (
-	_ = checkpoint.DirtyTracker{}
+	_ = dataengine.Tracker{}
 	_ = bson.M{}
 )

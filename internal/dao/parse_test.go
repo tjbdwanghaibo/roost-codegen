@@ -177,9 +177,7 @@ func TestGenerateDao(t *testing.T) {
 	checks := []string{
 		"package testdata",
 		"type HeroDao struct {",
-		"checkpoint.DirtyTracker",
-		"persistPatchSet",
-		"map[string]any",
+		"dataengine.Tracker",
 		"func NewHeroDao() *HeroDao",
 		"HeroDaoDBName",
 		"HeroDaoCollection",
@@ -195,16 +193,18 @@ func TestGenerateDao(t *testing.T) {
 		"func (d *HeroDao) SchemaVersion() uint32",
 		"return HeroDaoSchemaVersion",
 		"func (d *HeroDao) Migrate(raw []byte, from uint32) ([]byte, error)",
-		"func (d *HeroDao) DirtyTracker() *checkpoint.DirtyTracker",
+		"func (d *HeroDao) DirtyTracker() *dataengine.Tracker",
 		"var _ nest.RollbackSnapshotter = (*HeroDao)(nil)",
-		"var _ nest.CommitParticipant = (*HeroDao)(nil)",
+		"var _ nest.MutationParticipant = (*HeroDao)(nil)",
 		"func (d *HeroDao) CaptureRollbackState() ([]byte, error)",
 		"func (d *HeroDao) RestoreRollbackState(raw []byte) error",
 		"func (d *HeroDao) marshalCommitState() ([]byte, error)",
-		"func (d *HeroDao) PrepareCommit(tx *nest.RollbackTx) error",
-		"!d.tracker.HasPersistDirty()",
-		"Database: d.DbName()",
-		"Version: d.tracker.Version() + 1",
+		"func (d *HeroDao) PrepareMutation(change nest.PersistChange) (dataengine.Mutation, error)",
+		"Kind: dataengine.MutationPatch",
+		"ExpectedVersion: version",
+		"NextVersion: version + 1",
+		"func (d *HeroDao) AcceptMutation(mutation dataengine.Mutation) error",
+		"return d.tracker.AcceptVersion(mutation.ExpectedVersion, mutation.NextVersion)",
 		"func (d *HeroDao) GetName() string",
 		"func (d *HeroDao) GetLevel() int32",
 		"func (d *HeroDao) GetFriends(idx int) (int64, bool)",
@@ -218,8 +218,8 @@ func TestGenerateDao(t *testing.T) {
 		"panic(fmt.Errorf(\"HeroDao: marshal persist data:",
 		"func (d *HeroDao) markItemsKeyDirty(key int64, val int32)",
 		`checkpoint.MapPatchPath("items", key)`,
-		"d.recordPersistPatchSet(\"items\", path, val)",
-		"d.recordPersistPatchUnset(\"items\", path)",
+		"nest.MarkPersistSet(d, heroDaoFieldItems, path, val)",
+		"nest.MarkPersistUnset(d, heroDaoFieldItems, path)",
 		"*fmap.SmallSafeMap[int64, int32]",
 		"d.items = fmap.NewSmallSafeMap[int64, int32](0)",
 		`"items":    d.heroDaoItemsRawMap()`,
@@ -233,7 +233,7 @@ func TestGenerateDao(t *testing.T) {
 		"func (d *HeroDao) MarshalPersist(mask uint64) []byte",
 		`"_schema"`,
 		"HeroDaoSchemaVersion",
-		"d.appendPersistPathPatch(&patch, fullFields)",
+		"func (d *HeroDao) marshalPersistPatchBSON(change nest.PersistChange) (dataengine.FieldPatch, error)",
 		"func (d *HeroDao) MarshalSync(mask uint64) []byte",
 		"func (d *HeroDao) ApplySync(raw []byte) error",
 		"func (d *HeroDao) Unmarshal(raw []byte) error",
@@ -245,6 +245,17 @@ func TestGenerateDao(t *testing.T) {
 		}
 	}
 	assertStructFieldsUnexported(t, outFile, "HeroDao")
+	for _, forbidden := range []string{
+		"checkpoint.DirtyTracker",
+		"persistPatchSet",
+		"func (d *HeroDao) PrepareCommit(",
+		"FullData:",
+		"func (d *HeroDao) MarshalPersistPatch(",
+	} {
+		if strings.Contains(s, forbidden) {
+			t.Errorf("generated DAO retains legacy persistence path %q", forbidden)
+		}
+	}
 
 	// LoginAt should be in Marshal and have a setter because persist-only
 	// fields still need to mark persist dirty.

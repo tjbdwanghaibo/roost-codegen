@@ -111,20 +111,10 @@ func TestGenerate(t *testing.T) {
 		"entity.CreateComponent(CompTypeBattle, e, param)",
 		"e.dao = NewPlayerDao()",
 		"e.mail = NewMailDao()",
-		"e.dao.DbName()",
-		"checkpoint.ResolveDatabaseScope(e.dao)",
-		"e.dao.CollName()",
-		"e.dao.DirtyTracker().TakePersistDirty()",
-		"e.dao.MarshalPersist(mask)",
-		"e.mail.DbName()",
-		"checkpoint.ResolveDatabaseScope(e.mail)",
-		"e.mail.CollName()",
-		"e.mail.DirtyTracker().TakePersistDirty()",
-		"e.mail.MarshalPersist(mask)",
 		"func (e *Player) generatedOnClear()",
 		"func (e *Player) generatedOnDestroy(reason entity.EntityDestroyReason)",
-		"func (e *Player) Snapshot() []checkpoint.SaveItem",
-		"Version: e.dao.DirtyTracker().IncVersion(), Deleted: true",
+		"func (e *Player) PrepareDelete(tx *nest.RollbackTx) error",
+		"tx.MarkPersistDelete(participant)",
 	}
 	for _, check := range checks {
 		if !contains(s, check) {
@@ -133,6 +123,11 @@ func TestGenerate(t *testing.T) {
 	}
 	if strings.Contains(s, ".Tracker") {
 		t.Fatalf("entity generator bypassed DAO tracker accessor:\n%s", s)
+	}
+	for _, forbidden := range []string{"func (e *Player) Snapshot()", "func (e *Player) RemoveSnapshot()", "checkpoint.SaveItem"} {
+		if strings.Contains(s, forbidden) {
+			t.Fatalf("entity generator retains legacy checkpoint path %q", forbidden)
+		}
 	}
 
 	// Second run should be unchanged
@@ -229,8 +224,8 @@ func (e *Player) Snapshot() []checkpoint.SaveItem { return nil }
 	if contains(generated, "func (e *Player) Snapshot(") {
 		t.Fatal("generated Snapshot must not duplicate a manual method")
 	}
-	if !contains(generated, `"github.com/tjbdwanghaibo/cube-core/checkpoint"`) || !contains(generated, "func (e *Player) RemoveSnapshot(") {
-		t.Fatal("persistent entity must retain checkpoint import for generated RemoveSnapshot")
+	if !contains(generated, `"github.com/tjbdwanghaibo/cube-core/nest"`) || contains(generated, "func (e *Player) RemoveSnapshot(") {
+		t.Fatal("persistent entity must use transactional delete without generated RemoveSnapshot")
 	}
 }
 

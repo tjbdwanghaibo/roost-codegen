@@ -5,7 +5,9 @@ package {{.Package}}
 
 import (
 	"fmt"
+	"sort"
 	"github.com/tjbdwanghaibo/cube-core/checkpoint"
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	"github.com/tjbdwanghaibo/cube-core/migration"
 	"github.com/tjbdwanghaibo/cube-core/nest"
@@ -18,10 +20,7 @@ import (
 // {{.Dao.Name}} is the DAO for collection "{{.Dao.Coll}}".
 type {{.Dao.Name}} struct {
 	id      int64
-	tracker checkpoint.DirtyTracker
-	persistPatchSet map[string]any
-	persistPatchUnset []string
-	persistPatchFull map[string]bool
+	tracker dataengine.Tracker
 {{- range .Dao.Fields}}
 	{{fieldVar .Name}} {{fieldType .}}
 {{- end}}
@@ -30,7 +29,7 @@ type {{.Dao.Name}} struct {
 // Ensure interface compliance.
 var _ entity.DaoInterface = (*{{.Dao.Name}})(nil)
 var _ nest.RollbackSnapshotter = (*{{.Dao.Name}})(nil)
-var _ nest.CommitParticipant = (*{{.Dao.Name}})(nil)
+var _ nest.MutationParticipant = (*{{.Dao.Name}})(nil)
 
 const (
 	{{daoDBConst .Dao.Name}} = "{{.Dao.Db}}"
@@ -57,8 +56,8 @@ func (d *{{.Dao.Name}}) CollName() string  { return {{daoCollConst .Dao.Name}} }
 func (d *{{.Dao.Name}}) SchemaVersion() uint32 { return {{.Dao.Name}}SchemaVersion }
 func (d *{{.Dao.Name}}) Migrate(raw []byte, from uint32) ([]byte, error) { return migration.MigrateDAO(d.CollName(), raw, from, {{.Dao.Name}}SchemaVersion) }
 func (d *{{.Dao.Name}}) Dirty() entity.IDirty { return &d.tracker }
-func (d *{{.Dao.Name}}) CleanDirty()      { d.tracker.SelfClean(); d.clearPersistPathPatch() }
-func (d *{{.Dao.Name}}) DirtyTracker() *checkpoint.DirtyTracker { return &d.tracker }
+func (d *{{.Dao.Name}}) CleanDirty()      { d.tracker.SelfClean() }
+func (d *{{.Dao.Name}}) DirtyTracker() *dataengine.Tracker { return &d.tracker }
 
 const (
 {{- range .Dao.Fields}}
@@ -68,91 +67,51 @@ const (
 
 {{range .Dao.Fields}}
 func (d *{{$.Dao.Name}}) mark{{.Name}}Dirty() {
-	d.tracker.MarkScope({{dirtyScope .}}, {{fieldMaskName $.Dao.Name .Name}})
+	{{- if .Tag.Persist}}
+	if err := nest.MarkPersist(d, {{fieldMaskName $.Dao.Name .Name}}); err != nil {
+		panic(fmt.Errorf("{{$.Dao.Name}}: mark {{.Name}} persistence: %w", err))
+	}
+	{{- end}}
+	{{- if .Tag.Sync}}
+	d.tracker.MarkSync({{fieldMaskName $.Dao.Name .Name}})
+	{{- end}}
 }
 {{end}}
-
-func (d *{{.Dao.Name}}) recordPersistPatchSet(field string, path string, value any) {
-	if path == "" {
-		d.recordPersistPatchFull(field)
-		return
-	}
-	if d.persistPatchSet == nil {
-		d.persistPatchSet = make(map[string]any)
-	}
-	d.persistPatchSet[path] = value
-	for i := 0; i < len(d.persistPatchUnset); {
-		if d.persistPatchUnset[i] == path {
-			d.persistPatchUnset = append(d.persistPatchUnset[:i], d.persistPatchUnset[i+1:]...)
-			continue
-		}
-		i++
-	}
-}
-
-func (d *{{.Dao.Name}}) recordPersistPatchUnset(field string, path string) {
-	if path == "" {
-		d.recordPersistPatchFull(field)
-		return
-	}
-	delete(d.persistPatchSet, path)
-	d.persistPatchUnset = append(d.persistPatchUnset, path)
-}
-
-func (d *{{.Dao.Name}}) recordPersistPatchFull(field string) {
-	if field == "" {
-		return
-	}
-	if d.persistPatchFull == nil {
-		d.persistPatchFull = make(map[string]bool)
-	}
-	d.persistPatchFull[field] = true
-}
-
-func (d *{{.Dao.Name}}) hasPersistPathPatch(field string) bool {
-	return checkpoint.PersistPatchHasPath(d.persistPatchSet, d.persistPatchUnset, field)
-}
-
-func (d *{{.Dao.Name}}) appendPersistPathPatch(patch *checkpoint.PersistPatch, fullFields map[string]bool) {
-	for path, value := range d.persistPatchSet {
-		if checkpoint.PersistPatchPathCovered(path, fullFields) {
-			continue
-		}
-		patch.Set[path] = value
-	}
-	for _, path := range d.persistPatchUnset {
-		if checkpoint.PersistPatchPathCovered(path, fullFields) {
-			continue
-		}
-		patch.Unset = append(patch.Unset, path)
-	}
-	d.clearPersistPathPatch()
-}
-
-func (d *{{.Dao.Name}}) clearPersistPathPatch() {
-	d.persistPatchSet = nil
-	d.persistPatchUnset = nil
-	d.persistPatchFull = nil
-}
 
 {{range .Dao.Fields}}
 {{- if eq .Kind 2}}
 func (d *{{$.Dao.Name}}) mark{{.Name}}KeyDirty(key {{.MapKey}}, val {{mapValType .}}) {
+	{{- if .Tag.Persist}}
 	if path, ok := checkpoint.MapPatchPath("{{bsonKey .Name}}", key); ok {
-		d.recordPersistPatchSet("{{bsonKey .Name}}", path, val)
+		if err := nest.MarkPersistSet(d, {{fieldMaskName $.Dao.Name .Name}}, path, val); err != nil {
+			panic(fmt.Errorf("{{$.Dao.Name}}: mark {{.Name}} key persistence: %w", err))
+		}
 	} else {
-		d.recordPersistPatchFull("{{bsonKey .Name}}")
+		if err := nest.MarkPersistFull(d, {{fieldMaskName $.Dao.Name .Name}}, "{{bsonKey .Name}}"); err != nil {
+			panic(fmt.Errorf("{{$.Dao.Name}}: mark {{.Name}} persistence: %w", err))
+		}
 	}
-	d.mark{{.Name}}Dirty()
+	{{- end}}
+	{{- if .Tag.Sync}}
+	d.tracker.MarkSync({{fieldMaskName $.Dao.Name .Name}})
+	{{- end}}
 }
 
 func (d *{{$.Dao.Name}}) mark{{.Name}}KeyDeleted(key {{.MapKey}}) {
+	{{- if .Tag.Persist}}
 	if path, ok := checkpoint.MapPatchPath("{{bsonKey .Name}}", key); ok {
-		d.recordPersistPatchUnset("{{bsonKey .Name}}", path)
+		if err := nest.MarkPersistUnset(d, {{fieldMaskName $.Dao.Name .Name}}, path); err != nil {
+			panic(fmt.Errorf("{{$.Dao.Name}}: mark {{.Name}} delete persistence: %w", err))
+		}
 	} else {
-		d.recordPersistPatchFull("{{bsonKey .Name}}")
+		if err := nest.MarkPersistFull(d, {{fieldMaskName $.Dao.Name .Name}}, "{{bsonKey .Name}}"); err != nil {
+			panic(fmt.Errorf("{{$.Dao.Name}}: mark {{.Name}} persistence: %w", err))
+		}
 	}
-	d.mark{{.Name}}Dirty()
+	{{- end}}
+	{{- if .Tag.Sync}}
+	d.tracker.MarkSync({{fieldMaskName $.Dao.Name .Name}})
+	{{- end}}
 }
 {{end}}
 {{- end}}
@@ -439,21 +398,17 @@ func (d *{{$.Dao.Name}}) set{{.Name}}RawMap(src {{rawMapType .}}) {
 
 // --- Marshal (persist fields) ---
 
-// CaptureRollbackState is side-effect free. It includes transient and
-// sync-only fields plus pending path-patch state; persistence Marshal methods
-// are intentionally not reused because some of them consume patch metadata.
+// CaptureRollbackState is side-effect free and includes transient and
+// sync-only fields. Persistence changes live in RollbackTx, not in the DAO.
 func (d *{{.Dao.Name}}) CaptureRollbackState() ([]byte, error) {
 	type rollbackDoc struct {
 		Id int64 ` + "`" + `bson:"_id"` + "`" + `
-		PatchSet map[string]any ` + "`" + `bson:"_rollback_patch_set"` + "`" + `
-		PatchUnset []string ` + "`" + `bson:"_rollback_patch_unset"` + "`" + `
-		PatchFull map[string]bool ` + "`" + `bson:"_rollback_patch_full"` + "`" + `
 {{- range .Dao.Fields}}
 		{{.Name}} {{if eq .Kind 2}}{{rawMapType .}}{{else}}{{.TypeStr}}{{end}} ` + "`" + `bson:"{{bsonKey .Name}}"` + "`" + `
 {{- end}}
 	}
 	doc := rollbackDoc{
-		Id: d.id, PatchSet: d.persistPatchSet, PatchUnset: d.persistPatchUnset, PatchFull: d.persistPatchFull,
+		Id: d.id,
 {{- range .Dao.Fields}}
 {{- if eq .Kind 2}}
 		{{.Name}}: d.{{mapHelperName $.Dao.Name .Name}}(),
@@ -468,9 +423,6 @@ func (d *{{.Dao.Name}}) CaptureRollbackState() ([]byte, error) {
 func (d *{{.Dao.Name}}) RestoreRollbackState(raw []byte) error {
 	type rollbackDoc struct {
 		Id int64 ` + "`" + `bson:"_id"` + "`" + `
-		PatchSet map[string]any ` + "`" + `bson:"_rollback_patch_set"` + "`" + `
-		PatchUnset []string ` + "`" + `bson:"_rollback_patch_unset"` + "`" + `
-		PatchFull map[string]bool ` + "`" + `bson:"_rollback_patch_full"` + "`" + `
 {{- range .Dao.Fields}}
 		{{.Name}} {{if eq .Kind 2}}{{rawMapType .}}{{else}}{{.TypeStr}}{{end}} ` + "`" + `bson:"{{bsonKey .Name}}"` + "`" + `
 {{- end}}
@@ -478,9 +430,6 @@ func (d *{{.Dao.Name}}) RestoreRollbackState(raw []byte) error {
 	var doc rollbackDoc
 	if err := bson.Unmarshal(raw, &doc); err != nil { return err }
 	d.id = doc.Id
-	d.persistPatchSet = doc.PatchSet
-	d.persistPatchUnset = doc.PatchUnset
-	d.persistPatchFull = doc.PatchFull
 {{- range .Dao.Fields}}
 {{- if eq .Kind 2}}
 	d.set{{.Name}}RawMap(doc.{{.Name}})
@@ -507,27 +456,43 @@ func (d *{{.Dao.Name}}) marshalCommitState() ([]byte, error) {
 	return bson.Marshal(doc)
 }
 
-func (d *{{.Dao.Name}}) PrepareCommit(tx *nest.RollbackTx) error {
-	if tx == nil || !d.tracker.HasPersistDirty() { return nil }
-	data, err := d.marshalCommitState()
-	if err != nil { return fmt.Errorf("prepare commit %s/%d: %w", d.CollName(), d.id, err) }
-	return tx.AddMutation(nest.EntityMutation{
-		EntityID: d.id, Database: d.DbName(), DatabaseScope: uint8(d.DbScope()), Resource: d.CollName(), Version: d.tracker.Version() + 1,
-		Mask: d.tracker.PersistDirtyMask(),
-		Schema: {{.Dao.Name}}SchemaVersion, Codec: "bson-full-v1", Data: data,
-	})
+func (d *{{.Dao.Name}}) PrepareMutation(change nest.PersistChange) (dataengine.Mutation, error) {
+	version := d.tracker.Version()
+	mutation := dataengine.Mutation{
+		Key: dataengine.DocumentKey{
+			Database: d.DbName(), Scope: dataengine.DatabaseScope(d.DbScope()),
+			Resource: d.CollName(), ID: d.Id(),
+		},
+		Kind: dataengine.MutationPatch, ExpectedVersion: version, NextVersion: version + 1,
+		Mask: change.Mask, Schema: {{.Dao.Name}}SchemaVersion, Codec: "bson-v2",
+	}
+	if change.Delete {
+		mutation.Kind = dataengine.MutationDelete
+		return mutation, nil
+	}
+	if version == 0 || change.Mask == dataengine.AllFields {
+		data, err := d.marshalCommitState()
+		if err != nil { return dataengine.Mutation{}, fmt.Errorf("prepare put %s/%d: %w", d.CollName(), d.id, err) }
+		mutation.Kind = dataengine.MutationPut
+		mutation.Data = data
+		return mutation, nil
+	}
+	patch, err := d.marshalPersistPatchBSON(change)
+	if err != nil { return dataengine.Mutation{}, fmt.Errorf("prepare patch %s/%d: %w", d.CollName(), d.id, err) }
+	mutation.Patch = patch
+	return mutation, nil
+}
+
+func (d *{{.Dao.Name}}) AcceptMutation(mutation dataengine.Mutation) error {
+	return d.tracker.AcceptVersion(mutation.ExpectedVersion, mutation.NextVersion)
 }
 
 func (d *{{.Dao.Name}}) Marshal() []byte {
-	return d.MarshalPersist(checkpoint.DirtyAll)
+	return d.MarshalPersist(dataengine.AllFields)
 }
 
 func (d *{{.Dao.Name}}) MarshalPersist(mask uint64) []byte {
-	data := d.marshalPersistData(mask)
-	if mask == checkpoint.DirtyAll {
-		d.clearPersistPathPatch()
-	}
-	return data
+	return d.marshalPersistData(mask)
 }
 
 func (d *{{.Dao.Name}}) marshalPersistData(mask uint64) []byte {
@@ -554,33 +519,54 @@ func (d *{{.Dao.Name}}) marshalPersistData(mask uint64) []byte {
 	return data
 }
 
-func (d *{{.Dao.Name}}) MarshalPersistPatch(mask uint64) checkpoint.PersistPatch {
-	patch := checkpoint.PersistPatch{
-		Set:      make(map[string]any),
-		FullData: d.marshalPersistData(checkpoint.DirtyAll),
+func (d *{{.Dao.Name}}) persistChangeHasPath(change nest.PersistChange, field string) bool {
+	prefix := field + "."
+	for path := range change.Set {
+		if path == field || len(path) > len(prefix) && path[:len(prefix)] == prefix { return true }
 	}
-	if mask == 0 || mask == checkpoint.DirtyAll {
-		d.clearPersistPathPatch()
-		return patch
+	for _, path := range change.Unset {
+		if path == field || len(path) > len(prefix) && path[:len(prefix)] == prefix { return true }
 	}
-	fullFields := make(map[string]bool)
+	return false
+}
+
+func (d *{{.Dao.Name}}) persistChangePathCovered(change nest.PersistChange, path string) bool {
+	for field := range change.FullFields {
+		prefix := field + "."
+		if path == field || len(path) > len(prefix) && path[:len(prefix)] == prefix { return true }
+	}
+	return false
+}
+
+func (d *{{.Dao.Name}}) marshalPersistPatchBSON(change nest.PersistChange) (dataengine.FieldPatch, error) {
+	set := make(map[string]any, len(change.Set)+len(change.FullFields))
 {{- range persistFields .Dao.Fields}}
-	if mask&{{fieldMaskName $.Dao.Name .Name}} != 0 {
+	if change.Mask&{{fieldMaskName $.Dao.Name .Name}} != 0 {
 {{- if eq .Kind 2}}
-		if d.persistPatchFull["{{bsonKey .Name}}"] || !d.hasPersistPathPatch("{{bsonKey .Name}}") {
-			patch.Set["{{bsonKey .Name}}"] = d.{{mapHelperName $.Dao.Name .Name}}()
-			fullFields["{{bsonKey .Name}}"] = true
+		_, full := change.FullFields["{{bsonKey .Name}}"]
+		if full || !d.persistChangeHasPath(change, "{{bsonKey .Name}}") {
+			set["{{bsonKey .Name}}"] = d.{{mapHelperName $.Dao.Name .Name}}()
 		}
 {{- else}}
-		patch.Set["{{bsonKey .Name}}"] = d.{{fieldVar .Name}}
+		set["{{bsonKey .Name}}"] = d.{{fieldVar .Name}}
 {{- end}}
 	}
 {{- end}}
-	d.appendPersistPathPatch(&patch, fullFields)
-	if len(patch.Set) == 0 {
-		patch.Set = nil
+	for path, value := range change.Set {
+		if !d.persistChangePathCovered(change, path) { set[path] = value }
 	}
-	return patch
+	var raw []byte
+	if len(set) != 0 {
+		keys := make([]string, 0, len(set))
+		for path := range set { keys = append(keys, path) }
+		sort.Strings(keys)
+		doc := make(bson.D, 0, len(keys))
+		for _, path := range keys { doc = append(doc, bson.E{Key: path, Value: set[path]}) }
+		var err error
+		raw, err = bson.Marshal(doc)
+		if err != nil { return dataengine.FieldPatch{}, err }
+	}
+	return dataengine.FieldPatch{SetBSON: raw, Unset: append([]string(nil), change.Unset...)}, nil
 }
 
 func (d *{{.Dao.Name}}) MarshalSync(mask uint64) []byte {
@@ -685,7 +671,7 @@ func (d *{{.Dao.Name}}) RestorePersisted(raw []byte, schemaVersion uint32, versi
 
 // compile-time import guards
 var (
-	_ = checkpoint.DirtyTracker{}
+	_ = dataengine.Tracker{}
 	_ = bson.M{}
 )
 `

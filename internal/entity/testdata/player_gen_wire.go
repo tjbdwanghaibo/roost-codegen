@@ -2,10 +2,11 @@
 package testdata
 
 import (
+	"fmt"
 	"sync"
 
-	"github.com/tjbdwanghaibo/cube-core/checkpoint"
 	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/cube-core/nest"
 	"github.com/tjbdwanghaibo/cube/game/clientsync"
 )
 
@@ -122,92 +123,28 @@ func (e *Player) generatedOnDestroy(reason entity.EntityDestroyReason) {
 	e.ComponentManager.DestroyAll(reason)
 }
 
-// Snapshot produces save items for the checkpoint system.
-// Called under entity lock (guard release).
-func (e *Player) Snapshot() []checkpoint.SaveItem {
-	var items []checkpoint.SaveItem
+// PrepareDelete registers versioned tombstones in the active Nest transaction.
+func (e *Player) PrepareDelete(tx *nest.RollbackTx) error {
+	if tx == nil {
+		return nest.ErrTransactionClosed
+	}
 	if e.dao != nil {
-		if mask := e.dao.DirtyTracker().TakePersistDirty(); mask != 0 {
-			ver := e.dao.DirtyTracker().IncVersion()
-			data := e.dao.MarshalPersist(mask)
-			mode := checkpoint.SaveModeFull
-			var patch checkpoint.PersistPatch
-			if mask != checkpoint.DirtyAll {
-				if patcher, ok := any(e.dao).(checkpoint.PersistPatcher); ok {
-					patch = patcher.MarshalPersistPatch(mask)
-					if !patch.Empty() {
-						if len(patch.FullData) == 0 {
-							patch.FullData = data
-						}
-						mode = checkpoint.SaveModePatch
-					}
-				}
-			}
-			items = append(items, checkpoint.SaveItem{
-				Db:         e.dao.DbName(),
-				DbScope:    checkpoint.ResolveDatabaseScope(e.dao),
-				Collection: e.dao.CollName(),
-				ID:         e.dao.Id(),
-				Version:    ver,
-				Mask:       mask,
-				Mode:       mode,
-				Data:       data,
-				Patch:      patch,
-				Tracker:    e.dao.DirtyTracker(),
-			})
+		participant, ok := any(e.dao).(nest.MutationParticipant)
+		if !ok {
+			return fmt.Errorf("Player: DAO players does not implement nest.MutationParticipant")
+		}
+		if err := tx.MarkPersistDelete(participant); err != nil {
+			return err
 		}
 	}
 	if e.mail != nil {
-		if mask := e.mail.DirtyTracker().TakePersistDirty(); mask != 0 {
-			ver := e.mail.DirtyTracker().IncVersion()
-			data := e.mail.MarshalPersist(mask)
-			mode := checkpoint.SaveModeFull
-			var patch checkpoint.PersistPatch
-			if mask != checkpoint.DirtyAll {
-				if patcher, ok := any(e.mail).(checkpoint.PersistPatcher); ok {
-					patch = patcher.MarshalPersistPatch(mask)
-					if !patch.Empty() {
-						if len(patch.FullData) == 0 {
-							patch.FullData = data
-						}
-						mode = checkpoint.SaveModePatch
-					}
-				}
-			}
-			items = append(items, checkpoint.SaveItem{
-				Db:         e.mail.DbName(),
-				DbScope:    checkpoint.ResolveDatabaseScope(e.mail),
-				Collection: e.mail.CollName(),
-				ID:         e.mail.Id(),
-				Version:    ver,
-				Mask:       mask,
-				Mode:       mode,
-				Data:       data,
-				Patch:      patch,
-				Tracker:    e.mail.DirtyTracker(),
-			})
+		participant, ok := any(e.mail).(nest.MutationParticipant)
+		if !ok {
+			return fmt.Errorf("Player: DAO mails does not implement nest.MutationParticipant")
+		}
+		if err := tx.MarkPersistDelete(participant); err != nil {
+			return err
 		}
 	}
-	return items
-}
-
-// RemoveSnapshot describes all persistent DAO targets independently of dirty
-// state. Checkpoint writes durable delete tombstones before backend removal.
-func (e *Player) RemoveSnapshot() []checkpoint.SaveItem {
-	items := make([]checkpoint.SaveItem, 0, 2)
-	if e.dao != nil {
-		items = append(items, checkpoint.SaveItem{
-			Db: e.dao.DbName(), DbScope: checkpoint.ResolveDatabaseScope(e.dao),
-			Collection: e.dao.CollName(), ID: e.dao.Id(),
-			Version: e.dao.DirtyTracker().IncVersion(), Deleted: true,
-		})
-	}
-	if e.mail != nil {
-		items = append(items, checkpoint.SaveItem{
-			Db: e.mail.DbName(), DbScope: checkpoint.ResolveDatabaseScope(e.mail),
-			Collection: e.mail.CollName(), ID: e.mail.Id(),
-			Version: e.mail.DirtyTracker().IncVersion(), Deleted: true,
-		})
-	}
-	return items
+	return nil
 }

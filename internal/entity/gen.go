@@ -29,9 +29,8 @@ func generate(ent EntityDef, pkg string, outFile string, force bool) (bool, erro
 		HasDirty: hasDirtyDao(ent),
 		RemoteV2: remoteV2,
 	}
-	data.NeedsRemove = data.HasDirty && !ent.NoPersist && !data.RemoteV2 && !hasMethod(ent, "RemoveSnapshot")
-	needsCheckpoint := data.RemoteV2 || (data.HasDirty && !hasMethod(ent, "Snapshot")) || data.NeedsRemove
-	data.ImportBlock = buildImportBlock(ent, data.RemoteV2, data.HasComps, needsCheckpoint)
+	data.NeedsRemove = data.HasDirty && !ent.NoPersist && !data.RemoteV2 && !hasMethod(ent, "PrepareDelete")
+	data.ImportBlock = buildImportBlock(ent, data.RemoteV2 || data.NeedsRemove, data.RemoteV2, data.NeedsRemove)
 
 	tmpl, err := template.New("entity_wire").Funcs(template.FuncMap{
 		"deref":              derefType,
@@ -141,7 +140,7 @@ func hasMethod(ent EntityDef, name string) bool {
 	return ent.ExistingMethods != nil && ent.ExistingMethods[name]
 }
 
-func buildImportBlock(ent EntityDef, needsFmt bool, hasComps bool, hasDirty bool) string {
+func buildImportBlock(ent EntityDef, needsFmt, needsCheckpoint, needsNest bool) string {
 	var groups [][]string
 	std := []string{`"sync"`}
 	if needsFmt {
@@ -157,8 +156,11 @@ func buildImportBlock(ent EntityDef, needsFmt bool, hasComps bool, hasDirty bool
 			local = append(local, fmt.Sprintf(`"%s"`, imp.Path))
 		}
 	}
-	if hasDirty {
+	if needsCheckpoint {
 		local = append(local, `"github.com/tjbdwanghaibo/cube-core/checkpoint"`)
+	}
+	if needsNest {
+		local = append(local, `"github.com/tjbdwanghaibo/cube-core/nest"`)
 	}
 	local = append(local, `"github.com/tjbdwanghaibo/cube-core/entity"`)
 	groups = append(groups, local)
@@ -455,66 +457,19 @@ func (e *{{.Entity.Name}}) RollbackRemoteCommit(commit entity.RemoteCommit) {
 	}
 }
 {{- end}}
-{{- if .HasDirty}}
-
-{{- if not (hasMethod .Entity "Snapshot")}}
-// Snapshot produces save items for the checkpoint system.
-// Called under entity lock (guard release).
-func (e *{{.Entity.Name}}) Snapshot() []checkpoint.SaveItem {
-	var items []checkpoint.SaveItem
-{{- range .Entity.Daos}}
-	if e.{{.FieldName}} != nil {
-	if mask := e.{{.FieldName}}.DirtyTracker().TakePersistDirty(); mask != 0 {
-		ver := e.{{.FieldName}}.DirtyTracker().IncVersion()
-		data := e.{{.FieldName}}.MarshalPersist(mask)
-		mode := checkpoint.SaveModeFull
-		var patch checkpoint.PersistPatch
-		if mask != checkpoint.DirtyAll {
-			if patcher, ok := any(e.{{.FieldName}}).(checkpoint.PersistPatcher); ok {
-				patch = patcher.MarshalPersistPatch(mask)
-				if !patch.Empty() {
-					if len(patch.FullData) == 0 {
-						patch.FullData = data
-					}
-					mode = checkpoint.SaveModePatch
-				}
-			}
-		}
-			items = append(items, checkpoint.SaveItem{
-				Db:         e.{{.FieldName}}.DbName(),
-				DbScope:    checkpoint.ResolveDatabaseScope(e.{{.FieldName}}),
-				Collection: e.{{.FieldName}}.CollName(),
-			ID:         e.{{.FieldName}}.Id(),
-			Version:    ver,
-			Mask:       mask,
-			Mode:       mode,
-			Data:       data,
-			Patch:      patch,
-			Tracker:    e.{{.FieldName}}.DirtyTracker(),
-		})
-	}
-	}
-{{- end}}
-	return items
-}
-{{- end}}
-{{- end}}
 {{- if .NeedsRemove}}
 
-// RemoveSnapshot describes all persistent DAO targets independently of dirty
-// state. Checkpoint writes durable delete tombstones before backend removal.
-func (e *{{.Entity.Name}}) RemoveSnapshot() []checkpoint.SaveItem {
-	items := make([]checkpoint.SaveItem, 0, {{len .Entity.Daos}})
+// PrepareDelete registers versioned tombstones in the active Nest transaction.
+func (e *{{.Entity.Name}}) PrepareDelete(tx *nest.RollbackTx) error {
+	if tx == nil { return nest.ErrTransactionClosed }
 {{- range .Entity.Daos}}
 	if e.{{.FieldName}} != nil {
-		items = append(items, checkpoint.SaveItem{
-			Db: e.{{.FieldName}}.DbName(), DbScope: checkpoint.ResolveDatabaseScope(e.{{.FieldName}}),
-			Collection: e.{{.FieldName}}.CollName(), ID: e.{{.FieldName}}.Id(),
-			Version: e.{{.FieldName}}.DirtyTracker().IncVersion(), Deleted: true,
-		})
+		participant, ok := any(e.{{.FieldName}}).(nest.MutationParticipant)
+		if !ok { return fmt.Errorf("{{$.Entity.Name}}: DAO {{.CollName}} does not implement nest.MutationParticipant") }
+		if err := tx.MarkPersistDelete(participant); err != nil { return err }
 	}
 {{- end}}
-	return items
+	return nil
 }
 {{- end}}
 `

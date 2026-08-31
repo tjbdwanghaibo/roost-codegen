@@ -16,7 +16,7 @@ func generateDao(dao DaoDef, defs *Definitions, pkg string, outFile string, forc
 	if err := validateDatabaseScope(dao); err != nil {
 		return false, err
 	}
-	if err := validateGeneratedStorageFields(dao.Name, dao.Fields, "id", "tracker", "persistPatchSet", "persistPatchUnset", "persistPatchFull"); err != nil {
+	if err := validateGeneratedStorageFields(dao.Name, dao.Fields, "id", "tracker"); err != nil {
 		return false, err
 	}
 	if err := validateGeneratedMapFields(dao.Fields); err != nil {

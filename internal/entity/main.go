@@ -16,7 +16,7 @@
 // And produces a <entity>_gen_wire.go file containing:
 //   - NewXxx(param) factory function
 //   - Base/Dirty and component/DAO accessor methods
-//   - Snapshot() method for checkpoint
+//   - transactional PrepareDelete() registration for persistent DAOs
 //   - Hooks wiring (onClear, onDestroy)
 package entity
 

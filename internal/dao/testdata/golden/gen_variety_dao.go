@@ -4,31 +4,30 @@ package testdata
 import (
 	"fmt"
 	"github.com/tjbdwanghaibo/cube-core/checkpoint"
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	fmap "github.com/tjbdwanghaibo/cube-core/map"
 	"github.com/tjbdwanghaibo/cube-core/migration"
 	"github.com/tjbdwanghaibo/cube-core/nest"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"sort"
 )
 
 // VarietyDao is the DAO for collection "varieties".
 type VarietyDao struct {
-	id                int64
-	tracker           checkpoint.DirtyTracker
-	persistPatchSet   map[string]any
-	persistPatchUnset []string
-	persistPatchFull  map[string]bool
-	persistOnly       int64
-	syncOnly          int64
-	neither           int64
-	fastItems         *fmap.FastMap[int64, int32]
-	shardedTags       *fmap.ShardedSafeMap[int32, string]
+	id          int64
+	tracker     dataengine.Tracker
+	persistOnly int64
+	syncOnly    int64
+	neither     int64
+	fastItems   *fmap.FastMap[int64, int32]
+	shardedTags *fmap.ShardedSafeMap[int32, string]
 }
 
 // Ensure interface compliance.
 var _ entity.DaoInterface = (*VarietyDao)(nil)
 var _ nest.RollbackSnapshotter = (*VarietyDao)(nil)
-var _ nest.CommitParticipant = (*VarietyDao)(nil)
+var _ nest.MutationParticipant = (*VarietyDao)(nil)
 
 const (
 	VarietyDaoDBName               = "game"
@@ -53,9 +52,9 @@ func (d *VarietyDao) SchemaVersion() uint32             { return VarietyDaoSchem
 func (d *VarietyDao) Migrate(raw []byte, from uint32) ([]byte, error) {
 	return migration.MigrateDAO(d.CollName(), raw, from, VarietyDaoSchemaVersion)
 }
-func (d *VarietyDao) Dirty() entity.IDirty                   { return &d.tracker }
-func (d *VarietyDao) CleanDirty()                            { d.tracker.SelfClean(); d.clearPersistPathPatch() }
-func (d *VarietyDao) DirtyTracker() *checkpoint.DirtyTracker { return &d.tracker }
+func (d *VarietyDao) Dirty() entity.IDirty              { return &d.tracker }
+func (d *VarietyDao) CleanDirty()                       { d.tracker.SelfClean() }
+func (d *VarietyDao) DirtyTracker() *dataengine.Tracker { return &d.tracker }
 
 const (
 	varietyDaoFieldPersistOnly uint64 = 1 << iota
@@ -66,122 +65,82 @@ const (
 )
 
 func (d *VarietyDao) markPersistOnlyDirty() {
-	d.tracker.MarkScope(checkpoint.DirtyPersist, varietyDaoFieldPersistOnly)
+	if err := nest.MarkPersist(d, varietyDaoFieldPersistOnly); err != nil {
+		panic(fmt.Errorf("VarietyDao: mark PersistOnly persistence: %w", err))
+	}
 }
 
 func (d *VarietyDao) markSyncOnlyDirty() {
-	d.tracker.MarkScope(checkpoint.DirtySync, varietyDaoFieldSyncOnly)
+	d.tracker.MarkSync(varietyDaoFieldSyncOnly)
 }
 
 func (d *VarietyDao) markNeitherDirty() {
-	d.tracker.MarkScope(0, varietyDaoFieldNeither)
 }
 
 func (d *VarietyDao) markFastItemsDirty() {
-	d.tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, varietyDaoFieldFastItems)
+	if err := nest.MarkPersist(d, varietyDaoFieldFastItems); err != nil {
+		panic(fmt.Errorf("VarietyDao: mark FastItems persistence: %w", err))
+	}
+	d.tracker.MarkSync(varietyDaoFieldFastItems)
 }
 
 func (d *VarietyDao) markShardedTagsDirty() {
-	d.tracker.MarkScope(checkpoint.DirtyPersist|checkpoint.DirtySync, varietyDaoFieldShardedTags)
-}
-
-func (d *VarietyDao) recordPersistPatchSet(field string, path string, value any) {
-	if path == "" {
-		d.recordPersistPatchFull(field)
-		return
+	if err := nest.MarkPersist(d, varietyDaoFieldShardedTags); err != nil {
+		panic(fmt.Errorf("VarietyDao: mark ShardedTags persistence: %w", err))
 	}
-	if d.persistPatchSet == nil {
-		d.persistPatchSet = make(map[string]any)
-	}
-	d.persistPatchSet[path] = value
-	for i := 0; i < len(d.persistPatchUnset); {
-		if d.persistPatchUnset[i] == path {
-			d.persistPatchUnset = append(d.persistPatchUnset[:i], d.persistPatchUnset[i+1:]...)
-			continue
-		}
-		i++
-	}
-}
-
-func (d *VarietyDao) recordPersistPatchUnset(field string, path string) {
-	if path == "" {
-		d.recordPersistPatchFull(field)
-		return
-	}
-	delete(d.persistPatchSet, path)
-	d.persistPatchUnset = append(d.persistPatchUnset, path)
-}
-
-func (d *VarietyDao) recordPersistPatchFull(field string) {
-	if field == "" {
-		return
-	}
-	if d.persistPatchFull == nil {
-		d.persistPatchFull = make(map[string]bool)
-	}
-	d.persistPatchFull[field] = true
-}
-
-func (d *VarietyDao) hasPersistPathPatch(field string) bool {
-	return checkpoint.PersistPatchHasPath(d.persistPatchSet, d.persistPatchUnset, field)
-}
-
-func (d *VarietyDao) appendPersistPathPatch(patch *checkpoint.PersistPatch, fullFields map[string]bool) {
-	for path, value := range d.persistPatchSet {
-		if checkpoint.PersistPatchPathCovered(path, fullFields) {
-			continue
-		}
-		patch.Set[path] = value
-	}
-	for _, path := range d.persistPatchUnset {
-		if checkpoint.PersistPatchPathCovered(path, fullFields) {
-			continue
-		}
-		patch.Unset = append(patch.Unset, path)
-	}
-	d.clearPersistPathPatch()
-}
-
-func (d *VarietyDao) clearPersistPathPatch() {
-	d.persistPatchSet = nil
-	d.persistPatchUnset = nil
-	d.persistPatchFull = nil
+	d.tracker.MarkSync(varietyDaoFieldShardedTags)
 }
 
 func (d *VarietyDao) markFastItemsKeyDirty(key int64, val int32) {
 	if path, ok := checkpoint.MapPatchPath("fast_items", key); ok {
-		d.recordPersistPatchSet("fast_items", path, val)
+		if err := nest.MarkPersistSet(d, varietyDaoFieldFastItems, path, val); err != nil {
+			panic(fmt.Errorf("VarietyDao: mark FastItems key persistence: %w", err))
+		}
 	} else {
-		d.recordPersistPatchFull("fast_items")
+		if err := nest.MarkPersistFull(d, varietyDaoFieldFastItems, "fast_items"); err != nil {
+			panic(fmt.Errorf("VarietyDao: mark FastItems persistence: %w", err))
+		}
 	}
-	d.markFastItemsDirty()
+	d.tracker.MarkSync(varietyDaoFieldFastItems)
 }
 
 func (d *VarietyDao) markFastItemsKeyDeleted(key int64) {
 	if path, ok := checkpoint.MapPatchPath("fast_items", key); ok {
-		d.recordPersistPatchUnset("fast_items", path)
+		if err := nest.MarkPersistUnset(d, varietyDaoFieldFastItems, path); err != nil {
+			panic(fmt.Errorf("VarietyDao: mark FastItems delete persistence: %w", err))
+		}
 	} else {
-		d.recordPersistPatchFull("fast_items")
+		if err := nest.MarkPersistFull(d, varietyDaoFieldFastItems, "fast_items"); err != nil {
+			panic(fmt.Errorf("VarietyDao: mark FastItems persistence: %w", err))
+		}
 	}
-	d.markFastItemsDirty()
+	d.tracker.MarkSync(varietyDaoFieldFastItems)
 }
 
 func (d *VarietyDao) markShardedTagsKeyDirty(key int32, val string) {
 	if path, ok := checkpoint.MapPatchPath("sharded_tags", key); ok {
-		d.recordPersistPatchSet("sharded_tags", path, val)
+		if err := nest.MarkPersistSet(d, varietyDaoFieldShardedTags, path, val); err != nil {
+			panic(fmt.Errorf("VarietyDao: mark ShardedTags key persistence: %w", err))
+		}
 	} else {
-		d.recordPersistPatchFull("sharded_tags")
+		if err := nest.MarkPersistFull(d, varietyDaoFieldShardedTags, "sharded_tags"); err != nil {
+			panic(fmt.Errorf("VarietyDao: mark ShardedTags persistence: %w", err))
+		}
 	}
-	d.markShardedTagsDirty()
+	d.tracker.MarkSync(varietyDaoFieldShardedTags)
 }
 
 func (d *VarietyDao) markShardedTagsKeyDeleted(key int32) {
 	if path, ok := checkpoint.MapPatchPath("sharded_tags", key); ok {
-		d.recordPersistPatchUnset("sharded_tags", path)
+		if err := nest.MarkPersistUnset(d, varietyDaoFieldShardedTags, path); err != nil {
+			panic(fmt.Errorf("VarietyDao: mark ShardedTags delete persistence: %w", err))
+		}
 	} else {
-		d.recordPersistPatchFull("sharded_tags")
+		if err := nest.MarkPersistFull(d, varietyDaoFieldShardedTags, "sharded_tags"); err != nil {
+			panic(fmt.Errorf("VarietyDao: mark ShardedTags persistence: %w", err))
+		}
 	}
-	d.markShardedTagsDirty()
+	d.tracker.MarkSync(varietyDaoFieldShardedTags)
 }
 
 // Init wires dirty callbacks for nested structs and map values.
@@ -397,15 +356,11 @@ func (d *VarietyDao) setShardedTagsRawMap(src map[int32]string) {
 
 // --- Marshal (persist fields) ---
 
-// CaptureRollbackState is side-effect free. It includes transient and
-// sync-only fields plus pending path-patch state; persistence Marshal methods
-// are intentionally not reused because some of them consume patch metadata.
+// CaptureRollbackState is side-effect free and includes transient and
+// sync-only fields. Persistence changes live in RollbackTx, not in the DAO.
 func (d *VarietyDao) CaptureRollbackState() ([]byte, error) {
 	type rollbackDoc struct {
 		Id          int64            `bson:"_id"`
-		PatchSet    map[string]any   `bson:"_rollback_patch_set"`
-		PatchUnset  []string         `bson:"_rollback_patch_unset"`
-		PatchFull   map[string]bool  `bson:"_rollback_patch_full"`
 		PersistOnly int64            `bson:"persist_only"`
 		SyncOnly    int64            `bson:"sync_only"`
 		Neither     int64            `bson:"neither"`
@@ -413,7 +368,7 @@ func (d *VarietyDao) CaptureRollbackState() ([]byte, error) {
 		ShardedTags map[int32]string `bson:"sharded_tags"`
 	}
 	doc := rollbackDoc{
-		Id: d.id, PatchSet: d.persistPatchSet, PatchUnset: d.persistPatchUnset, PatchFull: d.persistPatchFull,
+		Id:          d.id,
 		PersistOnly: d.persistOnly,
 		SyncOnly:    d.syncOnly,
 		Neither:     d.neither,
@@ -426,9 +381,6 @@ func (d *VarietyDao) CaptureRollbackState() ([]byte, error) {
 func (d *VarietyDao) RestoreRollbackState(raw []byte) error {
 	type rollbackDoc struct {
 		Id          int64            `bson:"_id"`
-		PatchSet    map[string]any   `bson:"_rollback_patch_set"`
-		PatchUnset  []string         `bson:"_rollback_patch_unset"`
-		PatchFull   map[string]bool  `bson:"_rollback_patch_full"`
 		PersistOnly int64            `bson:"persist_only"`
 		SyncOnly    int64            `bson:"sync_only"`
 		Neither     int64            `bson:"neither"`
@@ -440,9 +392,6 @@ func (d *VarietyDao) RestoreRollbackState(raw []byte) error {
 		return err
 	}
 	d.id = doc.Id
-	d.persistPatchSet = doc.PatchSet
-	d.persistPatchUnset = doc.PatchUnset
-	d.persistPatchFull = doc.PatchFull
 	d.persistOnly = doc.PersistOnly
 	d.syncOnly = doc.SyncOnly
 	d.neither = doc.Neither
@@ -463,31 +412,47 @@ func (d *VarietyDao) marshalCommitState() ([]byte, error) {
 	return bson.Marshal(doc)
 }
 
-func (d *VarietyDao) PrepareCommit(tx *nest.RollbackTx) error {
-	if tx == nil || !d.tracker.HasPersistDirty() {
-		return nil
+func (d *VarietyDao) PrepareMutation(change nest.PersistChange) (dataengine.Mutation, error) {
+	version := d.tracker.Version()
+	mutation := dataengine.Mutation{
+		Key: dataengine.DocumentKey{
+			Database: d.DbName(), Scope: dataengine.DatabaseScope(d.DbScope()),
+			Resource: d.CollName(), ID: d.Id(),
+		},
+		Kind: dataengine.MutationPatch, ExpectedVersion: version, NextVersion: version + 1,
+		Mask: change.Mask, Schema: VarietyDaoSchemaVersion, Codec: "bson-v2",
 	}
-	data, err := d.marshalCommitState()
+	if change.Delete {
+		mutation.Kind = dataengine.MutationDelete
+		return mutation, nil
+	}
+	if version == 0 || change.Mask == dataengine.AllFields {
+		data, err := d.marshalCommitState()
+		if err != nil {
+			return dataengine.Mutation{}, fmt.Errorf("prepare put %s/%d: %w", d.CollName(), d.id, err)
+		}
+		mutation.Kind = dataengine.MutationPut
+		mutation.Data = data
+		return mutation, nil
+	}
+	patch, err := d.marshalPersistPatchBSON(change)
 	if err != nil {
-		return fmt.Errorf("prepare commit %s/%d: %w", d.CollName(), d.id, err)
+		return dataengine.Mutation{}, fmt.Errorf("prepare patch %s/%d: %w", d.CollName(), d.id, err)
 	}
-	return tx.AddMutation(nest.EntityMutation{
-		EntityID: d.id, Database: d.DbName(), DatabaseScope: uint8(d.DbScope()), Resource: d.CollName(), Version: d.tracker.Version() + 1,
-		Mask:   d.tracker.PersistDirtyMask(),
-		Schema: VarietyDaoSchemaVersion, Codec: "bson-full-v1", Data: data,
-	})
+	mutation.Patch = patch
+	return mutation, nil
+}
+
+func (d *VarietyDao) AcceptMutation(mutation dataengine.Mutation) error {
+	return d.tracker.AcceptVersion(mutation.ExpectedVersion, mutation.NextVersion)
 }
 
 func (d *VarietyDao) Marshal() []byte {
-	return d.MarshalPersist(checkpoint.DirtyAll)
+	return d.MarshalPersist(dataengine.AllFields)
 }
 
 func (d *VarietyDao) MarshalPersist(mask uint64) []byte {
-	data := d.marshalPersistData(mask)
-	if mask == checkpoint.DirtyAll {
-		d.clearPersistPathPatch()
-	}
-	return data
+	return d.marshalPersistData(mask)
 }
 
 func (d *VarietyDao) marshalPersistData(mask uint64) []byte {
@@ -510,36 +475,71 @@ func (d *VarietyDao) marshalPersistData(mask uint64) []byte {
 	return data
 }
 
-func (d *VarietyDao) MarshalPersistPatch(mask uint64) checkpoint.PersistPatch {
-	patch := checkpoint.PersistPatch{
-		Set:      make(map[string]any),
-		FullData: d.marshalPersistData(checkpoint.DirtyAll),
-	}
-	if mask == 0 || mask == checkpoint.DirtyAll {
-		d.clearPersistPathPatch()
-		return patch
-	}
-	fullFields := make(map[string]bool)
-	if mask&varietyDaoFieldPersistOnly != 0 {
-		patch.Set["persist_only"] = d.persistOnly
-	}
-	if mask&varietyDaoFieldFastItems != 0 {
-		if d.persistPatchFull["fast_items"] || !d.hasPersistPathPatch("fast_items") {
-			patch.Set["fast_items"] = d.varietyDaoFastItemsRawMap()
-			fullFields["fast_items"] = true
+func (d *VarietyDao) persistChangeHasPath(change nest.PersistChange, field string) bool {
+	prefix := field + "."
+	for path := range change.Set {
+		if path == field || len(path) > len(prefix) && path[:len(prefix)] == prefix {
+			return true
 		}
 	}
-	if mask&varietyDaoFieldShardedTags != 0 {
-		if d.persistPatchFull["sharded_tags"] || !d.hasPersistPathPatch("sharded_tags") {
-			patch.Set["sharded_tags"] = d.varietyDaoShardedTagsRawMap()
-			fullFields["sharded_tags"] = true
+	for _, path := range change.Unset {
+		if path == field || len(path) > len(prefix) && path[:len(prefix)] == prefix {
+			return true
 		}
 	}
-	d.appendPersistPathPatch(&patch, fullFields)
-	if len(patch.Set) == 0 {
-		patch.Set = nil
+	return false
+}
+
+func (d *VarietyDao) persistChangePathCovered(change nest.PersistChange, path string) bool {
+	for field := range change.FullFields {
+		prefix := field + "."
+		if path == field || len(path) > len(prefix) && path[:len(prefix)] == prefix {
+			return true
+		}
 	}
-	return patch
+	return false
+}
+
+func (d *VarietyDao) marshalPersistPatchBSON(change nest.PersistChange) (dataengine.FieldPatch, error) {
+	set := make(map[string]any, len(change.Set)+len(change.FullFields))
+	if change.Mask&varietyDaoFieldPersistOnly != 0 {
+		set["persist_only"] = d.persistOnly
+	}
+	if change.Mask&varietyDaoFieldFastItems != 0 {
+		_, full := change.FullFields["fast_items"]
+		if full || !d.persistChangeHasPath(change, "fast_items") {
+			set["fast_items"] = d.varietyDaoFastItemsRawMap()
+		}
+	}
+	if change.Mask&varietyDaoFieldShardedTags != 0 {
+		_, full := change.FullFields["sharded_tags"]
+		if full || !d.persistChangeHasPath(change, "sharded_tags") {
+			set["sharded_tags"] = d.varietyDaoShardedTagsRawMap()
+		}
+	}
+	for path, value := range change.Set {
+		if !d.persistChangePathCovered(change, path) {
+			set[path] = value
+		}
+	}
+	var raw []byte
+	if len(set) != 0 {
+		keys := make([]string, 0, len(set))
+		for path := range set {
+			keys = append(keys, path)
+		}
+		sort.Strings(keys)
+		doc := make(bson.D, 0, len(keys))
+		for _, path := range keys {
+			doc = append(doc, bson.E{Key: path, Value: set[path]})
+		}
+		var err error
+		raw, err = bson.Marshal(doc)
+		if err != nil {
+			return dataengine.FieldPatch{}, err
+		}
+	}
+	return dataengine.FieldPatch{SetBSON: raw, Unset: append([]string(nil), change.Unset...)}, nil
 }
 
 func (d *VarietyDao) MarshalSync(mask uint64) []byte {
@@ -660,6 +660,6 @@ func (d *VarietyDao) RestorePersisted(raw []byte, schemaVersion uint32, version 
 
 // compile-time import guards
 var (
-	_ = checkpoint.DirtyTracker{}
+	_ = dataengine.Tracker{}
 	_ = bson.M{}
 )
