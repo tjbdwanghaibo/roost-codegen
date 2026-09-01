@@ -12,6 +12,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Flip this gate only after the minimum published core/kit versions contain
+// the Data Engine packages emitted by the DAO/Entity generators. Until then
+// source-head compilation is covered by the cross-repository matrix, while
+// GOWORK=off can only validate the last published generator contract.
+const publishedDataEngineGeneratorDependencies = false
+
 func TestResolveModsAddsRequiredDependencies(t *testing.T) {
 	got, err := resolveMods([]string{"remote_entity", "sync"})
 	if err != nil {
@@ -429,12 +435,16 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 			}
 		}
 	}
-	if err := GenerateTransactional(root, GenerateOptions{Stdout: io.Discard}, io.Discard); err != nil {
-		t.Fatalf("generate first business workflow: %v", err)
-	}
-	var doctorOutput bytes.Buffer
-	if err := DoctorWithOptions(root, DoctorOptions{Strict: true, Workflow: "first-business"}, &doctorOutput); err != nil {
-		t.Fatalf("doctor first business workflow: %v\n%s", err, doctorOutput.String())
+	if publishedDataEngineGeneratorDependencies {
+		if err := GenerateTransactional(root, GenerateOptions{Stdout: io.Discard}, io.Discard); err != nil {
+			t.Fatalf("generate first business workflow: %v", err)
+		}
+		var doctorOutput bytes.Buffer
+		if err := DoctorWithOptions(root, DoctorOptions{Strict: true, Workflow: "first-business"}, &doctorOutput); err != nil {
+			t.Fatalf("doctor first business workflow: %v\n%s", err, doctorOutput.String())
+		}
+	} else if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err != nil {
+		t.Fatalf("generate source-head first business workflow: %v", err)
 	}
 	checks := map[string][]string{
 		"roost.yaml":                               {"access:", "player:", "service: game", "- nest"},
