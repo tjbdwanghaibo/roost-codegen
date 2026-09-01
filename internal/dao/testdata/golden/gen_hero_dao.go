@@ -633,7 +633,7 @@ func (d *HeroDao) marshalPersistData(mask uint64) []byte {
 		// The interface has no error slot and a nil payload would be
 		// persisted as silent data loss; a marshal failure here is a
 		// programming error (unserializable state), so fail loudly and let
-		// WAL/checkpoint recovery own the aftermath.
+		// Data Engine WAL recovery owns the aftermath.
 		panic(fmt.Errorf("HeroDao: marshal persist data: %w", err))
 	}
 	return data
@@ -890,7 +890,7 @@ func (d *HeroDao) Unmarshal(raw []byte) error {
 }
 
 // RestorePersisted is the single production hydration path used by the
-// checkpoint aggregate repository. Migration and tracker restoration happen
+// Data Engine aggregate repository. Migration and tracker restoration happen
 // before the DAO is published through its entity.
 func (d *HeroDao) RestorePersisted(raw []byte, schemaVersion uint32, version uint64) error {
 	if schemaVersion > HeroDaoSchemaVersion {

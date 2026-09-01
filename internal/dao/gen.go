@@ -148,7 +148,6 @@ func funcMap(defs *Definitions) template.FuncMap {
 		"dirtyFields":   func(fields []FieldDef) []FieldDef { return filterDirty(fields) },
 		"bsonKey":       func(name string) string { return toSnake(name) },
 		"fieldMaskName": fieldMaskName,
-		"dirtyScope":    dirtyScopeExpr,
 		"fieldType":     fieldType,
 		"fieldVar":      fieldVarName,
 		"mapValType":    mapValType,
@@ -191,19 +190,6 @@ func derefDaoTypeName(typeName string) string {
 		typeName = typeName[idx+1:]
 	}
 	return typeName
-}
-
-func dirtyScopeExpr(f FieldDef) string {
-	switch {
-	case f.Tag.Persist && f.Tag.Sync:
-		return "checkpoint.DirtyPersist | checkpoint.DirtySync"
-	case f.Tag.Persist:
-		return "checkpoint.DirtyPersist"
-	case f.Tag.Sync:
-		return "checkpoint.DirtySync"
-	default:
-		return "0"
-	}
 }
 
 func fieldType(f FieldDef) string {

@@ -364,7 +364,7 @@ func extractFieldDefs(st *ast.StructType, defs *Definitions) ([]FieldDef, error)
 
 	for _, field := range st.Fields.List {
 		if len(field.Names) == 0 {
-			continue // embedded (e.g. checkpoint.DirtyHook), skip
+			continue // embedded (e.g. dataengine.DirtyHook), skip
 		}
 
 		name := field.Names[0].Name
