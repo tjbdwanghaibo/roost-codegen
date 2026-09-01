@@ -24,6 +24,35 @@ func TestResolveModsAddsRequiredDependencies(t *testing.T) {
 	}
 }
 
+func TestResolveModsSupportsExplicitDataEngineForNestAndSaga(t *testing.T) {
+	got, err := resolveMods([]string{"dataengine", "nest", "saga"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"mongo", "nats", "dataengine", "nest", "saga"} {
+		if !contains(got, want) {
+			t.Fatalf("resolved mods %v do not contain %s", got, want)
+		}
+	}
+	if contains(got, "checkpoint") || contains(got, "nestwal") {
+		t.Fatalf("new Nest/Saga project unexpectedly selected legacy persistence: %v", got)
+	}
+}
+
+func TestResolveModsRejectsDataEngineAndLegacyWriterTogether(t *testing.T) {
+	if _, err := resolveMods([]string{"dataengine", "nestwal"}); err == nil {
+		t.Fatal("mixed persistence writers were accepted")
+	}
+}
+
+func TestManifestRejectsPersistenceEnginesSplitAcrossServices(t *testing.T) {
+	manifest := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"dataengine", "nest"}, nil)
+	manifest.Services["legacy"] = ServiceSpec{Mods: []string{"checkpoint", "nestwal", "nest"}}
+	if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), "process-wide") {
+		t.Fatalf("mixed project persistence err=%v", err)
+	}
+}
+
 func TestNewProjectSyncPreservesBusinessFiles(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "planet")
 	result, root, err := NewProject(NewOptions{
@@ -1238,6 +1267,25 @@ func TestBootstrapImportsTransitiveModDependencies(t *testing.T) {
 		if !strings.Contains(bootstrap, want) {
 			t.Errorf("bootstrap missing transitive dependency %q:\n%s", want, bootstrap)
 		}
+	}
+}
+
+func TestBootstrapWiresDataEngineWithEntityAccess(t *testing.T) {
+	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"dataengine", "nest"}, []string{"entity", "nest", "dao"})
+	bootstrap := renderBootstrap(m)
+	for _, want := range []string{
+		`kitdataengine "github.com/tjbdwanghaibo/cube-kit/dataengine"`,
+		`kitmongo "github.com/tjbdwanghaibo/cube-kit/mongo"`,
+		`kitnats "github.com/tjbdwanghaibo/cube-kit/nats"`,
+		"kitdataengine.NewMod(kitdataengine.WithEntityAccess(EntityAccess))",
+		"kitnest.NewMod(EntityAccess)",
+	} {
+		if !strings.Contains(bootstrap, want) {
+			t.Errorf("bootstrap missing Data Engine wiring %q:\n%s", want, bootstrap)
+		}
+	}
+	if strings.Contains(bootstrap, "kitcheckpoint") || strings.Contains(bootstrap, "kitnestwal") {
+		t.Fatalf("new Data Engine bootstrap retained legacy writers:\n%s", bootstrap)
 	}
 }
 

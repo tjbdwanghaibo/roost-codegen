@@ -4,14 +4,14 @@ package testdata
 import (
 	"fmt"
 
-	"github.com/tjbdwanghaibo/cube-core/checkpoint"
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	fmap "github.com/tjbdwanghaibo/cube-core/map"
 	"github.com/tjbdwanghaibo/cube-core/nest"
 )
 
 // EquipInfo is a nested struct with dirty propagation.
 type EquipInfo struct {
-	checkpoint.DirtyHook
+	dataengine.DirtyHook
 	level int32
 	star  int32
 	gems  *fmap.SmallSafeMap[int32, *GemInfo]

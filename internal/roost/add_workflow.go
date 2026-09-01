@@ -32,6 +32,12 @@ func addEntityLifecycle(root string, manifest Manifest, options AddOptions) ([]s
 	if !contains(resolvedMods, "nest") {
 		return nil, fmt.Errorf("Entity lifecycle requires the instance Entity runtime published by Nest; run: roost add mod nest -service %s", service)
 	}
+	persistenceAlias := "kitcheckpoint"
+	persistenceImport := "github.com/tjbdwanghaibo/cube-kit/checkpoint"
+	if contains(resolvedMods, "dataengine") {
+		persistenceAlias = "kitdataengine"
+		persistenceImport = "github.com/tjbdwanghaibo/cube-kit/dataengine"
+	}
 	path := filepath.Join(root, "game", "lifecycle", entityName+".go")
 	if _, err := os.Stat(path); err == nil {
 		return nil, fmt.Errorf("%s already exists", relativeSlash(root, path))
@@ -47,7 +53,7 @@ import (
 
 	"github.com/tjbdwanghaibo/cube-core/app"
 	"github.com/tjbdwanghaibo/cube-core/entity"
-	kitcheckpoint "github.com/tjbdwanghaibo/cube-kit/checkpoint"
+	{{PERSISTENCE_IMPORT}}
 	"github.com/tjbdwanghaibo/cube-kit/mods"
 	%s %q
 )
@@ -129,7 +135,7 @@ func (lifecycle *%s) GetOrCreate(ctx context.Context, uniqueID int64) (*%s.%s, b
 	if err == nil {
 		return value, false, nil
 	}
-	if !errors.Is(err, kitcheckpoint.ErrEntityAggregateNotFound) && !errors.Is(err, Err%sNotFound) {
+	if !errors.Is(err, {{PERSISTENCE_NOT_FOUND}}) && !errors.Is(err, Err%sNotFound) {
 		return nil, false, err
 	}
 	value, err = lifecycle.Create(ctx, uniqueID)
@@ -155,6 +161,8 @@ func (lifecycle *%s) Destroy(ctx context.Context, value *%s.%s, reason entity.En
 		toPascal(entityName)+"Lifecycle", entityName, toPascal(entityName), entityName, toPascal(entityName), entityName, toPascal(entityName), entityName, toPascal(entityName), entityName,
 		toPascal(entityName)+"Lifecycle", entityName, toPascal(entityName), toPascal(entityName),
 		toPascal(entityName)+"Lifecycle", entityName, toPascal(entityName), toPascal(entityName))
+	body = strings.ReplaceAll(body, "{{PERSISTENCE_IMPORT}}", persistenceAlias+" \""+persistenceImport+"\"")
+	body = strings.ReplaceAll(body, "{{PERSISTENCE_NOT_FOUND}}", persistenceAlias+".ErrEntityAggregateNotFound")
 	formatted, err := format.Source([]byte(body))
 	if err != nil {
 		return nil, fmt.Errorf("format lifecycle scaffold: %w\n%s", err, body)

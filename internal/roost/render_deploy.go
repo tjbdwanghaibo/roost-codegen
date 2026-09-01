@@ -680,7 +680,7 @@ deploy/k8s 使用 base 与 overlays/staging、overlays/production，Secret 挂�
 
 func serviceUsesPersistentWAL(m Manifest, service string) bool {
 	mods, err := resolveMods(append(append([]string{}, m.SharedMods...), m.Services[service].Mods...))
-	return err == nil && contains(mods, "nestwal")
+	return err == nil && (contains(mods, "nestwal") || contains(mods, "dataengine"))
 }
 
 func serviceOwnsPlayerTCP(m Manifest, service string) bool {

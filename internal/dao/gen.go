@@ -168,9 +168,9 @@ func validateDatabaseScope(dao DaoDef) error {
 
 func databaseScopeExpr(dao DaoDef) string {
 	if dao.DbScope == "sid" {
-		return "checkpoint.DatabaseScopeServer"
+		return "dataengine.DatabaseServer"
 	}
-	return "checkpoint.DatabaseScopeGlobal"
+	return "dataengine.DatabaseGlobal"
 }
 
 func fieldMaskName(daoName, fieldName string) string {

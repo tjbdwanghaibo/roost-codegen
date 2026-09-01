@@ -62,15 +62,19 @@ var modCatalog = map[string]modSpec{
 		ImportPath: "github.com/tjbdwanghaibo/cube-kit/checkpoint", Alias: "kitcheckpoint", Constructor: "kitcheckpoint.NewMod()", Depends: []string{"mongo", "redis"},
 		Config: "checkpoint:\n  database: game\n  journal_capacity: 10000\n  admission_pending_capacity: 10000\n  admission_retry_interval: 100ms\n  flush_workers: 4\n  batch_size: 200\n  batch_bytes: 524288\n  flush_interval: 1s\n  retry_backoff: 100ms\n  retry_max_backoff: 5s\n  submit_timeout: 50ms\n  load_concurrency: 4\n  mongo_max_concurrent_groups: 8\n  transaction_receipt_ttl: 720h\n  health_warn_fill_ratio: 0.8\n  wal:\n    prefix: roost:checkpoint:wal\n    shards: 16\n    workers: 4\n    queue_capacity: 4096\n    durable_timeout: 5s\n    aof_timeout: 3s\n    aof_replicas: 0\n    replay_batch_size: 200\n",
 	},
+	"dataengine": {
+		ImportPath: "github.com/tjbdwanghaibo/cube-kit/dataengine", Alias: "kitdataengine", Depends: []string{"mongo", "nats"},
+		Config: "persistence:\n  engine: dataengine\nnest:\n  worker_num: 8\n  heartbeat_worker_num: 2\n  queue_capacity: 4096\n  delayed_capacity: 4096\n  max_delay: 24h\n  tick_duration: 50ms\n  request_timeout: 3s\n  pipelined:\n    allowlist: []\n    async: false\n    async_workers: 8\n    async_queue_capacity: 4096\ndataengine:\n  database: game\n  startup_timeout: 30s\n  shutdown_timeout: 30s\n  transaction_receipt_ttl: 720h\n  receipt_ttl: 720h\n  wal:\n    dir: data/wal/dataengine\n    writer_version: 2\n    segment_bytes: 268435456\n    max_disk_bytes: 8589934592\n    max_unacked_age: 24h\n    queue_capacity: 8192\n    group_commit_interval: 2ms\n  projection:\n    batch_records: 256\n    retry_min: 100ms\n    retry_max: 5s\n  outbox:\n    workers: 2\n    batch_size: 64\n    lease_duration: 30s\n    poll_interval: 100ms\n    retry_min: 1s\n    retry_max: 1m\n    max_pending: 1000000\n    max_oldest_age: 30m\n  effects:\n    subject_prefix: roost.effect\n    stream: ROOST_EFFECTS\n    max_age: 168h\n    max_bytes: 8589934592\n    duplicate_window: 10m\n    replicas: 1\n",
+	},
 	"nestwal": {
 		ImportPath: "github.com/tjbdwanghaibo/cube-kit/nestwal", Alias: "kitnestwal", Depends: []string{"checkpoint", "nats"},
 		Config: "nest:\n  worker_num: 8\n  heartbeat_worker_num: 2\n  queue_capacity: 4096\n  delayed_capacity: 4096\n  max_delay: 24h\n  tick_duration: 50ms\n  request_timeout: 3s\n  wal:\n    dir: data/wal/nest\n    segment_bytes: 268435456\n    max_record_bytes: 4194304\n    max_disk_bytes: 8589934592\n    max_unacked_age: 24h\n    queue_capacity: 8192\n    batch_max_records: 256\n    batch_max_bytes: 1048576\n    batch_delay: 1ms\n    group_commit_interval: 2ms\n    retain_segments: 2\n    replay_retry_min: 100ms\n    replay_retry_max: 5s\n    replay_idle_poll: 20ms\n    replay_batch_records: 256\n    receipt_cleanup_batch: 256\n    receipt_cleanup_capacity: 65536\n    startup_timeout: 30s\n    effects:\n      subject_prefix: roost.effect\n      stream: ROOST_EFFECTS\n      max_age: 168h\n      max_bytes: 8589934592\n      duplicate_window: 10m\n      replicas: 1\n",
 	},
 	"nest": {
-		ImportPath: "github.com/tjbdwanghaibo/cube-kit/nest", Alias: "kitnest", Depends: []string{"nestwal"},
+		ImportPath: "github.com/tjbdwanghaibo/cube-kit/nest", Alias: "kitnest",
 	},
 	"saga": {
-		ImportPath: "github.com/tjbdwanghaibo/cube-kit/saga", Alias: "kitsaga", Constructor: "kitsaga.NewMod()", Depends: []string{"nestwal"},
+		ImportPath: "github.com/tjbdwanghaibo/cube-kit/saga", Alias: "kitsaga", Constructor: "kitsaga.NewMod()", Depends: []string{"mongo", "nats"},
 		Config: "saga:\n  database: saga\n  subject_prefix: roost.saga\n  stream: ROOST_SAGA\n  coordinator_workers: 4\n  publisher_workers: 4\n  coordinator_claim_batch: 3\n  publisher_claim_batch: 1\n  lease_duration: 15s\n  store_timeout: 3s\n  poll_interval: 100ms\n  publish_timeout: 3s\n  publish_backoff_min: 50ms\n  publish_backoff_max: 5s\n  max_payload_bytes: 65536\n  completion_receipt_ttl: 720h\n  stream_max_age: 168h\n  stream_max_bytes: 8589934592\n  duplicate_window: 10m\n  replicas: 1\n  result_ack_wait: 30s\n  result_process_timeout: 3s\n  result_max_deliver: 25000\n  result_max_ack_pending: 256\n  result_nak_backoff_min: 250ms\n  result_nak_backoff_max: 30s\n  start_effect_stream: ROOST_EFFECTS\n  start_effect_prefix: roost.effect\n  start_effect_durable: roost-saga-start\n  start_effect_ack_wait: 30s\n  start_effect_process_timeout: 3s\n  start_effect_max_deliver: 25000\n  start_effect_max_ack_pending: 256\n  start_effect_nak_backoff_min: 250ms\n  start_effect_nak_backoff_max: 30s\n",
 	},
 }
@@ -84,6 +88,14 @@ var knownFeatures = map[string]bool{
 }
 
 func resolveMods(requested []string) ([]string, error) {
+	requested = append([]string(nil), requested...)
+	needsPersistence := contains(requested, "nest") || contains(requested, "saga")
+	if needsPersistence && !contains(requested, "dataengine") && !contains(requested, "nestwal") {
+		// Keep the legacy default for one publishing cycle: generated projects
+		// resolve released framework modules with GOWORK=off, so Data Engine can
+		// only become the implicit preset after the kit package is tagged.
+		requested = append(requested, "nestwal")
+	}
 	seen := map[string]bool{}
 	visiting := map[string]bool{}
 	var out []string
@@ -114,6 +126,9 @@ func resolveMods(requested []string) ([]string, error) {
 		if err := visit(name); err != nil {
 			return nil, err
 		}
+	}
+	if seen["dataengine"] && (seen["checkpoint"] || seen["nestwal"]) {
+		return nil, fmt.Errorf("persistence mods are mutually exclusive: dataengine cannot be combined with checkpoint/nestwal")
 	}
 	return out, nil
 }

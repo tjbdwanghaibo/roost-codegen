@@ -247,10 +247,11 @@ func renderBootstrap(m Manifest) string {
 		"github.com/tjbdwanghaibo/cube-core/app/buildinfo": "",
 	}
 	allMods := allProjectMods(m)
-	// checkpoint constructors require the instance-scoped EntityAccess even
+	// Persistence and Remote Entity constructors require instance-scoped
+	// EntityAccess even when enabled transitively without generated handlers.
 	// when a project enables them transitively (for example through Saga)
 	// without generating Nest handlers.
-	instanceRuntime := contains(allMods, "checkpoint") || contains(allMods, "nest") || contains(allMods, "remote_entity")
+	instanceRuntime := contains(allMods, "checkpoint") || contains(allMods, "dataengine") || contains(allMods, "nest") || contains(allMods, "remote_entity")
 	if instanceRuntime {
 		imports["github.com/tjbdwanghaibo/cube-core/entity"] = ""
 	}
@@ -335,6 +336,12 @@ func renderModConstructor(m Manifest, name string, allMods []string) string {
 	switch name {
 	case "checkpoint":
 		return "kitcheckpoint.NewMod(kitcheckpoint.WithEntityAccess(EntityAccess))"
+	case "dataengine":
+		options := []string{"kitdataengine.WithEntityAccess(EntityAccess)"}
+		if contains(allMods, "remote_entity") {
+			options = append(options, "kitdataengine.WithRemoteProjection(true)")
+		}
+		return "kitdataengine.NewMod(" + strings.Join(options, ", ") + ")"
 	case "remote_entity":
 		return "kitremoteentity.NewRemoteEntityMod(0, kitremoteentity.WithMongoStorage(EntityAccess))"
 	case "nestwal":
@@ -720,7 +727,8 @@ func renderCompose(m Manifest) string {
 }
 
 func renderDockerfile(m Manifest) string {
-	wal := contains(allProjectMods(m), "nestwal")
+	allMods := allProjectMods(m)
+	wal := contains(allMods, "nestwal") || contains(allMods, "dataengine")
 	walBuild, walRuntime := "", ""
 	exposedPorts := "EXPOSE 9100"
 	if playerTCPEnabled(m) {

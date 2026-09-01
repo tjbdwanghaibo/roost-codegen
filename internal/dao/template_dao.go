@@ -6,7 +6,6 @@ package {{.Package}}
 import (
 	"fmt"
 	"sort"
-	"github.com/tjbdwanghaibo/cube-core/checkpoint"
 	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	"github.com/tjbdwanghaibo/cube-core/migration"
@@ -51,7 +50,7 @@ func New{{.Dao.Name}}() *{{.Dao.Name}} {
 func (d *{{.Dao.Name}}) Id() int64        { return d.id }
 func (d *{{.Dao.Name}}) SetId(id int64)   { d.id = id }
 func (d *{{.Dao.Name}}) DbName() string   { return {{daoDBConst .Dao.Name}} }
-func (d *{{.Dao.Name}}) DbScope() checkpoint.DatabaseScope { return {{dbScope .Dao}} }
+func (d *{{.Dao.Name}}) DbScope() dataengine.DatabaseScope { return {{dbScope .Dao}} }
 func (d *{{.Dao.Name}}) CollName() string  { return {{daoCollConst .Dao.Name}} }
 func (d *{{.Dao.Name}}) SchemaVersion() uint32 { return {{.Dao.Name}}SchemaVersion }
 func (d *{{.Dao.Name}}) Migrate(raw []byte, from uint32) ([]byte, error) { return migration.MigrateDAO(d.CollName(), raw, from, {{.Dao.Name}}SchemaVersion) }
@@ -82,7 +81,7 @@ func (d *{{$.Dao.Name}}) mark{{.Name}}Dirty() {
 {{- if eq .Kind 2}}
 func (d *{{$.Dao.Name}}) mark{{.Name}}KeyDirty(key {{.MapKey}}, val {{mapValType .}}) {
 	{{- if .Tag.Persist}}
-	if path, ok := checkpoint.MapPatchPath("{{bsonKey .Name}}", key); ok {
+	if path, ok := dataengine.MapPatchPath("{{bsonKey .Name}}", key); ok {
 		if err := nest.MarkPersistSet(d, {{fieldMaskName $.Dao.Name .Name}}, path, val); err != nil {
 			panic(fmt.Errorf("{{$.Dao.Name}}: mark {{.Name}} key persistence: %w", err))
 		}
@@ -99,7 +98,7 @@ func (d *{{$.Dao.Name}}) mark{{.Name}}KeyDirty(key {{.MapKey}}, val {{mapValType
 
 func (d *{{$.Dao.Name}}) mark{{.Name}}KeyDeleted(key {{.MapKey}}) {
 	{{- if .Tag.Persist}}
-	if path, ok := checkpoint.MapPatchPath("{{bsonKey .Name}}", key); ok {
+	if path, ok := dataengine.MapPatchPath("{{bsonKey .Name}}", key); ok {
 		if err := nest.MarkPersistUnset(d, {{fieldMaskName $.Dao.Name .Name}}, path); err != nil {
 			panic(fmt.Errorf("{{$.Dao.Name}}: mark {{.Name}} delete persistence: %w", err))
 		}

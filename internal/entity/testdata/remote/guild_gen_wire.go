@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/tjbdwanghaibo/cube-core/checkpoint"
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 )
 
@@ -121,7 +121,7 @@ func (e *Guild) BuildRemoteCommitLocked(lease entity.RemoteWriteLease, outcome e
 	if commit.Delete {
 		if e.dao != nil {
 			commit.Deletes = append(commit.Deletes, entity.RemoteDataDelete{
-				Database: e.dao.DbName(), DatabaseScope: uint8(checkpoint.ResolveDatabaseScope(e.dao)),
+				Database: e.dao.DbName(), DatabaseScope: uint8(dataengine.ResolveDatabaseScope(e.dao)),
 				Collection: e.dao.CollName(), ID: e.dao.Id(),
 			})
 		}
@@ -145,7 +145,7 @@ func (e *Guild) BuildRemoteCommitLocked(lease entity.RemoteWriteLease, outcome e
 			}
 			mutation := entity.RemoteDataMutation{
 				Database:      e.dao.DbName(),
-				DatabaseScope: uint8(checkpoint.ResolveDatabaseScope(e.dao)),
+				DatabaseScope: uint8(dataengine.ResolveDatabaseScope(e.dao)),
 				Collection:    e.dao.CollName(),
 				ID:            e.dao.Id(),
 				Version:       commit.NextVersion,

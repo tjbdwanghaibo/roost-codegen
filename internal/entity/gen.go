@@ -140,7 +140,7 @@ func hasMethod(ent EntityDef, name string) bool {
 	return ent.ExistingMethods != nil && ent.ExistingMethods[name]
 }
 
-func buildImportBlock(ent EntityDef, needsFmt, needsCheckpoint, needsNest bool) string {
+func buildImportBlock(ent EntityDef, needsFmt, needsDataEngine, needsNest bool) string {
 	var groups [][]string
 	std := []string{`"sync"`}
 	if needsFmt {
@@ -156,8 +156,8 @@ func buildImportBlock(ent EntityDef, needsFmt, needsCheckpoint, needsNest bool) 
 			local = append(local, fmt.Sprintf(`"%s"`, imp.Path))
 		}
 	}
-	if needsCheckpoint {
-		local = append(local, `"github.com/tjbdwanghaibo/cube-core/checkpoint"`)
+	if needsDataEngine {
+		local = append(local, `"github.com/tjbdwanghaibo/cube-core/dataengine"`)
 	}
 	if needsNest {
 		local = append(local, `"github.com/tjbdwanghaibo/cube-core/nest"`)
@@ -404,7 +404,7 @@ func (e *{{.Entity.Name}}) BuildRemoteCommitLocked(lease entity.RemoteWriteLease
 {{- range .Entity.Daos}}
 		if e.{{.FieldName}} != nil {
 			commit.Deletes = append(commit.Deletes, entity.RemoteDataDelete{
-				Database: e.{{.FieldName}}.DbName(), DatabaseScope: uint8(checkpoint.ResolveDatabaseScope(e.{{.FieldName}})),
+				Database: e.{{.FieldName}}.DbName(), DatabaseScope: uint8(dataengine.ResolveDatabaseScope(e.{{.FieldName}})),
 				Collection: e.{{.FieldName}}.CollName(), ID: e.{{.FieldName}}.Id(),
 			})
 		}
@@ -430,7 +430,7 @@ func (e *{{.Entity.Name}}) BuildRemoteCommitLocked(lease entity.RemoteWriteLease
 			}
 			mutation := entity.RemoteDataMutation{
 				Database:      e.{{.FieldName}}.DbName(),
-				DatabaseScope: uint8(checkpoint.ResolveDatabaseScope(e.{{.FieldName}})),
+				DatabaseScope: uint8(dataengine.ResolveDatabaseScope(e.{{.FieldName}})),
 				Collection:    e.{{.FieldName}}.CollName(),
 				ID:            e.{{.FieldName}}.Id(),
 				Version:       commit.NextVersion,

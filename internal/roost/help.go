@@ -190,7 +190,7 @@ roost add endpoint EquipItem --handler inventory --protocol EquipItem --nest-han
 		Summary: "配置并自动补齐 Kit Mod 依赖",
 		Usage: `roost add mod <name> -service <service>
 roost project new <name> -module <go-module> -mods <comma-separated-mods>`,
-		Configuration: `可用 Mod：lock、ops、statslog、configdata、etcd、redis、mongo、nats、sync、remote_entity、checkpoint、nestwal、nest、saga。生成器会递归补齐依赖，例如 nest → nestwal → checkpoint/nats → mongo/redis。`,
+		Configuration: `可用 Mod：lock、ops、statslog、configdata、etcd、redis、mongo、nats、sync、remote_entity、dataengine、checkpoint、nestwal、nest、saga。Data Engine 与 checkpoint/nestwal 写引擎互斥；迁移期 bare nest 仍补 legacy preset，完成 core/kit 发布后应显式选择 dataengine。`,
 		Example: `roost add mod saga -service game
 # roost.yaml
 services:

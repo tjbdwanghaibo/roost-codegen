@@ -3,7 +3,6 @@ package testdata
 
 import (
 	"fmt"
-	"github.com/tjbdwanghaibo/cube-core/checkpoint"
 	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	fmap "github.com/tjbdwanghaibo/cube-core/map"
@@ -46,7 +45,7 @@ func NewVarietyDao() *VarietyDao {
 func (d *VarietyDao) Id() int64                         { return d.id }
 func (d *VarietyDao) SetId(id int64)                    { d.id = id }
 func (d *VarietyDao) DbName() string                    { return VarietyDaoDBName }
-func (d *VarietyDao) DbScope() checkpoint.DatabaseScope { return checkpoint.DatabaseScopeGlobal }
+func (d *VarietyDao) DbScope() dataengine.DatabaseScope { return dataengine.DatabaseGlobal }
 func (d *VarietyDao) CollName() string                  { return VarietyDaoCollection }
 func (d *VarietyDao) SchemaVersion() uint32             { return VarietyDaoSchemaVersion }
 func (d *VarietyDao) Migrate(raw []byte, from uint32) ([]byte, error) {
@@ -92,7 +91,7 @@ func (d *VarietyDao) markShardedTagsDirty() {
 }
 
 func (d *VarietyDao) markFastItemsKeyDirty(key int64, val int32) {
-	if path, ok := checkpoint.MapPatchPath("fast_items", key); ok {
+	if path, ok := dataengine.MapPatchPath("fast_items", key); ok {
 		if err := nest.MarkPersistSet(d, varietyDaoFieldFastItems, path, val); err != nil {
 			panic(fmt.Errorf("VarietyDao: mark FastItems key persistence: %w", err))
 		}
@@ -105,7 +104,7 @@ func (d *VarietyDao) markFastItemsKeyDirty(key int64, val int32) {
 }
 
 func (d *VarietyDao) markFastItemsKeyDeleted(key int64) {
-	if path, ok := checkpoint.MapPatchPath("fast_items", key); ok {
+	if path, ok := dataengine.MapPatchPath("fast_items", key); ok {
 		if err := nest.MarkPersistUnset(d, varietyDaoFieldFastItems, path); err != nil {
 			panic(fmt.Errorf("VarietyDao: mark FastItems delete persistence: %w", err))
 		}
@@ -118,7 +117,7 @@ func (d *VarietyDao) markFastItemsKeyDeleted(key int64) {
 }
 
 func (d *VarietyDao) markShardedTagsKeyDirty(key int32, val string) {
-	if path, ok := checkpoint.MapPatchPath("sharded_tags", key); ok {
+	if path, ok := dataengine.MapPatchPath("sharded_tags", key); ok {
 		if err := nest.MarkPersistSet(d, varietyDaoFieldShardedTags, path, val); err != nil {
 			panic(fmt.Errorf("VarietyDao: mark ShardedTags key persistence: %w", err))
 		}
@@ -131,7 +130,7 @@ func (d *VarietyDao) markShardedTagsKeyDirty(key int32, val string) {
 }
 
 func (d *VarietyDao) markShardedTagsKeyDeleted(key int32) {
-	if path, ok := checkpoint.MapPatchPath("sharded_tags", key); ok {
+	if path, ok := dataengine.MapPatchPath("sharded_tags", key); ok {
 		if err := nest.MarkPersistUnset(d, varietyDaoFieldShardedTags, path); err != nil {
 			panic(fmt.Errorf("VarietyDao: mark ShardedTags delete persistence: %w", err))
 		}

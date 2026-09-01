@@ -3,7 +3,6 @@ package testdata
 
 import (
 	"fmt"
-	"github.com/tjbdwanghaibo/cube-core/checkpoint"
 	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	fmap "github.com/tjbdwanghaibo/cube-core/map"
@@ -49,7 +48,7 @@ func NewHeroDao() *HeroDao {
 func (d *HeroDao) Id() int64                         { return d.id }
 func (d *HeroDao) SetId(id int64)                    { d.id = id }
 func (d *HeroDao) DbName() string                    { return HeroDaoDBName }
-func (d *HeroDao) DbScope() checkpoint.DatabaseScope { return checkpoint.DatabaseScopeServer }
+func (d *HeroDao) DbScope() dataengine.DatabaseScope { return dataengine.DatabaseServer }
 func (d *HeroDao) CollName() string                  { return HeroDaoCollection }
 func (d *HeroDao) SchemaVersion() uint32             { return HeroDaoSchemaVersion }
 func (d *HeroDao) Migrate(raw []byte, from uint32) ([]byte, error) {
@@ -126,7 +125,7 @@ func (d *HeroDao) markEquipsDirty() {
 }
 
 func (d *HeroDao) markItemsKeyDirty(key int64, val int32) {
-	if path, ok := checkpoint.MapPatchPath("items", key); ok {
+	if path, ok := dataengine.MapPatchPath("items", key); ok {
 		if err := nest.MarkPersistSet(d, heroDaoFieldItems, path, val); err != nil {
 			panic(fmt.Errorf("HeroDao: mark Items key persistence: %w", err))
 		}
@@ -139,7 +138,7 @@ func (d *HeroDao) markItemsKeyDirty(key int64, val int32) {
 }
 
 func (d *HeroDao) markItemsKeyDeleted(key int64) {
-	if path, ok := checkpoint.MapPatchPath("items", key); ok {
+	if path, ok := dataengine.MapPatchPath("items", key); ok {
 		if err := nest.MarkPersistUnset(d, heroDaoFieldItems, path); err != nil {
 			panic(fmt.Errorf("HeroDao: mark Items delete persistence: %w", err))
 		}
@@ -152,7 +151,7 @@ func (d *HeroDao) markItemsKeyDeleted(key int64) {
 }
 
 func (d *HeroDao) markEquipsKeyDirty(key int64, val *EquipInfo) {
-	if path, ok := checkpoint.MapPatchPath("equips", key); ok {
+	if path, ok := dataengine.MapPatchPath("equips", key); ok {
 		if err := nest.MarkPersistSet(d, heroDaoFieldEquips, path, val); err != nil {
 			panic(fmt.Errorf("HeroDao: mark Equips key persistence: %w", err))
 		}
@@ -165,7 +164,7 @@ func (d *HeroDao) markEquipsKeyDirty(key int64, val *EquipInfo) {
 }
 
 func (d *HeroDao) markEquipsKeyDeleted(key int64) {
-	if path, ok := checkpoint.MapPatchPath("equips", key); ok {
+	if path, ok := dataengine.MapPatchPath("equips", key); ok {
 		if err := nest.MarkPersistUnset(d, heroDaoFieldEquips, path); err != nil {
 			panic(fmt.Errorf("HeroDao: mark Equips delete persistence: %w", err))
 		}

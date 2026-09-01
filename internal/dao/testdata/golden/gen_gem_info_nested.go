@@ -4,13 +4,13 @@ package testdata
 import (
 	"fmt"
 
-	"github.com/tjbdwanghaibo/cube-core/checkpoint"
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/nest"
 )
 
 // GemInfo is a nested struct with dirty propagation.
 type GemInfo struct {
-	checkpoint.DirtyHook
+	dataengine.DirtyHook
 	id    int32
 	level int32
 }

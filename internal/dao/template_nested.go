@@ -6,7 +6,7 @@ package {{.Package}}
 import (
 	"fmt"
 
-	"github.com/tjbdwanghaibo/cube-core/checkpoint"
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/nest"
 {{- if hasMaps .Nested.Fields}}
 	fmap "github.com/tjbdwanghaibo/cube-core/map"
@@ -15,7 +15,7 @@ import (
 
 // {{.Nested.Name}} is a nested struct with dirty propagation.
 type {{.Nested.Name}} struct {
-	checkpoint.DirtyHook
+	dataengine.DirtyHook
 {{- range .Nested.Fields}}
 	{{fieldVar .Name}} {{fieldType .}}
 {{- end}}

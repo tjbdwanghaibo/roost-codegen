@@ -186,8 +186,8 @@ func TestGenerateDao(t *testing.T) {
 		"func (d *HeroDao) Id() int64",
 		"func (d *HeroDao) DbName() string",
 		"return HeroDaoDBName",
-		"func (d *HeroDao) DbScope() checkpoint.DatabaseScope",
-		"return checkpoint.DatabaseScopeServer",
+		"func (d *HeroDao) DbScope() dataengine.DatabaseScope",
+		"return dataengine.DatabaseServer",
 		"func (d *HeroDao) CollName() string",
 		"return HeroDaoCollection",
 		"func (d *HeroDao) SchemaVersion() uint32",
@@ -217,7 +217,7 @@ func TestGenerateDao(t *testing.T) {
 		"panic(fmt.Errorf(\"HeroDao: record undo:",
 		"panic(fmt.Errorf(\"HeroDao: marshal persist data:",
 		"func (d *HeroDao) markItemsKeyDirty(key int64, val int32)",
-		`checkpoint.MapPatchPath("items", key)`,
+		`dataengine.MapPatchPath("items", key)`,
 		"nest.MarkPersistSet(d, heroDaoFieldItems, path, val)",
 		"nest.MarkPersistUnset(d, heroDaoFieldItems, path)",
 		"*fmap.SmallSafeMap[int64, int32]",
@@ -246,6 +246,7 @@ func TestGenerateDao(t *testing.T) {
 	}
 	assertStructFieldsUnexported(t, outFile, "HeroDao")
 	for _, forbidden := range []string{
+		`"github.com/tjbdwanghaibo/cube-core/checkpoint"`,
 		"checkpoint.DirtyTracker",
 		"persistPatchSet",
 		"func (d *HeroDao) PrepareCommit(",
@@ -324,7 +325,7 @@ func TestGenerateNested(t *testing.T) {
 	checks := []string{
 		"package testdata",
 		"type Position struct {",
-		"checkpoint.DirtyHook",
+		"dataengine.DirtyHook",
 		"x int32",
 		"y int32",
 		"func (s *Position) GetX() int32",

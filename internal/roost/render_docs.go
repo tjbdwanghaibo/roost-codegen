@@ -388,7 +388,8 @@ shared_mods 适合 lock、ops、statslog 等进程级能力。services 是名称
         mods: [etcd, redis, nats]
 
 services.<name>.mods 表示该 Service 运行时装配的 Kit Mod。生成器会自动展开依赖并按
-DependsOn 拓扑排序；例如 nest 会补 nestwal、checkpoint、mongo、redis、nats。
+DependsOn 拓扑排序。迁移期未显式选择引擎时 nest 仍补 legacy
+nestwal/checkpoint；新项目完成框架版本升级后应显式选择 dataengine，后者补 mongo、nats。
 同一个 Mod 不能同时出现在 shared_mods 和某个 Service 中，未知 Mod 和依赖环会失败。
 
 access.player.service 指定玩家协议接入层安装到哪个 Service。当前仅支持 player；它要求 protocol
@@ -411,10 +412,11 @@ feature，并要求目标 Service 有 nest Mod。access.player.transports 是显
 | nats | NATS 消息传输 | 无 |
 | sync | Entity/状态同步 | nats |
 | remote_entity | 跨服 Remote Entity | redis、mongo、sync |
+| dataengine | 统一事务持久化、加载、migration 与 effect outbox | mongo、nats |
 | checkpoint | Entity 持久化检查点与 WAL | mongo、redis |
 | nestwal | Nest 可靠执行与 effect outbox | checkpoint、nats |
-| nest | Nest 调度接入 | nestwal |
-| saga | 跨服务 Saga 编排 | nestwal |
+| nest | Nest 调度接入 | dataengine 或 legacy nestwal |
+| saga | 跨服务 Saga 编排 | mongo、nats，并可选接 dataengine/legacy nestwal start effect |
 
 ## 7. features
 

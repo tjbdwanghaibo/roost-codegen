@@ -4,13 +4,13 @@ package testdata
 import (
 	"fmt"
 
-	"github.com/tjbdwanghaibo/cube-core/checkpoint"
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/nest"
 )
 
 // Position is a nested struct with dirty propagation.
 type Position struct {
-	checkpoint.DirtyHook
+	dataengine.DirtyHook
 	x int32
 	y int32
 }

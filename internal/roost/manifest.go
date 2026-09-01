@@ -235,6 +235,10 @@ func (m Manifest) Validate() error {
 	if _, err := resolveMods(m.SharedMods); err != nil {
 		joined = errors.Join(joined, fmt.Errorf("shared_mods: %w", err))
 	}
+	projectMods := allProjectMods(m)
+	if contains(projectMods, "dataengine") && (contains(projectMods, "checkpoint") || contains(projectMods, "nestwal")) {
+		joined = errors.Join(joined, errors.New("project cannot mix dataengine with checkpoint/nestwal across services: persistence.engine is process-wide"))
+	}
 	for _, feature := range m.Features {
 		if !knownFeatures[feature] {
 			joined = errors.Join(joined, fmt.Errorf("unknown feature %q", feature))
