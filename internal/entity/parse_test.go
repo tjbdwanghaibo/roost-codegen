@@ -201,7 +201,6 @@ func TestGeneratePreservesManualSyncMethods(t *testing.T) {
 	source = append(source, []byte(`
 
 func (e *Player) OnDataChange(_ []byte, _ int64) {}
-func (e *Player) Snapshot() []checkpoint.SaveItem { return nil }
 `)...)
 	if err := os.WriteFile(filepath.Join(dir, "player.go"), source, 0644); err != nil {
 		t.Fatal(err)
@@ -227,9 +226,6 @@ func (e *Player) Snapshot() []checkpoint.SaveItem { return nil }
 	}
 	if contains(generated, "func (e *Player) ApplyRemoteSync(") {
 		t.Fatal("generator must not emit the removed V1 remote sync protocol")
-	}
-	if contains(generated, "func (e *Player) Snapshot(") {
-		t.Fatal("generated Snapshot must not duplicate a manual method")
 	}
 	if !contains(generated, `"github.com/tjbdwanghaibo/cube-core/nest"`) || contains(generated, "func (e *Player) RemoveSnapshot(") {
 		t.Fatal("persistent entity must use transactional delete without generated RemoveSnapshot")

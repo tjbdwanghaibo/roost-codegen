@@ -75,7 +75,7 @@ fake Client，生产环境从 `app.Registry` 取得 kit `nest.Mod` 提供的 Cli
 
 ## Data Engine 持久化规则
 
-生成 DAO 的持久化变化只记录在当前 Nest transaction 中，不再写入 DAO 级 checkpoint
+生成 DAO 的持久化变化只记录在当前 Nest transaction 中，不再维护第二套 DAO 级异步快照
 dirty。带持久化属性的 setter、map Set/Del 只能在 Nest handler 或 system transaction
 内调用；事务外修改会 fail fast。`durability=memory` 的 handler 不能修改 persistent
 字段，低隔离但仍需落地的操作应使用 `durability=async`。
@@ -96,9 +96,9 @@ func handlerRename(owner PlayerOwner, name string) error {
 inbox，把 mutation、step receipt 和 completion effect 放进一个 CommitRecord。Raw Mongo
 step 继续使用 `MongoCommandInbox`，不能在其 Mongo transaction 中混写 Nest Entity。
 
-发布由 checkpoint 迁到 Data Engine 时必须先升级所有 WAL reader，再启用 writer v2，
-最后重新生成 DAO 并原子切换 `persistence.engine=dataengine`。patch-only 代码上线后不可
-配置回切 checkpoint；完整步骤见 core `docs/DATA_ENGINE_MIGRATION.md`。
+从历史快照数据迁移时，先升级所有 WAL reader，再启用 writer v2，最后重新生成 DAO 并完成
+一次性数据验证。运行时只有 `persistence.engine=dataengine`，不存在双写或回切旧引擎；完整
+导入步骤见 core `docs/DATA_ENGINE_MIGRATION.md`。
 
 ## 升级步骤
 
@@ -109,4 +109,4 @@ step 继续使用 `MongoCommandInbox`，不能在其 Mongo transaction 中混写
 5. 将包级 `Send_*`/`Sync_*` 调用改为 Sender 方法；生成器不会保留旧函数。
 6. 删除业务 Runtime、Controller 透传层和全局 Access 获取 Nest 的代码。
 7. 确认目标环境 WAL reader 已兼容 v2、writer 已设为 v2，再重新生成持久化 DAO。
-8. 用严格/异步/pipelined handler 测试 Put、Patch、Delete 和 rollback；禁止同时启用 checkpoint writer。
+8. 用严格/异步/pipelined handler 测试 Put、Patch、Delete 和 rollback，并验证只有 Data Engine 一条写路径。

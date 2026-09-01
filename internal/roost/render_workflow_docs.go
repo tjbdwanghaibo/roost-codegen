@@ -324,7 +324,7 @@ Nest Sender 解决“已有或可冷加载 Entity 上执行一次业务命令”
 ## 2. 方法语义
 
 - FromRegistry：从当前 App 实例的 entity.runtime 获取 ManagerAccess，避免跨实例全局状态。
-- Get：构造完整 EntityID，并通过 checkpoint 配置的 loader 做 singleflight 冷加载。
+- Get：构造完整 EntityID，并通过 Data Engine loader 做 singleflight 冷加载。
 - Create：仅创建不存在的聚合；并发创建由 EntityManager 的 ErrEntityExists 收敛。
 - GetOrCreate：只在“持久化记录不存在”时创建；数据库、解码、超时错误不会误判成不存在。
 - Destroy：先执行 Entity 销毁生命周期；deletePersisted=true 是不可恢复业务动作，只用于明确删档。
@@ -337,7 +337,7 @@ handler 应调用生成 Sender，让 Nest 统一锁、事务、WAL、回滚和�
 
 ## 4. 故障语义
 
-GetOrCreate 不是数据库故障时的兜底创建；只有 checkpoint.ErrEntityAggregateNotFound 或显式未找到才
+GetOrCreate 不是数据库故障时的兜底创建；只有 dataengine.ErrEntityAggregateNotFound 或显式未找到才
 进入 Create。Create 与并发加载冲突时重新 Get。请求 context 取消必须向 load/destroy 传播。
 
 上线前至少覆盖：首次创角、已有角色冷加载、并发登录同一角色、损坏快照、Mongo 超时、进程重启恢复、
@@ -557,7 +557,7 @@ func renderTroubleshootingGuide(manifest Manifest) string {
 | add handler 提示缺 Nest | 只有 feature，没有运行时 Mod | roost add mod nest --service <service> |
 | endpoint 找不到 request 字段 | Nest 参数名与 Request 字段名不同 | 统一名字，或调整协议/handler 后重新 add endpoint |
 | protocol handler 包编译失败 | endpoint/controller 尚未创建 | 先 add endpoint，再 roost generate |
-| Entity not found | 未持久化、kind/category 不匹配或 loader 未装配 | 用 lifecycle GetOrCreate 处理创角；检查 checkpoint/Mongo，不吞掉加载错误 |
+| Entity not found | 未持久化、kind/category 不匹配或 loader 未装配 | 用 lifecycle GetOrCreate 处理创角；检查 Data Engine/Mongo，不吞掉加载错误 |
 | DAO 字段不可访问 | 存储字段已私有化 | 使用生成的 Xxx()/SetXxx()/UpdateXxx()/RemoveXxx() |
 | generated stale | 定义已改但生成物未更新 | roost generate；提交声明与生成物 |
 | project sync 拒绝覆盖 | 同路径是业务文件或生成标识丢失 | 备份、比较所有权；不要伪造 DO NOT EDIT 标识 |

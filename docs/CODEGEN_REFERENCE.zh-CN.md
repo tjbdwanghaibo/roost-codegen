@@ -53,15 +53,13 @@ roost project new planet \
   -module example.com/planet \
   -out ./planet \
   -services game,gate \
-  -mods configdata,etcd,redis,mongo,nats,sync,remote_entity,checkpoint,nestwal,nest \
+  -mods configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest \
   -features protocol,config,entity,nest,event,dao,errcode
 ```
 
-上例保留 legacy checkpoint preset，供尚未发布 Data Engine 依赖的迁移期项目使用。完成
-core/kit 同版本发布后，新项目应显式使用
-`-mods configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest`。生成器拒绝
-`dataengine` 与 `checkpoint`/`nestwal` 同时出现；显式 Data Engine 工程会把
-`WithEntityAccess`（Remote 开启时同时加 `WithRemoteProjection`）写入 bootstrap。
+Data Engine 是唯一持久化引擎；即使只指定 `nest` 或 `saga`，生成器也会自动补齐
+`dataengine`、Mongo 与 NATS。工程会把 `WithEntityAccess`（Remote 开启时同时加
+`WithRemoteProjection`）写入 bootstrap；`checkpoint` 和 standalone `nestwal` 已不是可选 Mod。
 
 主要产物：`roost.yaml`、main/bootstrap/Service、配置、Makefile、CI、开发 compose，以及 Shell、Docker、Kubernetes 生产部署模板。Secret 示例和业务文件归应用所有，后续 sync 不覆盖；带生成标识的装配文件由生成器管理。
 
@@ -142,7 +140,7 @@ go test ./...
 支持 `service|mod|access|transport|module|protocol|entity|component|handler|lifecycle|endpoint|skill|event|table|dao|webroute|errcode|saga`。
 
 ```bash
-roost add service world -mods etcd,redis,mongo,nats,nestwal,nest
+roost add service world -mods etcd,redis,mongo,nats,dataengine,nest
 roost add mod saga -service game
 roost add access player --service game
 roost add transport tcp
@@ -293,7 +291,7 @@ type Player struct {
 
 产物 `<entity>_gen_wire.go` 包含 factory、Base/Component/DAO getter、组件/DAO 装配、事务化 PrepareDelete 和生命周期 hook；普通 Entity 不再生成 Snapshot/RemoveSnapshot 写路径。`remote=managed` 时还生成 Remote Entity commit participant：它从同一 Nest transaction 读取 DAO 变更，在 lease/fence 下冻结完整远端文档，并在权威提交确认后推进版本。`sync=true` 可同时声明 `syncTopic`、`syncPacker`、`subjectPacker`。
 
-DAO 必须实现 codegen 生成的标准方法，尤其是 `PrepareMutation(nest.PersistChange)`、`AcceptMutation(dataengine.Mutation)` 和 `DirtyTracker() *dataengine.Tracker`。Entity 不直接访问 `dao.tracker` 字段。不要为普通 Entity 手写 checkpoint Snapshot、RemoveSnapshot 或在 release hook 中落库；legacy checkpoint 类型只允许出现在迁移兼容代码。
+DAO 必须实现 codegen 生成的标准方法，尤其是 `PrepareMutation(nest.PersistChange)`、`AcceptMutation(dataengine.Mutation)` 和 `DirtyTracker() *dataengine.Tracker`。Entity 不直接访问 `dao.tracker` 字段。不要为普通 Entity 手写 Snapshot、RemoveSnapshot 或在 release hook 中落库；历史数据迁移通过 Data Engine migration/import 工具完成。
 
 ## 6. Nest handler 生成器
 

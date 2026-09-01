@@ -283,12 +283,11 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 | `nats` | — | NATS、JetStream、RPC 和 Bus |
 | `sync` | `nats` | NATS 或 JetStream 同步 Bus |
 | `remote_entity` | `redis`、`mongo`、`sync` | 跨服实体所有权、原子事务、快照分发与版本锁 |
-| `checkpoint` | `mongo`、`redis` | 实体快照异步落库 + Redis 快照 WAL |
-| `nestwal` | `checkpoint`、`nats` | Nest 事务 WAL + effect outbox |
-| `nest` | `nestwal` | 实例级 Nest 引擎装配 |
-| `saga` | `nestwal` | saga 引擎（要求 core/kit >= v1.4.0） |
+| `dataengine` | `mongo`、`nats` | Nest transaction WAL、Mongo projection、聚合加载/migration、effect outbox |
+| `nest` | `dataengine` | 实例级 Nest 引擎装配 |
+| `saga` | `dataengine` | saga 引擎与 Data Engine start effect（要求 core/kit >= v1.4.0） |
 
-默认值：`shared_mods = lock, ops, statslog`；`roost project new` 不传 `-mods` 时每个 Service 默认 `configdata, etcd, redis, mongo, nats, sync, remote_entity, checkpoint, nestwal, nest`（即除 `saga` 外全量）。约束：Service 的 mods 不得与 shared_mods 重复（校验期拒绝）；依赖由生成器拓扑展开并检测环。
+默认值：`shared_mods = lock, ops, statslog`；`roost project new` 不传 `-mods` 时每个 Service 默认 `configdata, etcd, redis, mongo, nats, sync, remote_entity, dataengine, nest`（即除 `saga` 外全量）。约束：Service 的 mods 不得与 shared_mods 重复（校验期拒绝）；依赖由生成器拓扑展开并检测环。
 
 Core 会根据 DependsOn 排序生命周期。生成器负责补齐必需依赖，不复制 Kit 内部的连接、重试、health 或 shutdown 逻辑。
 
@@ -327,7 +326,7 @@ Core 会根据 DependsOn 排序生命周期。生成器负责补齐必需依赖�
 TCP 生成层的帧格式、鉴权、主动推送、配置硬上限和上线门禁见
 [Player TCP 接入](PLAYER_ACCESS_TCP.zh-CN.md)。
 
-Saga 命令会自动给目标 Service 添加 `saga`、`nestwal` 及其传递依赖，并生成
+Saga 命令会自动给目标 Service 添加 `saga`、`dataengine` 及其传递依赖，并生成
 `saga/alliance_rally/definition.go`，其中包含类型、步骤、重试、
 补偿 topic、`Register`、`EmitStart` 和幂等 `Start` 入口。业务 Nest handler 必须调用
 `EmitStart`，使 Entity mutation 与 Saga 启动意图进入同一个 WAL record；`Start` 仅用于
@@ -543,7 +542,7 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 - 部署前执行 race 测试和优雅停服演练。
 - MongoDB 使用 replica set 或支持 transaction 的 sharded cluster；禁止 standalone。
 - `/var/lib/roost/wal` 使用单写持久卷，并验证异常重启后 replay。
-- JetStream effect consumer 使用 `nestwal.MongoEffectInbox`，receipt TTL 大于消息最大保留时间。
+- JetStream effect 由 Data Engine Mongo outbox 持久化后发布；consumer receipt TTL 必须大于消息最大保留时间。
 - 房间慢消费者淘汰、断线 session 清理、100 Entity/20 Hz 和 Redis/Mongo/NATS 故障注入均通过 staging 门禁。
 
 ## 15. Module path 与发布依赖
@@ -574,7 +573,7 @@ v1.7.0 起，新项目同时生成三套部署入口：
 | --- | --- | --- |
 | `deploy/shell/` | Linux 物理机/VM | 静态二进制、systemd、非登录用户、只读系统、45s 停机预算、实例独占 WAL |
 | `Dockerfile`、`deploy/docker/` | 容器 | distroless nonroot、不包含配置、只读根文件系统运行示例、版本 ldflags |
-| `deploy/k8s/` | Kubernetes/Kustomize | Secret 挂载、探针、资源预算、PDB、安全上下文；nestwal 使用 StatefulSet+RWO PVC |
+| `deploy/k8s/` | Kubernetes/Kustomize | Secret 挂载、探针、资源预算、PDB、安全上下文；Data Engine 使用 StatefulSet+RWO PVC |
 
 新项目还会生成 `.github/workflows/ci.yml`、`dependency-update.yml`、`release.yml`、`deploy-shell.yml`、`deploy-docker.yml`、`deploy-k8s.yml` 和 `security.yml`。普通 CI 使用已经提交的 `go.mod/go.sum`，不会执行 `deps-update` 或 `go get -u`；追踪最新框架由独立依赖升级流水线完成并创建 PR。Release 构建一次不可变二进制包和 OCI 镜像，Shell 使用版本包，Docker 与 Kubernetes 使用同一个镜像 digest。
 

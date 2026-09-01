@@ -308,7 +308,7 @@ func collectEntityImports(ent EntityDef, importMap map[string]ImportDef) []Impor
 		if !ok {
 			continue
 		}
-		if imp.Path == "github.com/tjbdwanghaibo/cube-core/entity" || imp.Path == "github.com/tjbdwanghaibo/cube-core/checkpoint" {
+		if imp.Path == "github.com/tjbdwanghaibo/cube-core/entity" {
 			continue
 		}
 		out = append(out, imp)

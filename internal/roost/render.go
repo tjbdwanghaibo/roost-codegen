@@ -251,7 +251,7 @@ func renderBootstrap(m Manifest) string {
 	// EntityAccess even when enabled transitively without generated handlers.
 	// when a project enables them transitively (for example through Saga)
 	// without generating Nest handlers.
-	instanceRuntime := contains(allMods, "checkpoint") || contains(allMods, "dataengine") || contains(allMods, "nest") || contains(allMods, "remote_entity")
+	instanceRuntime := contains(allMods, "dataengine") || contains(allMods, "nest") || contains(allMods, "remote_entity")
 	if instanceRuntime {
 		imports["github.com/tjbdwanghaibo/cube-core/entity"] = ""
 	}
@@ -334,8 +334,6 @@ func renderBootstrap(m Manifest) string {
 
 func renderModConstructor(m Manifest, name string, allMods []string) string {
 	switch name {
-	case "checkpoint":
-		return "kitcheckpoint.NewMod(kitcheckpoint.WithEntityAccess(EntityAccess))"
 	case "dataengine":
 		options := []string{"kitdataengine.WithEntityAccess(EntityAccess)"}
 		if contains(allMods, "remote_entity") {
@@ -344,8 +342,6 @@ func renderModConstructor(m Manifest, name string, allMods []string) string {
 		return "kitdataengine.NewMod(" + strings.Join(options, ", ") + ")"
 	case "remote_entity":
 		return "kitremoteentity.NewRemoteEntityMod(0, kitremoteentity.WithMongoStorage(EntityAccess))"
-	case "nestwal":
-		return fmt.Sprintf("kitnestwal.NewMod(%t)", contains(allMods, "remote_entity"))
 	case "nest":
 		return "kitnest.NewMod(EntityAccess)"
 	case "saga":
@@ -403,9 +399,8 @@ func renderServiceConfig(m Manifest, service string, production bool) string {
 			"ops:\n  enabled: true\n  addr: CHANGE_ME:9100",
 			"ops:\n  enabled: true\n  addr: 0.0.0.0:9100", 1)
 		value = strings.ReplaceAll(value, "replicas: 1", "replicas: 3")
-		value = strings.ReplaceAll(value, "aof_replicas: 0", "aof_replicas: 1")
 		value = strings.ReplaceAll(value, "file: true", "file: false")
-		return strings.ReplaceAll(value, "dir: data/wal/nest", "dir: /var/lib/roost/wal")
+		return strings.ReplaceAll(value, "dir: data/wal/dataengine", "dir: /var/lib/roost/wal")
 	}
 	return b.String()
 }
@@ -728,7 +723,7 @@ func renderCompose(m Manifest) string {
 
 func renderDockerfile(m Manifest) string {
 	allMods := allProjectMods(m)
-	wal := contains(allMods, "nestwal") || contains(allMods, "dataengine")
+	wal := contains(allMods, "dataengine")
 	walBuild, walRuntime := "", ""
 	exposedPorts := "EXPOSE 9100"
 	if playerTCPEnabled(m) {
@@ -830,7 +825,7 @@ func renderProjectReadme(m Manifest) string {
 
 ## 第三级：框架实现与生产运维
 
-- [实现说明](docs/IMPLEMENTATION.zh-CN.md)：Entity/Nest、WAL/checkpoint、Remote Entity、Saga、同步与技能边界。
+- [实现说明](docs/IMPLEMENTATION.zh-CN.md)：Entity/Nest、Data Engine/WAL、Remote Entity、Saga、同步与技能边界。
 - [部署说明](docs/DEPLOYMENT.zh-CN.md)：Shell/systemd、Docker、Kubernetes、升级回滚与故障演练。
 
 提交和发布前执行：
@@ -886,9 +881,8 @@ core、kit、skill、codegen 默认都是 latest。roost project new/sync/deps �
 生产配置使用 config.<service>.prod.example.yaml 为模板。必须替换 CHANGE_ME，配置真实认证、TLS、超时和 advertise address；不要提交真实密钥。
 
 - MongoDB 必须使用副本集；启动会拒绝 standalone，并固定 majority write concern 与 snapshot transaction read concern。
-- Checkpoint WAL 要求 Redis 7.2+、AOF 已开启和单主/Sentinel 接入；生产默认还要求至少 1 个副本完成 AOF fsync。Redis Cluster 会因无法保证 Lua 与 WAITAOF 同连接同分片而拒绝启动。
 - /var/lib/roost/wal 必须挂载单写持久卷，同一个 SID 不得由两个实例同时挂载。
-- JetStream effect 消费必须通过 nestwal.MongoEffectInbox 与业务 Mongo 写入同一事务，不能仅依赖 MsgID 去重窗口。
+- JetStream effect 必须先由 Data Engine 在业务 Mongo transaction 中持久化到 outbox；发布和消费不能只依赖 MsgID 去重窗口。
 - 发布顺序为 roost-core、roost-kit、roost-skill、roost-codegen；部署前必须执行 make ci 并完成容器重启恢复演练。
 
 ## 继续阅读

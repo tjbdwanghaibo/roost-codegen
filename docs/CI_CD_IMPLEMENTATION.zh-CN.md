@@ -67,7 +67,7 @@
 - PR 先 render 和 schema 校验；部署前执行 server-side dry-run。
 - 发布使用镜像 digest，不允许 production 使用 `latest`。
 - 有持久 WAL 的实例使用 StatefulSet 和独占 RWO PVC，不能直接扩 replicas 共享 writer 身份。
-- rollout 失败回滚 workload；涉及 checkpoint、WAL、wire 或 schema 不兼容时只能前滚或先执行显式迁移。
+- rollout 失败回滚 workload；涉及持久化格式、WAL、wire 或 schema 不兼容时只能前滚或先执行显式迁移。
 
 ## 生成项目流水线
 

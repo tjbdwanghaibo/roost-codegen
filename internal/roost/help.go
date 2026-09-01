@@ -164,7 +164,7 @@ roost project doctor --workflow player-tcp
 		Name: "lifecycle", Aliases: []string{"entity-lifecycle"},
 		Summary:       "生成 Entity 登录加载、首次创建和销毁边界",
 		Usage:         `roost add lifecycle <entity> [--entity <entity>] [--service <service>]`,
-		Configuration: `生成 Get/Create/GetOrCreate/Destroy 和 FromRegistry。它通过实例级 entity.runtime 与 checkpoint loader 工作；普通玩法读写仍走 Nest Sender。GetOrCreate 只把确切的未找到视为可创建，不吞数据库或解码错误。`,
+		Configuration: `生成 Get/Create/GetOrCreate/Destroy 和 FromRegistry。它通过实例级 entity.runtime 与 Data Engine loader 工作；普通玩法读写仍走 Nest Sender。GetOrCreate 只把确切的未找到视为可创建，不吞数据库或解码错误。`,
 		Example: `roost add lifecycle Player --service game
 # 应用初始化：lifecycle.FromRegistry(registry)`,
 	},
@@ -190,12 +190,12 @@ roost add endpoint EquipItem --handler inventory --protocol EquipItem --nest-han
 		Summary: "配置并自动补齐 Kit Mod 依赖",
 		Usage: `roost add mod <name> -service <service>
 roost project new <name> -module <go-module> -mods <comma-separated-mods>`,
-		Configuration: `可用 Mod：lock、ops、statslog、configdata、etcd、redis、mongo、nats、sync、remote_entity、dataengine、checkpoint、nestwal、nest、saga。Data Engine 与 checkpoint/nestwal 写引擎互斥；迁移期 bare nest 仍补 legacy preset，完成 core/kit 发布后应显式选择 dataengine。`,
+		Configuration: `可用 Mod：lock、ops、statslog、configdata、etcd、redis、mongo、nats、sync、remote_entity、dataengine、nest、saga。Data Engine 是唯一持久化引擎；添加 nest 或 saga 时自动补齐 dataengine、mongo 和 nats。`,
 		Example: `roost add mod saga -service game
 # roost.yaml
 services:
   game:
-    mods: [configdata, etcd, redis, mongo, nats, checkpoint, nestwal, nest, saga]`,
+    mods: [configdata, etcd, redis, mongo, nats, dataengine, nest, saga]`,
 	},
 	{
 		Name: "dao", Aliases: []string{"database"},
@@ -320,7 +320,7 @@ roost generate`,
 		Name: "saga", Aliases: []string{"transaction", "cross-service"},
 		Summary:       "生成跨服务 Saga 定义、步骤、补偿和注册骨架",
 		Usage:         `roost add saga <name> -service <service> -steps <step1,step2,...>`,
-		Configuration: `目标 Service 必须启用 saga Mod；它会补齐 nestwal/checkpoint/nats/mongo/redis。每个步骤需要幂等执行与补偿，消息 durable、超时、重试和 receipt 参数位于 saga 配置段。`,
+		Configuration: `目标 Service 必须启用 saga Mod；它会补齐 dataengine、nats 和 mongo。每个步骤需要幂等执行与补偿，消息 durable、超时、重试和 receipt 参数位于 saga 配置段。`,
 		Example: `roost add mod saga -service game
 roost add saga cross_server_trade -service game -steps reserve,deduct,deliver
 roost generate`,

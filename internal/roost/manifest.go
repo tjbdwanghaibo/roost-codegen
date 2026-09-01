@@ -98,7 +98,7 @@ func DefaultManifest(name, module string, services, mods, features []string) Man
 	}
 	shared := []string{"lock", "ops", "statslog"}
 	if len(mods) == 0 {
-		mods = []string{"configdata", "etcd", "redis", "mongo", "nats", "sync", "remote_entity", "checkpoint", "nestwal", "nest"}
+		mods = []string{"configdata", "etcd", "redis", "mongo", "nats", "sync", "remote_entity", "dataengine", "nest"}
 	}
 	svc := make(map[string]ServiceSpec, len(services))
 	for _, service := range services {
@@ -234,10 +234,6 @@ func (m Manifest) Validate() error {
 	}
 	if _, err := resolveMods(m.SharedMods); err != nil {
 		joined = errors.Join(joined, fmt.Errorf("shared_mods: %w", err))
-	}
-	projectMods := allProjectMods(m)
-	if contains(projectMods, "dataengine") && (contains(projectMods, "checkpoint") || contains(projectMods, "nestwal")) {
-		joined = errors.Join(joined, errors.New("project cannot mix dataengine with checkpoint/nestwal across services: persistence.engine is process-wide"))
 	}
 	for _, feature := range m.Features {
 		if !knownFeatures[feature] {

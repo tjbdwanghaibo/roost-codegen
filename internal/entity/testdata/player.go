@@ -1,7 +1,7 @@
 package testdata
 
 import (
-	"github.com/tjbdwanghaibo/cube-core/checkpoint"
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
 	"github.com/tjbdwanghaibo/cube/game/clientsync"
 )
@@ -38,7 +38,7 @@ const (
 
 type PlayerDao struct {
 	id      int64
-	tracker checkpoint.DirtyTracker
+	tracker dataengine.Tracker
 	Name    string
 	Level   int
 }
@@ -47,30 +47,30 @@ func NewPlayerDao() *PlayerDao { return &PlayerDao{} }
 
 type MailDao struct {
 	id      int64
-	tracker checkpoint.DirtyTracker
+	tracker dataengine.Tracker
 }
 
 func NewMailDao() *MailDao { return &MailDao{} }
 
-func (d *MailDao) Id() int64                              { return d.id }
-func (d *MailDao) SetId(id int64)                         { d.id = id }
-func (d *MailDao) DbName() string                         { return MailDaoDBName }
-func (d *MailDao) CollName() string                       { return MailDaoCollection }
-func (d *MailDao) Dirty() entity.IDirty                   { return &d.tracker }
-func (d *MailDao) CleanDirty()                            { d.tracker.SelfClean() }
-func (d *MailDao) DirtyTracker() *checkpoint.DirtyTracker { return &d.tracker }
-func (d *MailDao) Marshal() []byte                        { return nil }
-func (d *MailDao) MarshalPersist(mask uint64) []byte      { return nil }
+func (d *MailDao) Id() int64                         { return d.id }
+func (d *MailDao) SetId(id int64)                    { d.id = id }
+func (d *MailDao) DbName() string                    { return MailDaoDBName }
+func (d *MailDao) CollName() string                  { return MailDaoCollection }
+func (d *MailDao) Dirty() entity.IDirty              { return &d.tracker }
+func (d *MailDao) CleanDirty()                       { d.tracker.SelfClean() }
+func (d *MailDao) DirtyTracker() *dataengine.Tracker { return &d.tracker }
+func (d *MailDao) Marshal() []byte                   { return nil }
+func (d *MailDao) MarshalPersist(mask uint64) []byte { return nil }
 
-func (d *PlayerDao) Id() int64                              { return d.id }
-func (d *PlayerDao) SetId(id int64)                         { d.id = id }
-func (d *PlayerDao) DbName() string                         { return PlayerDaoDBName }
-func (d *PlayerDao) CollName() string                       { return PlayerDaoCollection }
-func (d *PlayerDao) Dirty() entity.IDirty                   { return &d.tracker }
-func (d *PlayerDao) CleanDirty()                            { d.tracker.SelfClean() }
-func (d *PlayerDao) DirtyTracker() *checkpoint.DirtyTracker { return &d.tracker }
-func (d *PlayerDao) Marshal() []byte                        { return nil }
-func (d *PlayerDao) MarshalPersist(mask uint64) []byte      { return nil }
+func (d *PlayerDao) Id() int64                         { return d.id }
+func (d *PlayerDao) SetId(id int64)                    { d.id = id }
+func (d *PlayerDao) DbName() string                    { return PlayerDaoDBName }
+func (d *PlayerDao) CollName() string                  { return PlayerDaoCollection }
+func (d *PlayerDao) Dirty() entity.IDirty              { return &d.tracker }
+func (d *PlayerDao) CleanDirty()                       { d.tracker.SelfClean() }
+func (d *PlayerDao) DirtyTracker() *dataengine.Tracker { return &d.tracker }
+func (d *PlayerDao) Marshal() []byte                   { return nil }
+func (d *PlayerDao) MarshalPersist(mask uint64) []byte { return nil }
 
 // --- Components (registered via global factory) ---
 

@@ -597,7 +597,7 @@ func renderKubernetesReadme(m Manifest) string {
 生产要求：
 
 - 把 ghcr.io/CHANGE_ME/%s:v1.0.0 替换为不可变 image digest。
-- 每个有 nestwal 的实例独占 RWO PVC；扩容时复制 workload 并分配新 SID，不能直接提高 replicas。
+- 每个有 Data Engine 的实例独占 RWO PVC；扩容时复制 workload 并分配新 SID，不能直接提高 replicas。
 - Secret 不加入 kustomization，也不得提交；示例中的 CHANGE_ME 会让应用 fail-closed。
 - 默认 NetworkPolicy 只允许 roost/monitoring 命名空间访问 ops 9100，不把管理端口暴露给公网。
 - 声明 player TCP 时模板会开放 Service 7000，但只允许带 roost.tjbdwanghaibo.io/player-access=true 标签的调用方命名空间；监听端口变化时同步修改 Service、LB 和 NetworkPolicy。
@@ -616,8 +616,8 @@ func renderImplementationGuide(m Manifest) string {
 
 ## 数据路径
 
-- checkpoint 收集字段级 dirty patch，主动 Flush 与停机 Flush 使用同一 admission/retry 路径。
-- nestwal 保存事务意图和 outbox；结果不确定时 fence，不猜测回滚。
+- Data Engine Tracker 收集字段级 patch，Nest transaction 统一写入 WAL；Projector 以 CAS 落 Mongo 并推进 ack。
+- effect 和 Saga start 与业务 mutation 一起 staging 到 outbox；结果不确定时 fence，不猜测回滚。
 - Remote Entity 使用 ownership marker、route epoch、lock fence、state version 四维拒绝旧写；读路径返回不可变 L1/L2 snapshot。
 - Saga 用 lease fencing、持久状态机、outbox、幂等 receipt 和补偿处理跨事务域流程。
 
@@ -646,7 +646,7 @@ func renderDeploymentGuide(m Manifest) string {
 
 1. 相同 SID 同一时刻只能有一个 writer；WAL 目录/PVC 必须单写。
 2. 配置和密钥在部署时挂载，不进入镜像；生产配置不得含 CHANGE_ME、localhost 或开发 token。
-3. 先看 readiness 再接流量；SIGTERM 后等待 checkpoint、WAL、NATS 和服务 Shutdown 收敛。
+3. 先看 readiness 再接流量；SIGTERM 后等待 Data Engine projection、WAL、outbox、NATS 和服务 Shutdown 收敛。
 4. 发布前执行 make ci、配置检查、数据库迁移检查和故障演练；镜像使用不可变 digest。
 
 ## CI/CD 流水线
@@ -667,12 +667,12 @@ Dockerfile 生成不包含配置的 distroless 非 root 镜像，并包含独立
 
 ## Kubernetes
 
-deploy/k8s 使用 base 与 overlays/staging、overlays/production，Secret 挂载完整配置，提供 startup/readiness/liveness probe、资源上下限、PDB、非 root/只读根文件系统。deploy.sh 要求不可变镜像 digest，先 server-side dry-run 再 apply 并等待 rollout。带 nestwal 的 Service 使用单副本 StatefulSet 和独占 PVC；无状态 Service 使用单副本 Deployment，确认 SID 分配策略后再扩容。
+deploy/k8s 使用 base 与 overlays/staging、overlays/production，Secret 挂载完整配置，提供 startup/readiness/liveness probe、资源上下限、PDB、非 root/只读根文件系统。deploy.sh 要求不可变镜像 digest，先 server-side dry-run 再 apply 并等待 rollout。带 Data Engine 的 Service 使用单副本 StatefulSet 和独占 PVC；无状态 Service 使用单副本 Deployment，确认 SID 分配策略后再扩容。
 
 ## 灰度、升级和回滚
 
 - 先部署新 SID canary，确认 WAL replay、Mongo/Redis/NATS/etcd 健康和业务指标，再切流量。
-- schema/wire/checkpoint 不兼容升级必须先完成迁移或双读，不能只回滚二进制。
+- schema/wire/持久化格式不兼容升级必须先完成迁移或双读，不能只回滚二进制。
 - 回滚前先停止新 writer 并 Flush；旧版本必须能读取新版本已写的数据，否则只能前滚修复。
 - 故障演练至少覆盖 kill -9、磁盘满、PVC 重新挂载、Mongo primary 切换、Redis AOF 不满足、NATS 重投、etcd compaction 和网络分区。
 `, m.Project.Name)
@@ -680,7 +680,7 @@ deploy/k8s 使用 base 与 overlays/staging、overlays/production，Secret 挂�
 
 func serviceUsesPersistentWAL(m Manifest, service string) bool {
 	mods, err := resolveMods(append(append([]string{}, m.SharedMods...), m.Services[service].Mods...))
-	return err == nil && (contains(mods, "nestwal") || contains(mods, "dataengine"))
+	return err == nil && contains(mods, "dataengine")
 }
 
 func serviceOwnsPlayerTCP(m Manifest, service string) bool {

@@ -32,12 +32,8 @@ func addEntityLifecycle(root string, manifest Manifest, options AddOptions) ([]s
 	if !contains(resolvedMods, "nest") {
 		return nil, fmt.Errorf("Entity lifecycle requires the instance Entity runtime published by Nest; run: roost add mod nest -service %s", service)
 	}
-	persistenceAlias := "kitcheckpoint"
-	persistenceImport := "github.com/tjbdwanghaibo/cube-kit/checkpoint"
-	if contains(resolvedMods, "dataengine") {
-		persistenceAlias = "kitdataengine"
-		persistenceImport = "github.com/tjbdwanghaibo/cube-kit/dataengine"
-	}
+	persistenceAlias := "kitdataengine"
+	persistenceImport := "github.com/tjbdwanghaibo/cube-kit/dataengine"
 	path := filepath.Join(root, "game", "lifecycle", entityName+".go")
 	if _, err := os.Stat(path); err == nil {
 		return nil, fmt.Errorf("%s already exists", relativeSlash(root, path))

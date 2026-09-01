@@ -58,17 +58,9 @@ var modCatalog = map[string]modSpec{
 		ImportPath: "github.com/tjbdwanghaibo/cube-kit/remote_entity", Alias: "kitremoteentity", Depends: []string{"redis", "mongo", "sync"},
 		Config: "remote_entity:\n  lock_ttl: 15s\n  retry_count: 3\n  retry_delay: 100ms\n  op_timeout: 3s\n  unlock_retry_count: 5\n  unlock_retry_interval: 100ms\n  version_ttl: 24h\n  finalize_retry_interval: 500ms\n  max_write_batch: 64\n  wrapper_capacity: 65536\n  wrapper_idle_ttl: 5m\n  snapshot_cache_shards: 64\n  snapshot_cache_entries: 10000\n  snapshot_cache_bytes: 268435456\n  snapshot_cache_ttl: 30s\n  snapshot_l2_ttl: 10m\n  snapshot_interest_ttl: 30s\n  snapshot_interest_keys: 10000\n  snapshot_interest_subs: 100000\n  marker_cache_ttl: 2s\n  snapshot_load_timeout: 3s\n  snapshot_max_waiters: 4096\n  async_finalize_capacity: 4096\n  async_finalize_workers: 16\n  transaction_track_limit: 100000\n  transaction_track_ttl: 10m\n  mongo:\n    database: remote_entity\n    transaction_ttl: 168h\n",
 	},
-	"checkpoint": {
-		ImportPath: "github.com/tjbdwanghaibo/cube-kit/checkpoint", Alias: "kitcheckpoint", Constructor: "kitcheckpoint.NewMod()", Depends: []string{"mongo", "redis"},
-		Config: "checkpoint:\n  database: game\n  journal_capacity: 10000\n  admission_pending_capacity: 10000\n  admission_retry_interval: 100ms\n  flush_workers: 4\n  batch_size: 200\n  batch_bytes: 524288\n  flush_interval: 1s\n  retry_backoff: 100ms\n  retry_max_backoff: 5s\n  submit_timeout: 50ms\n  load_concurrency: 4\n  mongo_max_concurrent_groups: 8\n  transaction_receipt_ttl: 720h\n  health_warn_fill_ratio: 0.8\n  wal:\n    prefix: roost:checkpoint:wal\n    shards: 16\n    workers: 4\n    queue_capacity: 4096\n    durable_timeout: 5s\n    aof_timeout: 3s\n    aof_replicas: 0\n    replay_batch_size: 200\n",
-	},
 	"dataengine": {
 		ImportPath: "github.com/tjbdwanghaibo/cube-kit/dataengine", Alias: "kitdataengine", Depends: []string{"mongo", "nats"},
 		Config: "persistence:\n  engine: dataengine\nnest:\n  worker_num: 8\n  heartbeat_worker_num: 2\n  queue_capacity: 4096\n  delayed_capacity: 4096\n  max_delay: 24h\n  tick_duration: 50ms\n  request_timeout: 3s\n  pipelined:\n    allowlist: []\n    async: false\n    async_workers: 8\n    async_queue_capacity: 4096\ndataengine:\n  database: game\n  startup_timeout: 30s\n  shutdown_timeout: 30s\n  transaction_receipt_ttl: 720h\n  receipt_ttl: 720h\n  wal:\n    dir: data/wal/dataengine\n    writer_version: 2\n    segment_bytes: 268435456\n    max_disk_bytes: 8589934592\n    max_unacked_age: 24h\n    queue_capacity: 8192\n    group_commit_interval: 2ms\n  projection:\n    batch_records: 256\n    retry_min: 100ms\n    retry_max: 5s\n  outbox:\n    workers: 2\n    batch_size: 64\n    lease_duration: 30s\n    poll_interval: 100ms\n    retry_min: 1s\n    retry_max: 1m\n    max_pending: 1000000\n    max_oldest_age: 30m\n  effects:\n    subject_prefix: roost.effect\n    stream: ROOST_EFFECTS\n    max_age: 168h\n    max_bytes: 8589934592\n    duplicate_window: 10m\n    replicas: 1\n",
-	},
-	"nestwal": {
-		ImportPath: "github.com/tjbdwanghaibo/cube-kit/nestwal", Alias: "kitnestwal", Depends: []string{"checkpoint", "nats"},
-		Config: "nest:\n  worker_num: 8\n  heartbeat_worker_num: 2\n  queue_capacity: 4096\n  delayed_capacity: 4096\n  max_delay: 24h\n  tick_duration: 50ms\n  request_timeout: 3s\n  wal:\n    dir: data/wal/nest\n    segment_bytes: 268435456\n    max_record_bytes: 4194304\n    max_disk_bytes: 8589934592\n    max_unacked_age: 24h\n    queue_capacity: 8192\n    batch_max_records: 256\n    batch_max_bytes: 1048576\n    batch_delay: 1ms\n    group_commit_interval: 2ms\n    retain_segments: 2\n    replay_retry_min: 100ms\n    replay_retry_max: 5s\n    replay_idle_poll: 20ms\n    replay_batch_records: 256\n    receipt_cleanup_batch: 256\n    receipt_cleanup_capacity: 65536\n    startup_timeout: 30s\n    effects:\n      subject_prefix: roost.effect\n      stream: ROOST_EFFECTS\n      max_age: 168h\n      max_bytes: 8589934592\n      duplicate_window: 10m\n      replicas: 1\n",
 	},
 	"nest": {
 		ImportPath: "github.com/tjbdwanghaibo/cube-kit/nest", Alias: "kitnest",
@@ -90,11 +82,8 @@ var knownFeatures = map[string]bool{
 func resolveMods(requested []string) ([]string, error) {
 	requested = append([]string(nil), requested...)
 	needsPersistence := contains(requested, "nest") || contains(requested, "saga")
-	if needsPersistence && !contains(requested, "dataengine") && !contains(requested, "nestwal") {
-		// Keep the legacy default for one publishing cycle: generated projects
-		// resolve released framework modules with GOWORK=off, so Data Engine can
-		// only become the implicit preset after the kit package is tagged.
-		requested = append(requested, "nestwal")
+	if needsPersistence && !contains(requested, "dataengine") {
+		requested = append(requested, "dataengine")
 	}
 	seen := map[string]bool{}
 	visiting := map[string]bool{}
@@ -126,9 +115,6 @@ func resolveMods(requested []string) ([]string, error) {
 		if err := visit(name); err != nil {
 			return nil, err
 		}
-	}
-	if seen["dataengine"] && (seen["checkpoint"] || seen["nestwal"]) {
-		return nil, fmt.Errorf("persistence mods are mutually exclusive: dataengine cannot be combined with checkpoint/nestwal")
 	}
 	return out, nil
 }
