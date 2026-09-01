@@ -458,7 +458,7 @@ BUILD_TIME := $(shell git show -s --format=%%cI HEAD)
 DIRTY := $(shell git status --porcelain)
 LDFLAGS := -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Version=$(VERSION) -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Commit=$(COMMIT) -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.BuildTime=$(BUILD_TIME) -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Dirty=$(DIRTY)
 
-.PHONY: help sync project-upgrade deps-update roost-up codegen-up next doctor fmt fmt-check vet test test-race build run generate generate-changed check-generated config-check config-check-all player-tcp-enable player-tcp-disable id-check ci cicd-check release-check image-build compose-check k8s-render k8s-check deploy-shell rollback-shell deploy-docker rollback-docker deploy-k8s rollback-k8s dev-up dev-down dev-logs clean
+.PHONY: help sync project-upgrade deps-update roost-up codegen-up next doctor fmt fmt-check vet glsvet test test-race build run generate generate-changed check-generated config-check config-check-all player-tcp-enable player-tcp-disable id-check ci cicd-check release-check image-build compose-check k8s-render k8s-check deploy-shell rollback-shell deploy-docker rollback-docker deploy-k8s rollback-k8s dev-up dev-down dev-logs clean
 .PHONY: new-service add-mod new-access new-transport new-module new-protocol new-entity new-component new-handler new-lifecycle new-endpoint new-skill new-event new-table new-dao new-webroute new-errcode new-saga
 
 help:
@@ -484,6 +484,8 @@ fmt-check:
 	$(ROOST) format check
 vet:
 	go vet ./...
+glsvet:
+	go run github.com/tjbdwanghaibo/cube-core/cmd/glsvet ./...
 test:
 	go test ./...
 test-race:
@@ -544,7 +546,7 @@ new-errcode:
 	$(ROOST) add errcode $(NAME)
 new-saga:
 	$(ROOST) add saga $(NAME) -service $(SERVICE) -steps $(STEPS)
-ci: fmt-check vet test test-race check-generated config-check-all id-check
+ci: fmt-check vet glsvet test test-race check-generated config-check-all id-check
 cicd-check: ci compose-check k8s-check
 release-check: cicd-check
 	@test -z "$(DIRTY)" || (echo "release requires a clean worktree"; exit 1)
@@ -644,6 +646,8 @@ jobs:
       - run: go test ./...
       - if: runner.os == 'Linux'
         run: go vet ./...
+      - if: runner.os == 'Linux'
+        run: go run github.com/tjbdwanghaibo/cube-core/cmd/glsvet ./...
       - if: runner.os == 'Linux'
         run: go test -race ./...
 

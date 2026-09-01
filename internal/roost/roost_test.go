@@ -400,7 +400,7 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 			}
 		}
 	}
-	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err != nil {
+	if err := GenerateTransactional(root, GenerateOptions{Stdout: io.Discard}, io.Discard); err != nil {
 		t.Fatalf("generate first business workflow: %v", err)
 	}
 	var doctorOutput bytes.Buffer
@@ -458,6 +458,26 @@ func TestDoctorFirstBusinessReportsActionableMissingSteps(t *testing.T) {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("doctor output missing %q:\n%s", want, output.String())
 		}
+	}
+}
+
+func TestDoctorFailsWhenGeneratedProjectDoesNotCompile(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "broken.go"), []byte("package planet\nfunc broken("), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	err = DoctorWithOptions(root, DoctorOptions{Strict: false}, &output)
+	if err == nil {
+		t.Fatalf("non-compiling project unexpectedly passed doctor:\n%s", output.String())
+	}
+	if !strings.Contains(output.String(), "compile:go-list") || !strings.Contains(output.String(), "FAIL") {
+		t.Fatalf("doctor did not expose compile failure:\n%s", output.String())
 	}
 }
 
@@ -616,6 +636,13 @@ func TestAddPlayerTCPTransportIsExplicitAndProductionGuarded(t *testing.T) {
 			}
 		}
 	}
+	var templateDiff bytes.Buffer
+	if err := DiffProject(root, &templateDiff); err != nil {
+		t.Fatalf("official player TCP workflow must remain codegen-owned: %v", err)
+	}
+	if !strings.Contains(templateDiff.String(), "summary: 0 file(s) would change") {
+		t.Fatalf("official player TCP workflow left stale templates:\n%s", templateDiff.String())
+	}
 	if _, err := Add(root, AddOptions{Kind: "transport", Name: "tcp"}); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("duplicate transport error = %v", err)
 	}
@@ -667,6 +694,12 @@ func TestDoctorPlayerTCPPassesAfterAuthAndConfig(t *testing.T) {
 	}
 	if _, err := ensurePlayerTCPConfig(root, "game", "", true); err != nil {
 		t.Fatal(err)
+	}
+	// Doctor is intentionally non-mutating and requires committed dependency
+	// checksums. Transactional generation performs the explicit dependency
+	// sync step without exposing a partially updated project.
+	if err := GenerateTransactional(root, GenerateOptions{Stdout: io.Discard}, io.Discard); err != nil {
+		t.Fatalf("generate before doctor: %v", err)
 	}
 	var output bytes.Buffer
 	if err := DoctorWithOptions(root, DoctorOptions{Strict: false, Workflow: "player-tcp"}, &output); err != nil {
@@ -1253,6 +1286,8 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 		"new-lifecycle:",
 		"new-endpoint:",
 		"new-skill:",
+		"glsvet:",
+		"go run github.com/tjbdwanghaibo/cube-core/cmd/glsvet ./...",
 	} {
 		if !strings.Contains(makefile, want) {
 			t.Errorf("generated Makefile missing %q:\n%s", want, makefile)
@@ -1262,7 +1297,7 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 	if strings.Contains(ci, "make deps-update") || strings.Contains(ci, "go get -u") {
 		t.Fatalf("ordinary generated CI must use the committed dependency graph:\n%s", ci)
 	}
-	for _, want := range []string{"go mod verify", "go test -race ./...", "docker compose", "kubectl kustomize"} {
+	for _, want := range []string{"go mod verify", "go test -race ./...", "cube-core/cmd/glsvet", "docker compose", "kubectl kustomize"} {
 		if !strings.Contains(ci, want) {
 			t.Errorf("generated CI missing %q:\n%s", want, ci)
 		}
