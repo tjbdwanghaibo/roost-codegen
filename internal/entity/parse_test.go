@@ -172,8 +172,12 @@ func TestGenerateRemoteManagedV2Participant(t *testing.T) {
 	for _, required := range []string{
 		"entity.NewRemoteEntityBaseWithMutex(",
 		"var _ entity.IRemoteCommitParticipant",
+		"var _ entity.IRemoteCommitChangeParticipant",
+		"HasRemoteCommitLocked(",
 		"BuildRemoteCommitLocked(",
+		"outcome.PersistChanges.RemotePersistChangeFor(",
 		"AcknowledgeRemoteCommit(",
+		"DirtyTracker().AdvanceVersion(",
 		"RollbackRemoteCommit(",
 		"entity.RemoteDataMutation{",
 		"commit.Invalidations = append(",
@@ -182,6 +186,9 @@ func TestGenerateRemoteManagedV2Participant(t *testing.T) {
 		if !strings.Contains(generated, required) {
 			t.Errorf("generated V2 participant missing %q", required)
 		}
+	}
+	if strings.Contains(generated, "TakePersistDirty") || strings.Contains(generated, "RollbackPersist") {
+		t.Fatalf("generated V2 participant still reads non-transactional persistence dirty state")
 	}
 }
 

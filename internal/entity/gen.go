@@ -369,6 +369,20 @@ func (e *{{.Entity.Name}}) generatedOnDestroy(reason entity.EntityDestroyReason)
 {{- if .RemoteV2}}
 
 var _ entity.IRemoteCommitParticipant = (*{{.Entity.Name}})(nil)
+var _ entity.IRemoteCommitChangeParticipant = (*{{.Entity.Name}})(nil)
+
+// HasRemoteCommitLocked consults only the active Nest transaction. Sync dirty
+// state is intentionally unrelated to persistence admission.
+func (e *{{.Entity.Name}}) HasRemoteCommitLocked(outcome entity.RemoteTransactionOutcome) bool {
+	if e.IsRemoved() { return true }
+	if outcome.PersistChanges == nil { return false }
+{{- range .Entity.Daos}}
+	if e.{{.FieldName}} != nil {
+		if _, ok := outcome.PersistChanges.RemotePersistChangeFor(e.{{.FieldName}}); ok { return true }
+	}
+{{- end}}
+	return false
+}
 
 // BuildRemoteCommitLocked freezes DAO state while Nest holds the entity mutex.
 // The returned commit owns all byte slices and is safe for asynchronous WAL use.
@@ -402,14 +416,18 @@ func (e *{{.Entity.Name}}) BuildRemoteCommitLocked(lease entity.RemoteWriteLease
 	}
 {{- range .Entity.Daos}}
 	if e.{{.FieldName}} != nil {
-		if mask := e.{{.FieldName}}.DirtyTracker().TakePersistDirty(); mask != 0 {
+		if outcome.PersistChanges == nil {
+			return entity.RemoteCommit{}, fmt.Errorf("{{$.Entity.Name}}: missing transaction-local remote persistence changes")
+		}
+		if change, ok := outcome.PersistChanges.RemotePersistChangeFor(e.{{.FieldName}}); ok {
+			if change.Delete {
+				return entity.RemoteCommit{}, fmt.Errorf("{{$.Entity.Name}}: DAO-level remote delete requires entity removal for {{.CollName}}")
+			}
+			mask := change.Mask
 			data := append([]byte(nil), e.{{.FieldName}}.MarshalPersist(mask)...)
 			if len(data) == 0 {
-				e.{{.FieldName}}.DirtyTracker().RollbackPersist(mask)
-				e.RollbackRemoteCommit(commit)
 				return entity.RemoteCommit{}, fmt.Errorf("{{$.Entity.Name}}: empty remote mutation for {{.CollName}}")
 			}
-			e.{{.FieldName}}.DirtyTracker().IncVersion()
 			mutation := entity.RemoteDataMutation{
 				Database:      e.{{.FieldName}}.DbName(),
 				DatabaseScope: uint8(checkpoint.ResolveDatabaseScope(e.{{.FieldName}})),
@@ -435,27 +453,29 @@ func (e *{{.Entity.Name}}) BuildRemoteCommitLocked(lease entity.RemoteWriteLease
 	return commit, nil
 }
 
-// AcknowledgeRemoteCommit intentionally does not clear dirty bits: Build used
-// atomic exchange, so any later business mutation is already in a new mask.
+// AcknowledgeRemoteCommit advances only DAOs present in the authoritative
+// remote receipt. The operation is idempotent and allows aggregate-version
+// jumps when another DAO changed in an intervening transaction.
 func (e *{{.Entity.Name}}) AcknowledgeRemoteCommit(commit entity.RemoteCommit) error {
 	if commit.EntityID != e.GUId() {
 		return fmt.Errorf("{{.Entity.Name}}: remote acknowledgement identity mismatch")
 	}
-	return nil
-}
-
-func (e *{{.Entity.Name}}) RollbackRemoteCommit(commit entity.RemoteCommit) {
 	for _, mutation := range commit.Mutations {
 		switch mutation.Collection {
 {{- range .Entity.Daos}}
 		case {{daoCollectionConst .TypeName}}:
 			if e.{{.FieldName}} != nil {
-				e.{{.FieldName}}.DirtyTracker().RollbackPersist(mutation.Mask)
+				if err := e.{{.FieldName}}.DirtyTracker().AdvanceVersion(commit.NextVersion); err != nil { return err }
 			}
 {{- end}}
 		}
 	}
+	return nil
 }
+
+// RollbackRemoteCommit is a no-op: Build freezes transaction-local changes and
+// does not mutate DAO persistence state before authoritative acceptance.
+func (e *{{.Entity.Name}}) RollbackRemoteCommit(entity.RemoteCommit) {}
 {{- end}}
 {{- if .NeedsRemove}}
 

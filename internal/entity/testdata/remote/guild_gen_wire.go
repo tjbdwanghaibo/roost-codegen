@@ -83,6 +83,24 @@ func (e *Guild) generatedOnDestroy(reason entity.EntityDestroyReason) {
 }
 
 var _ entity.IRemoteCommitParticipant = (*Guild)(nil)
+var _ entity.IRemoteCommitChangeParticipant = (*Guild)(nil)
+
+// HasRemoteCommitLocked consults only the active Nest transaction. Sync dirty
+// state is intentionally unrelated to persistence admission.
+func (e *Guild) HasRemoteCommitLocked(outcome entity.RemoteTransactionOutcome) bool {
+	if e.IsRemoved() {
+		return true
+	}
+	if outcome.PersistChanges == nil {
+		return false
+	}
+	if e.dao != nil {
+		if _, ok := outcome.PersistChanges.RemotePersistChangeFor(e.dao); ok {
+			return true
+		}
+	}
+	return false
+}
 
 // BuildRemoteCommitLocked freezes DAO state while Nest holds the entity mutex.
 // The returned commit owns all byte slices and is safe for asynchronous WAL use.
@@ -113,14 +131,18 @@ func (e *Guild) BuildRemoteCommitLocked(lease entity.RemoteWriteLease, outcome e
 		return commit, nil
 	}
 	if e.dao != nil {
-		if mask := e.dao.DirtyTracker().TakePersistDirty(); mask != 0 {
+		if outcome.PersistChanges == nil {
+			return entity.RemoteCommit{}, fmt.Errorf("Guild: missing transaction-local remote persistence changes")
+		}
+		if change, ok := outcome.PersistChanges.RemotePersistChangeFor(e.dao); ok {
+			if change.Delete {
+				return entity.RemoteCommit{}, fmt.Errorf("Guild: DAO-level remote delete requires entity removal for guilds")
+			}
+			mask := change.Mask
 			data := append([]byte(nil), e.dao.MarshalPersist(mask)...)
 			if len(data) == 0 {
-				e.dao.DirtyTracker().RollbackPersist(mask)
-				e.RollbackRemoteCommit(commit)
 				return entity.RemoteCommit{}, fmt.Errorf("Guild: empty remote mutation for guilds")
 			}
-			e.dao.DirtyTracker().IncVersion()
 			mutation := entity.RemoteDataMutation{
 				Database:      e.dao.DbName(),
 				DatabaseScope: uint8(checkpoint.ResolveDatabaseScope(e.dao)),
@@ -145,22 +167,26 @@ func (e *Guild) BuildRemoteCommitLocked(lease entity.RemoteWriteLease, outcome e
 	return commit, nil
 }
 
-// AcknowledgeRemoteCommit intentionally does not clear dirty bits: Build used
-// atomic exchange, so any later business mutation is already in a new mask.
+// AcknowledgeRemoteCommit advances only DAOs present in the authoritative
+// remote receipt. The operation is idempotent and allows aggregate-version
+// jumps when another DAO changed in an intervening transaction.
 func (e *Guild) AcknowledgeRemoteCommit(commit entity.RemoteCommit) error {
 	if commit.EntityID != e.GUId() {
 		return fmt.Errorf("Guild: remote acknowledgement identity mismatch")
 	}
-	return nil
-}
-
-func (e *Guild) RollbackRemoteCommit(commit entity.RemoteCommit) {
 	for _, mutation := range commit.Mutations {
 		switch mutation.Collection {
 		case GuildDAOCollection:
 			if e.dao != nil {
-				e.dao.DirtyTracker().RollbackPersist(mutation.Mask)
+				if err := e.dao.DirtyTracker().AdvanceVersion(commit.NextVersion); err != nil {
+					return err
+				}
 			}
 		}
 	}
+	return nil
 }
+
+// RollbackRemoteCommit is a no-op: Build freezes transaction-local changes and
+// does not mutate DAO persistence state before authoritative acceptance.
+func (e *Guild) RollbackRemoteCommit(entity.RemoteCommit) {}

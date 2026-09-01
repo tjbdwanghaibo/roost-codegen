@@ -1,8 +1,9 @@
 package remote
 
 import (
-	"github.com/tjbdwanghaibo/cube-core/checkpoint"
+	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/cube-core/nest"
 )
 
 const (
@@ -16,20 +17,31 @@ func init() {
 
 type GuildDAO struct {
 	id      int64
-	tracker checkpoint.DirtyTracker
+	tracker dataengine.Tracker
 	Name    string
 }
 
-func NewGuildDAO() *GuildDAO                               { return &GuildDAO{} }
-func (d *GuildDAO) Id() int64                              { return d.id }
-func (d *GuildDAO) SetId(id int64)                         { d.id = id }
-func (d *GuildDAO) DbName() string                         { return "game" }
-func (d *GuildDAO) CollName() string                       { return GuildDAOCollection }
-func (d *GuildDAO) Dirty() entity.IDirty                   { return &d.tracker }
-func (d *GuildDAO) CleanDirty()                            { d.tracker.SelfClean() }
-func (d *GuildDAO) DirtyTracker() *checkpoint.DirtyTracker { return &d.tracker }
-func (d *GuildDAO) MarshalPersist(uint64) []byte           { return []byte(d.Name) }
-func (d *GuildDAO) ApplySync(data []byte) error            { d.Name = string(data); return nil }
+func NewGuildDAO() *GuildDAO                          { return &GuildDAO{} }
+func (d *GuildDAO) Id() int64                         { return d.id }
+func (d *GuildDAO) SetId(id int64)                    { d.id = id }
+func (d *GuildDAO) DbName() string                    { return "game" }
+func (d *GuildDAO) CollName() string                  { return GuildDAOCollection }
+func (d *GuildDAO) Dirty() entity.IDirty              { return &d.tracker }
+func (d *GuildDAO) CleanDirty()                       { d.tracker.SelfClean() }
+func (d *GuildDAO) DirtyTracker() *dataengine.Tracker { return &d.tracker }
+func (d *GuildDAO) MarshalPersist(uint64) []byte      { return []byte(d.Name) }
+func (d *GuildDAO) ApplySync(data []byte) error       { d.Name = string(data); return nil }
+func (d *GuildDAO) PrepareMutation(change nest.PersistChange) (dataengine.Mutation, error) {
+	version := d.tracker.Version()
+	return dataengine.Mutation{
+		Key:  dataengine.DocumentKey{Database: d.DbName(), Resource: d.CollName(), ID: d.Id()},
+		Kind: dataengine.MutationPut, ExpectedVersion: version, NextVersion: version + 1,
+		Mask: change.Mask, Data: d.MarshalPersist(change.Mask),
+	}, nil
+}
+func (d *GuildDAO) AcceptMutation(mutation dataengine.Mutation) error {
+	return d.tracker.AcceptVersion(mutation.ExpectedVersion, mutation.NextVersion)
+}
 
 //cube:entity entityKind=EntityKindGuild remote=managed
 type Guild struct {
