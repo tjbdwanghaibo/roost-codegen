@@ -2,6 +2,7 @@ package roost
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -52,11 +54,24 @@ func DoctorWithOptions(root string, options DoctorOptions, stdout io.Writer) err
 		return err
 	}
 	report := DoctorReport{Items: []CheckItem{{Name: "manifest", Status: StatusOK, Detail: ManifestName}}}
+	goAvailable := false
 	for _, command := range []string{"go", "git"} {
 		if _, err := exec.LookPath(command); err != nil {
 			report.Items = append(report.Items, CheckItem{Name: command, Status: StatusFail, Detail: err.Error()})
 		} else {
 			report.Items = append(report.Items, CheckItem{Name: command, Status: StatusOK, Detail: "available"})
+			if command == "go" {
+				goAvailable = true
+			}
+		}
+	}
+	if goAvailable {
+		report.Items = append(report.Items,
+			runDoctorGoCommand(root, "dependencies:go-mod-verify", 2*time.Minute, "go mod verify passed", "run GOWORK=off go mod download, then retry", "mod", "verify"),
+			runDoctorGoCommand(root, "compile:go-list", 2*time.Minute, "all packages loaded with -mod=readonly", "fix package/import errors without changing go.mod, then retry", "list", "-buildvcs=false", "-mod=readonly", "./..."),
+		)
+		if options.Strict {
+			report.Items = append(report.Items, runDoctorGoCommand(root, "compile:go-test", 5*time.Minute, "all packages and tests compiled", "run GOWORK=off go test -buildvcs=false -mod=readonly -run=^$ ./... and fix the reported compiler error", "test", "-buildvcs=false", "-mod=readonly", "-run=^$", "./..."))
 		}
 	}
 	for _, service := range sortedServiceNames(m) {
@@ -110,6 +125,29 @@ func DoctorWithOptions(root string, options DoctorOptions, stdout io.Writer) err
 		}
 	}
 	return errors.Join(failed...)
+}
+
+func runDoctorGoCommand(root, name string, timeout time.Duration, success, fix string, args ...string) CheckItem {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, "go", args...)
+	command.Dir = root
+	command.Env = append(os.Environ(), "GOWORK=off")
+	output, err := command.CombinedOutput()
+	if err == nil {
+		return CheckItem{Name: name, Status: StatusOK, Detail: success}
+	}
+	detail := strings.TrimSpace(string(output))
+	if len(detail) > 2048 {
+		detail = detail[len(detail)-2048:]
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		detail = "timed out after " + timeout.String()
+	}
+	if detail == "" {
+		detail = err.Error()
+	}
+	return CheckItem{Name: name, Status: StatusFail, Detail: detail + "; fix: " + fix}
 }
 
 func checkCICDTemplates(root string) []CheckItem {

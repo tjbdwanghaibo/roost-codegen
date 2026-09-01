@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+- Fixed `project doctor --strict` rejecting the codegen-owned `configs/examples/access.player.tcp.yaml` produced by the official player TCP workflow; the reference template now carries an explicit ownership marker and has a workflow regression test.
+
+### Fixed
+- framework-compat 的 source-head 矩阵支持显式指定 core/kit/skill 候选 ref，并逐仓库 checkout 到该 ref；框架跨仓库改动可在合并前验证同一候选集合，不再只能测试三个远端默认分支的偶然组合。
+- `project doctor` 不再只检查文件结构：默认执行 `GOWORK=off go mod verify` 和只读 `go list ./...`，strict 进一步编译全部包和测试；命令带超时、有限错误输出和可执行修复提示，缺 go.sum 或不可编译工程不再显示全绿。相关正向 workflow 使用事务化生成先提交依赖元数据。
+- 生成工程 Makefile/CI、framework-compat 与 upgrade-compat 流水线统一执行 core `glsvet`，Handler 裸 goroutine、隐式异步 Context 捕获和被忽略的 admission error 不再只依赖人工评审。
+- Windows 创建工程的最终目录 rename 对杀毒/索引器短暂占用增加有界重试；只重试 access-denied 且目标仍不存在的瞬态条件，真实目标冲突和其他文件系统错误继续立即失败。
+
 ### Changed
 - `project sync` 改为临时项目中完成模板和生成器预演，成功后再以可回滚批次提交，并正确提交生成器判定的孤儿文件删除；`add service/mod/access/transport/saga` 的 manifest、生成文件与 TCP 双配置在失败时恢复，避免半完成工程。
 - 同步/升级提交增加乐观并发校验，提交或回滚期间检测到另一进程/开发者编辑时拒绝覆盖；`roost generate` 也改为临时工程完成全部生成器与不升级版本的 `go mod tidy` 后批量提交，业务输入在运行期间发生变化会拒绝提交。依赖更新同样改为临时工程解析，只提交经过校验的 `go.mod/go.sum`。
