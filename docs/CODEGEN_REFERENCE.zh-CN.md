@@ -57,6 +57,12 @@ roost project new planet \
   -features protocol,config,entity,nest,event,dao,errcode
 ```
 
+上例保留 legacy checkpoint preset，供尚未发布 Data Engine 依赖的迁移期项目使用。完成
+core/kit 同版本发布后，新项目应显式使用
+`-mods configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest`。生成器拒绝
+`dataengine` 与 `checkpoint`/`nestwal` 同时出现；显式 Data Engine 工程会把
+`WithEntityAccess`（Remote 开启时同时加 `WithRemoteProjection`）写入 bootstrap。
+
 主要产物：`roost.yaml`、main/bootstrap/Service、配置、Makefile、CI、开发 compose，以及 Shell、Docker、Kubernetes 生产部署模板。Secret 示例和业务文件归应用所有，后续 sync 不覆盖；带生成标识的装配文件由生成器管理。
 
 新项目同时生成 `docs/QUICKSTART.zh-CN.md`、`docs/BEGINNER_WORKBOOK.zh-CN.md`、`docs/ROOST_YAML.zh-CN.md`、
@@ -225,7 +231,9 @@ dao.RangeItems(func(itemID int64, count int32) bool { return true })
 dao.DelItems(10001)
 ```
 
-生成器同时产出 dirty mask、undo、字段级 patch、BSON marshal/unmarshal、schema migration、rollback snapshot、CommitParticipant、`RestorePersisted` 和 `DirtyTracker()`。业务不能访问 `tracker`、存储字段或 map 内部引用；Entity generator 也只通过 `DirtyTracker()` 取得 checkpoint tracker。
+生成器同时产出字段 mask、undo、事务内 `PersistChange`、字段级 Patch、BSON marshal/unmarshal、schema migration、`MutationParticipant`、`RestorePersisted` 和 `DirtyTracker()`。业务不能访问 `tracker`、存储字段或 map 内部引用。`DirtyTracker()` 返回 `*dataengine.Tracker`，只保存已接受的持久化版本和 sync dirty；持久化变化只属于当前 Nest/system transaction。
+
+持久化 setter/map mutator 不能在事务外调用，`durability=memory` handler 也不能修改 persistent 字段。新建、migration/replace、全字段修改生成 Put；普通字段或安全 map key 修改生成 Patch；删除生成带版本 tombstone 的 Delete。Patch 不携带整文档 fallback。启用这些生成物前必须保证目标集群所有 WAL reader 支持 v2 且 writer 已切到 v2。
 
 Redis DAO 使用 `//cube:redisdao`，生成类型化 Get/Set/Delete 包装；具体 marker 参数与 fail-fast 规则见根 README 的 DAO 章节。
 
@@ -283,9 +291,9 @@ type Player struct {
 }
 ```
 
-产物 `<entity>_gen_wire.go` 包含 factory、Base/Component/DAO getter、组件/DAO 装配、Snapshot、RemoveSnapshot、生命周期 hook；`remote=managed` 时还生成 Remote Entity commit participant。`sync=true` 可同时声明 `syncTopic`、`syncPacker`、`subjectPacker`。
+产物 `<entity>_gen_wire.go` 包含 factory、Base/Component/DAO getter、组件/DAO 装配、事务化 PrepareDelete 和生命周期 hook；普通 Entity 不再生成 Snapshot/RemoveSnapshot 写路径。`remote=managed` 时还生成 Remote Entity commit participant：它从同一 Nest transaction 读取 DAO 变更，在 lease/fence 下冻结完整远端文档，并在权威提交确认后推进版本。`sync=true` 可同时声明 `syncTopic`、`syncPacker`、`subjectPacker`。
 
-DAO 必须实现 codegen 生成的标准方法，尤其是 `DirtyTracker() *checkpoint.DirtyTracker`。v1.7.0 起 Entity 不再直接访问 `dao.Tracker` 字段，因此与私有 DAO 存储兼容。
+DAO 必须实现 codegen 生成的标准方法，尤其是 `PrepareMutation(nest.PersistChange)`、`AcceptMutation(dataengine.Mutation)` 和 `DirtyTracker() *dataengine.Tracker`。Entity 不直接访问 `dao.tracker` 字段。不要为普通 Entity 手写 checkpoint Snapshot、RemoveSnapshot 或在 release hook 中落库；legacy checkpoint 类型只允许出现在迁移兼容代码。
 
 ## 6. Nest handler 生成器
 

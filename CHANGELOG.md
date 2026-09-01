@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Added — Data Engine
+- DAO 生成器现在产出事务内 `PersistChange`、Put/Patch/Delete mutation、字段级 BSON patch、schema migration 与 tracker version 接受逻辑；普通 Entity wire 不再生成 Snapshot/RemoveSnapshot 写路径。
+- Remote Entity wire 从当前 Nest transaction 领取变更，在 lease/fence 下冻结 commit，并只在权威远端确认后推进 DAO version；不再读取或回滚持久化 dirty。
+- Project catalog 支持显式 `dataengine` Mod，自动接线 EntityAccess/Remote projection、Mongo/NATS 与独占 WAL 配置，并拒绝同一进程跨 Service 混用 checkpoint/nestwal；legacy 默认 preset 仅保留到 core/kit Data Engine 首个版本发布。
+
+### Changed — Data Engine
+- `DirtyTracker()` 的生成契约改为 `*dataengine.Tracker`。patch-only 生成代码要求 WAL writer v2，必须按 reader-first/writer-second 顺序发布，不能与 checkpoint writer 双写。
+
 - Fixed `project doctor --strict` rejecting the codegen-owned `configs/examples/access.player.tcp.yaml` produced by the official player TCP workflow; the reference template now carries an explicit ownership marker and has a workflow regression test.
 
 ### Fixed

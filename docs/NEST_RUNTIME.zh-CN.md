@@ -73,6 +73,33 @@ fake Client，生产环境从 `app.Registry` 取得 kit `nest.Mod` 提供的 Cli
 - 外部 I/O、跨服务 RPC 和消息发布放在锁外，通过 Saga/Outbox 编排。
 - Handler 参数和异步命令在成功入队后视为不可变；需要修改的 DTO 应在接入层复制。
 
+## Data Engine 持久化规则
+
+生成 DAO 的持久化变化只记录在当前 Nest transaction 中，不再写入 DAO 级 checkpoint
+dirty。带持久化属性的 setter、map Set/Del 只能在 Nest handler 或 system transaction
+内调用；事务外修改会 fail fast。`durability=memory` 的 handler 不能修改 persistent
+字段，低隔离但仍需落地的操作应使用 `durability=async`。
+
+同一事务对同一 DAO 的改动合并成一个 mutation：新建、migration/replace 和全字段写为
+Put；已存在文档的普通修改为字段级 Patch；删除为带 version 的 Delete/tombstone。Patch
+不携带 full fallback。Entity release 只处理生命周期和 sync，不编码 BSON 或触发落库。
+
+```go
+//roost:nest target=player rollback=undo durability=async
+func handlerRename(owner PlayerOwner, name string) error {
+	owner.PlayerDAO().SetName(name) // transaction-local Patch
+	return nil
+}
+```
+
+需要启动 Saga 时在 handler 内调用 `saga.EmitStart`；Native Entity step 使用 Data Engine
+inbox，把 mutation、step receipt 和 completion effect 放进一个 CommitRecord。Raw Mongo
+step 继续使用 `MongoCommandInbox`，不能在其 Mongo transaction 中混写 Nest Entity。
+
+发布由 checkpoint 迁到 Data Engine 时必须先升级所有 WAL reader，再启用 writer v2，
+最后重新生成 DAO 并原子切换 `persistence.engine=dataengine`。patch-only 代码上线后不可
+配置回切 checkpoint；完整步骤见 core `docs/DATA_ENGINE_MIGRATION.md`。
+
 ## 升级步骤
 
 1. 把宽 `IPlayerEntity` 拆成 handler 所需的窄 capability。
@@ -81,3 +108,5 @@ fake Client，生产环境从 `app.Registry` 取得 kit `nest.Mod` 提供的 Cli
 4. 在 endpoint 构造函数中注入生成的 Sender。
 5. 将包级 `Send_*`/`Sync_*` 调用改为 Sender 方法；生成器不会保留旧函数。
 6. 删除业务 Runtime、Controller 透传层和全局 Access 获取 Nest 的代码。
+7. 确认目标环境 WAL reader 已兼容 v2、writer 已设为 v2，再重新生成持久化 DAO。
+8. 用严格/异步/pipelined handler 测试 Put、Patch、Delete 和 rollback；禁止同时启用 checkpoint writer。
