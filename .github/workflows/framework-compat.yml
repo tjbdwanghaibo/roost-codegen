@@ -58,7 +58,7 @@ jobs:
           mods=configdata
           services=game
           if [ "$SCENARIO" = full ]; then
-            mods=configdata,etcd,redis,mongo,nats,sync,remote_entity,checkpoint,nestwal,nest,saga
+            mods=configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest,saga
             services=game,gate
           fi
           "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -mods "$mods" -services "$services" "${version_args[@]}"
@@ -75,9 +75,14 @@ jobs:
             "${RUNNER_TEMP}/roost" add endpoint RenamePlayer --handler player
             "${RUNNER_TEMP}/roost" add skill Fireball
             "${RUNNER_TEMP}/roost" add saga GuildTransfer -service game -steps debit,credit
-            "${RUNNER_TEMP}/roost" generate
+            # Pure-version scenarios exercise the transactional generate+tidy
+            # path here. Source-head is compiled through go.work below because
+            # its APIs may intentionally not exist in the latest tag yet.
+            if [ "$SET" != source-head ]; then
+              "${RUNNER_TEMP}/roost" generate
+            fi
           fi
-      - name: use current framework source without committing replace
+      - name: use current framework source through a temporary workspace
         if: matrix.dependency-set == 'source-head'
         working-directory: ${{ runner.temp }}/planet
         env:
@@ -94,9 +99,11 @@ jobs:
           git -C "${RUNNER_TEMP}/cube-kit" checkout --detach FETCH_HEAD
           git -C "${RUNNER_TEMP}/roost-skill" fetch --depth=1 origin "$SKILL_REF"
           git -C "${RUNNER_TEMP}/roost-skill" checkout --detach FETCH_HEAD
-          go mod edit -replace github.com/tjbdwanghaibo/cube-core="${RUNNER_TEMP}/cube-core"
-          go mod edit -replace github.com/tjbdwanghaibo/cube-kit="${RUNNER_TEMP}/cube-kit"
-          go mod edit -replace github.com/tjbdwanghaibo/roost-skill="${RUNNER_TEMP}/roost-skill"
+          cd "${RUNNER_TEMP}"
+          go work init ./planet ./cube-core ./cube-kit ./roost-skill
+          # The framework runtime modules support the lower consumer lane.
+          # Codegen itself is already built and is intentionally not a member.
+          go work edit -go=1.25.0
       - name: select generated-project Go compatibility version
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
@@ -104,17 +111,27 @@ jobs:
           cache-dependency-path: ${{ runner.temp }}/planet/go.sum
       - name: compile generated consumer and check idempotence
         working-directory: ${{ runner.temp }}/planet
+        env:
+          SET: ${{ matrix.dependency-set }}
         run: |
-          GOWORK=off go mod tidy
-          GOWORK=off go mod verify
-          "${RUNNER_TEMP}/roost" generate --check
-          GOWORK=off go test ./...
-          GOWORK=off go vet ./...
-          GOWORK=off go run github.com/tjbdwanghaibo/cube-core/cmd/glsvet ./...
+          if [ "$SET" = source-head ]; then
+            go test ./...
+            go vet ./...
+            go run github.com/tjbdwanghaibo/cube-core/cmd/glsvet ./...
+          else
+            GOWORK=off go mod tidy
+            GOWORK=off go mod verify
+            "${RUNNER_TEMP}/roost" generate --check
+            GOWORK=off go test ./...
+            GOWORK=off go vet ./...
+            GOWORK=off go run github.com/tjbdwanghaibo/cube-core/cmd/glsvet ./...
+          fi
           for script in deploy/shell/*.sh deploy/docker/*.sh deploy/k8s/*.sh; do sh -n "$script"; done
           ROOST_IMAGE=ghcr.io/example/planet@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ROOST_CONFIG_ROOT=configs/service docker compose -f deploy/docker/docker-compose.prod.yaml config --quiet
           kubectl kustomize deploy/k8s/overlays/staging >/dev/null
-      - name: source replaces remain temporary
+      - name: source workspace remains temporary and modules stay publishable
         if: matrix.dependency-set == 'source-head'
         working-directory: ${{ runner.temp }}/planet
-        run: go mod edit -dropreplace github.com/tjbdwanghaibo/cube-core -dropreplace github.com/tjbdwanghaibo/cube-kit -dropreplace github.com/tjbdwanghaibo/roost-skill
+        run: |
+          test ! -e go.work
+          ! grep -qE '^[[:space:]]*replace[[:space:](]' go.mod

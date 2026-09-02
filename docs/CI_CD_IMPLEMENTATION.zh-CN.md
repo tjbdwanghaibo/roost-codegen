@@ -32,10 +32,14 @@
 
 - minimum：codegen 声明的最低 core/kit/skill 版本。
 - released：生成时解析并锁定的一组最新正式版本。
-- source-head：在临时生成项目中使用 `go work` 或临时 replace 联调四仓 main，任何 replace 都不得提交。
+- source-head：在临时生成项目中使用不提交的 `go.work` 联调四仓 main；不再以写入 module 的临时 replace 作为标准研发流程。
 - version-skew：当前 codegen 对上一框架集合，明确支持边界。
 
 每个场景必须生成两次且第二次零差异，并至少覆盖 minimal、entity/nest、persistence、remote/saga、replication、skill 和多服务项目。
+
+source-head 与 release 是两道独立门禁：前者证明当前四仓代码同代，后者必须显式
+`GOWORK=off` 并只解析正式 tag。尚未发布新 API 时允许 source-head 继续研发，但 release
+矩阵必须保持失败，直到按 core → kit → skill → codegen 完成版本闭包。
 
 ### 历史项目升级
 

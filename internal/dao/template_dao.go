@@ -11,7 +11,7 @@ import (
 	"github.com/tjbdwanghaibo/cube-core/migration"
 	"github.com/tjbdwanghaibo/cube-core/nest"
 {{- if .HasMaps}}
-	fmap "github.com/tjbdwanghaibo/cube-core/map"
+	fmap "github.com/tjbdwanghaibo/cube-core/safemap"
 {{- end}}
 	"go.mongodb.org/mongo-driver/v2/bson"
 )

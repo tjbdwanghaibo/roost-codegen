@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/tjbdwanghaibo/cube-core/dataengine"
-	fmap "github.com/tjbdwanghaibo/cube-core/map"
 	"github.com/tjbdwanghaibo/cube-core/nest"
+	fmap "github.com/tjbdwanghaibo/cube-core/safemap"
 )
 
 // EquipInfo is a nested struct with dirty propagation.

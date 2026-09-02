@@ -15,6 +15,8 @@
 - Fixed `project doctor --strict` rejecting the codegen-owned `configs/examples/access.player.tcp.yaml` produced by the official player TCP workflow; the reference template now carries an explicit ownership marker and has a workflow regression test.
 
 ### Fixed
+- Remote Entity 生成代码从 transaction outcome 的显式 delete intent 生成删除 commit，不再用内存 `IsRemoved()` 反推；生成的 DAO 并发容器 import 从 `cube-core/map` 迁移到语义明确的 `cube-core/safemap`。
+- release 与 framework-compat 的 full consumer 场景不再请求已经删除的 `checkpoint`/standalone `nestwal` Mod，统一生成 `dataengine,nest,saga` 单持久化路径。
 - framework-compat 的 source-head 矩阵支持显式指定 core/kit/skill 候选 ref，并逐仓库 checkout 到该 ref；框架跨仓库改动可在合并前验证同一候选集合，不再只能测试三个远端默认分支的偶然组合。
 - `project doctor` 不再只检查文件结构：默认执行 `GOWORK=off go mod verify` 和只读 `go list ./...`，strict 进一步编译全部包和测试；命令带超时、有限错误输出和可执行修复提示，缺 go.sum 或不可编译工程不再显示全绿。相关正向 workflow 使用事务化生成先提交依赖元数据。
 - 生成工程 Makefile/CI、framework-compat 与 upgrade-compat 流水线统一执行 core `glsvet`，Handler 裸 goroutine、隐式异步 Context 捕获和被忽略的 admission error 不再只依赖人工评审。

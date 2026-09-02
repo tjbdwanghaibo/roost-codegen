@@ -9,7 +9,7 @@ import (
 	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/nest"
 {{- if hasMaps .Nested.Fields}}
-	fmap "github.com/tjbdwanghaibo/cube-core/map"
+	fmap "github.com/tjbdwanghaibo/cube-core/safemap"
 {{- end}}
 )
 

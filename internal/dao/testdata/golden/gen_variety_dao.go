@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"github.com/tjbdwanghaibo/cube-core/dataengine"
 	"github.com/tjbdwanghaibo/cube-core/entity"
-	fmap "github.com/tjbdwanghaibo/cube-core/map"
 	"github.com/tjbdwanghaibo/cube-core/migration"
 	"github.com/tjbdwanghaibo/cube-core/nest"
+	fmap "github.com/tjbdwanghaibo/cube-core/safemap"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"sort"
 )

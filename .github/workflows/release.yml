@@ -87,7 +87,7 @@ jobs:
           SKILL: ${{ needs.gate.outputs.skill }}
           CODEGEN: ${{ needs.gate.outputs.version }}
         run: |
-          "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -services game,gate -mods configdata,etcd,redis,mongo,nats,sync,remote_entity,checkpoint,nestwal,nest,saga -roost-core-version "$CORE" -roost-kit-version "$KIT" -roost-skill-version "$SKILL" -codegen-version "$CODEGEN"
+          "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -services game,gate -mods configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest,saga -roost-core-version "$CORE" -roost-kit-version "$KIT" -roost-skill-version "$SKILL" -codegen-version "$CODEGEN"
           cd "${RUNNER_TEMP}/planet"
           "${RUNNER_TEMP}/roost" add access player --service gate
           "${RUNNER_TEMP}/roost" add transport tcp

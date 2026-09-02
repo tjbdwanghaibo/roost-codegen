@@ -88,7 +88,7 @@ var _ entity.IRemoteCommitChangeParticipant = (*Guild)(nil)
 // HasRemoteCommitLocked consults only the active Nest transaction. Sync dirty
 // state is intentionally unrelated to persistence admission.
 func (e *Guild) HasRemoteCommitLocked(outcome entity.RemoteTransactionOutcome) bool {
-	if e.IsRemoved() {
+	if outcome.DeleteIntents != nil && outcome.DeleteIntents.RemoteDeleteRequested(e.GUId()) {
 		return true
 	}
 	if outcome.PersistChanges == nil {
@@ -105,11 +105,12 @@ func (e *Guild) HasRemoteCommitLocked(outcome entity.RemoteTransactionOutcome) b
 // BuildRemoteCommitLocked freezes DAO state while Nest holds the entity mutex.
 // The returned commit owns all byte slices and is safe for asynchronous WAL use.
 func (e *Guild) BuildRemoteCommitLocked(lease entity.RemoteWriteLease, outcome entity.RemoteTransactionOutcome) (entity.RemoteCommit, error) {
+	deleteRequested := outcome.DeleteIntents != nil && outcome.DeleteIntents.RemoteDeleteRequested(e.GUId())
 	commit := entity.RemoteCommit{
 		TransactionID: outcome.TransactionID,
 		EntityID:      e.GUId(),
 		Kind:          e.GetEntityKind(),
-		Delete:        e.IsRemoved(),
+		Delete:        deleteRequested,
 		BaseVersion:   lease.BaseVersion,
 		NextVersion:   lease.BaseVersion + 1,
 		MarkerEpoch:   lease.MarkerEpoch,

@@ -289,9 +289,13 @@ type Player struct {
 }
 ```
 
-产物 `<entity>_gen_wire.go` 包含 factory、Base/Component/DAO getter、组件/DAO 装配、事务化 PrepareDelete 和生命周期 hook；普通 Entity 不再生成 Snapshot/RemoveSnapshot 写路径。`remote=managed` 时还生成 Remote Entity commit participant：它从同一 Nest transaction 读取 DAO 变更，在 lease/fence 下冻结完整远端文档，并在权威提交确认后推进版本。`sync=true` 可同时声明 `syncTopic`、`syncPacker`、`subjectPacker`。
+产物 `<entity>_gen_wire.go` 包含 factory、Base/Component/DAO getter、组件/DAO 装配、事务化 PrepareDelete 和生命周期 hook；普通 Entity 不再生成 Snapshot/RemoveSnapshot 写路径。`remote=managed` 时还生成 Remote Entity commit participant：它从同一 Nest transaction 读取 DAO 变更和**显式 delete intent**，在 ownership marker/lock fence/route epoch 下冻结完整远端 commit，并只在权威提交确认后推进版本。删除意图不再由 `IsRemoved()` 反推，因此 rollback 不会提前污染内存生命周期。`sync=true` 可同时声明 `syncTopic`、`syncPacker`、`subjectPacker`。
 
 DAO 必须实现 codegen 生成的标准方法，尤其是 `PrepareMutation(nest.PersistChange)`、`AcceptMutation(dataengine.Mutation)` 和 `DirtyTracker() *dataengine.Tracker`。Entity 不直接访问 `dao.tracker` 字段。不要为普通 Entity 手写 Snapshot、RemoveSnapshot 或在 release hook 中落库；历史数据迁移通过 Data Engine migration/import 工具完成。
+
+新生成的 map 字段从 `github.com/tjbdwanghaibo/cube-core/safemap` 导入容器（默认 alias
+仍为 `fmap`）。从旧 source-head 升级后应重新运行 DAO 生成器；手写代码若仍导入
+`cube-core/map`，同步改为 `cube-core/safemap`。不会生成两套并行容器实现。
 
 ## 6. Nest handler 生成器
 
