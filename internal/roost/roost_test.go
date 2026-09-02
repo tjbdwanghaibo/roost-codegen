@@ -19,11 +19,11 @@ import (
 const publishedDataEngineGeneratorDependencies = false
 
 func TestResolveModsAddsRequiredDependencies(t *testing.T) {
-	got, err := resolveMods([]string{"remote_entity", "sync"})
+	got, err := resolveMods([]string{"remote_entity", "room"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"redis", "nats", "remote_entity", "sync"} {
+	for _, want := range []string{"redis", "nats", "remote_entity", "room"} {
 		if !contains(got, want) {
 			t.Fatalf("resolved mods %v do not contain %s", got, want)
 		}
@@ -1146,7 +1146,7 @@ func TestFrameworkMinimumVersionGuard(t *testing.T) {
 }
 
 func TestReplicationPresetCompilesAsGoSource(t *testing.T) {
-	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"etcd"}, []string{"replication-quic", "replication-kcp", "replication-udp"})
+	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"etcd"}, []string{"nettransport-quic", "nettransport-kcp", "nettransport-udp"})
 	m.Versions.Kit = minimumVersions.Kit
 	plan, err := renderProject(m)
 	if err != nil {
@@ -1159,7 +1159,7 @@ func TestReplicationPresetCompilesAsGoSource(t *testing.T) {
 }
 
 func TestReplicationRequiresSupportedKitRelease(t *testing.T) {
-	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"etcd"}, []string{"replication-quic"})
+	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"etcd"}, []string{"nettransport-quic"})
 	m.Versions.Kit = "v1.7.9"
 	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), minimumVersions.Kit) {
 		t.Fatalf("expected kit release guard, got %v", err)

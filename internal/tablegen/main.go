@@ -577,6 +577,16 @@ func RegisterGeneratedConfigData(r *configdata.Registry) error {
 	return nil
 }
 
+// RegisterConfigData registers the generated definitions on the default
+// registry. This is the entry point the generated aggregate in
+// internal/registry calls; RegisterGeneratedConfigData stays exported and
+// explicit for tests and for services that build their own registry.
+//
+//cube:register phase=config
+func RegisterConfigData() error {
+	return RegisterGeneratedConfigData(configdata.DefaultRegistry())
+}
+
 {{range .Metas}}
 type {{.TypeName}}Cfg = {{.Alias}}.{{.TypeName}}
 

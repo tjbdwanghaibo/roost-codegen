@@ -140,7 +140,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/cube-core/app"
 	"github.com/tjbdwanghaibo/cube-core/gateway"
-	"github.com/tjbdwanghaibo/cube-core/obs"
+	"github.com/tjbdwanghaibo/cube-core/metrics"
 	accessplayer %q
 	%q
 )
@@ -382,7 +382,7 @@ func (server *Server) Start() error {
 	server.listener = listener
 	server.stopping = false
 	server.started = true
-	obs.SetGauge("player_tcp_connections", nil, 0)
+	metrics.SetGauge("player_tcp_connections", nil, 0)
 	server.wait.Add(1)
 	go server.acceptLoop(listener)
 	slog.Info("player tcp listener started", "addr", listener.Addr().String(), "max_connections", server.config.MaxConnections)
@@ -442,7 +442,7 @@ func (server *Server) acceptLoop(listener net.Listener) {
 			if server.ipConnections[host] >= server.config.MaxConnectionsPerIP {
 				server.mu.Unlock()
 				<-server.connectionSlots
-				obs.IncCounter("player_tcp_connection_rejected_total", map[string]string{"reason": "per_ip"}, 1)
+				metrics.IncCounter("player_tcp_connection_rejected_total", map[string]string{"reason": "per_ip"}, 1)
 				_ = connection.Close()
 				continue
 			}
@@ -452,7 +452,7 @@ func (server *Server) acceptLoop(listener net.Listener) {
 			server.mu.Unlock()
 			go server.serveConnection(connection)
 		default:
-			obs.IncCounter("player_tcp_connection_rejected_total", nil, 1)
+			metrics.IncCounter("player_tcp_connection_rejected_total", nil, 1)
 			_ = connection.Close()
 		}
 	}
@@ -461,8 +461,8 @@ func (server *Server) acceptLoop(listener net.Listener) {
 func (server *Server) serveConnection(connection net.Conn) {
 	defer server.wait.Done()
 	defer func() { <-server.connectionSlots }()
-	obs.AddGauge("player_tcp_connections", nil, 1)
-	defer obs.AddGauge("player_tcp_connections", nil, -1)
+	metrics.AddGauge("player_tcp_connections", nil, 1)
+	defer metrics.AddGauge("player_tcp_connections", nil, -1)
 	defer func() {
 		server.mu.Lock()
 		delete(server.connections, connection)
@@ -486,21 +486,21 @@ func (server *Server) serveConnection(connection net.Conn) {
 	case <-connectionCtx.Done():
 		_ = connection.Close(); return
 	case <-handshakeCtx.Done():
-		obs.IncCounter("player_tcp_auth_failure_total", map[string]string{"reason": "handshake_capacity"}, 1); _ = connection.Close(); return
+		metrics.IncCounter("player_tcp_auth_failure_total", map[string]string{"reason": "handshake_capacity"}, 1); _ = connection.Close(); return
 	}
 	handshakeHeld := true
 	defer func() { if handshakeHeld { <-server.handshakeSlots } }()
 	authFrame, release, err := server.readFrameLimit(connection, server.config.MaxHandshakeBytes)
-	if err != nil { obs.IncCounter("player_tcp_frame_error_total", nil, 1); _ = connection.Close(); return }
+	if err != nil { metrics.IncCounter("player_tcp_frame_error_total", nil, 1); _ = connection.Close(); return }
 	if authFrame.flags != 0 || authFrame.messageID != 0 || authFrame.sequence == 0 || len(authFrame.payload) == 0 {
-		obs.IncCounter("player_tcp_auth_failure_total", nil, 1); release(); _ = connection.Close(); return
+		metrics.IncCounter("player_tcp_auth_failure_total", nil, 1); release(); _ = connection.Close(); return
 	}
 	principal, err := server.authenticator.Authenticate(handshakeCtx, string(authFrame.payload), connection.RemoteAddr())
 	handshakeCancel()
 	release()
 	<-server.handshakeSlots
 	handshakeHeld = false
-	if err != nil || !principal.Authenticated() { obs.IncCounter("player_tcp_auth_failure_total", nil, 1); _ = connection.Close(); return }
+	if err != nil || !principal.Authenticated() { metrics.IncCounter("player_tcp_auth_failure_total", nil, 1); _ = connection.Close(); return }
 	session := &session{connection: connection, principal: clonePrincipal(principal), writeTimeout: server.config.WriteTimeout, maxPayloadBytes: server.config.MaxPayloadBytes}
 	defer func() {
 		_ = session.Close(gateway.ErrSessionClosed)
@@ -512,17 +512,17 @@ func (server *Server) serveConnection(connection net.Conn) {
 	for {
 		if err := connection.SetReadDeadline(time.Now().Add(server.config.IdleTimeout)); err != nil { return }
 		request, releasePayload, err := server.readFrame(connection)
-		if err != nil { if !errors.Is(err, io.EOF) { obs.IncCounter("player_tcp_frame_error_total", nil, 1) }; return }
+		if err != nil { if !errors.Is(err, io.EOF) { metrics.IncCounter("player_tcp_frame_error_total", nil, 1) }; return }
 		if request.flags != 0 || request.messageID == 0 || request.sequence == 0 || int32(request.sequence-lastSequence) <= 0 {
-			obs.IncCounter("player_tcp_frame_error_total", nil, 1); releasePayload(); return
+			metrics.IncCounter("player_tcp_frame_error_total", nil, 1); releasePayload(); return
 		}
 		lastSequence = request.sequence
 		dispatchStarted := time.Now()
 		response, dispatchErr := server.runtime.Protocols.Dispatch(connectionCtx, session, request.messageID, request.sequence, request.payload)
-		obs.ObserveDuration("player_tcp_dispatch_duration", nil, time.Since(dispatchStarted))
+		metrics.ObserveDuration("player_tcp_dispatch_duration", nil, time.Since(dispatchStarted))
 		releasePayload()
 		if dispatchErr != nil {
-			obs.IncCounter("player_tcp_dispatch_error_total", nil, 1)
+			metrics.IncCounter("player_tcp_dispatch_error_total", nil, 1)
 			slog.Debug("player tcp dispatch failed", "player_id", principal.PlayerID, "message_id", request.messageID, "sequence", request.sequence, "err", dispatchErr)
 			return
 		}
@@ -593,7 +593,7 @@ func (server *Server) pushPlayer(ctx context.Context, playerID int64, messageID 
 	for _, current := range sessions {
 		if err := current.push(ctx, messageID, payload); err != nil { joined = errors.Join(joined, fmt.Errorf("session %%s: %%w", current.principal.SessionID, err)) }
 	}
-	if joined == nil { obs.IncCounter("player_tcp_push_total", nil, int64(len(sessions))) } else { obs.IncCounter("player_tcp_push_error_total", nil, 1) }
+	if joined == nil { metrics.IncCounter("player_tcp_push_total", nil, int64(len(sessions))) } else { metrics.IncCounter("player_tcp_push_error_total", nil, 1) }
 	return joined
 }
 
@@ -604,7 +604,7 @@ func (server *Server) pushSession(ctx context.Context, sessionID string, message
 	server.mu.RUnlock()
 	if current == nil { return fmt.Errorf("%%w: %%s", ErrSessionNotFound, sessionID) }
 	err := current.push(ctx, messageID, payload)
-	if err == nil { obs.IncCounter("player_tcp_push_total", nil, 1) } else { obs.IncCounter("player_tcp_push_error_total", nil, 1) }
+	if err == nil { metrics.IncCounter("player_tcp_push_total", nil, 1) } else { metrics.IncCounter("player_tcp_push_error_total", nil, 1) }
 	return err
 }
 
@@ -665,7 +665,7 @@ func (session *session) writeFrame(ctx context.Context, flags byte, messageID, s
 	binary.BigEndian.PutUint32(header[12:16], uint32(len(payload)))
 	buffers := net.Buffers{header[:], payload}
 	_, err := buffers.WriteTo(session.connection)
-	if err != nil { obs.IncCounter("player_tcp_write_error_total", nil, 1) }
+	if err != nil { metrics.IncCounter("player_tcp_write_error_total", nil, 1) }
 	return err
 }
 

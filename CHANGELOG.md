@@ -4,6 +4,60 @@
 
 ## [Unreleased]
 
+### Added
+- **静态注册统一为一份生成的清单。** 新增 `//cube:register` 标记与
+  `internal/registry/generated.go` 聚合器（由 `roost generate` 生成，无条件运行且排在
+  最后——它要收集前面生成器刚写出的标记）。`bootstrap.New()` 在 `app.New()` **之前**
+  调用 `registry.RegisterAll()`。
+  - **为什么不是一个新 mod**：静态注册必须在任何 mod 的 `Init` 之前完成。entity
+    builder 若在某个 mod 的 `Start` 里注册，另一个在 `Provide` 里解析实体的 mod 就已经
+    晚了。放在 `app.New()` 之前，这个排序问题用构造消除，不需要再引一个 mod 去管。
+  - **为什么用标记而不按类型推导**：component 的叶子函数是业务手写的，命名不统一
+    （`RegisterComponent`、`RegisterScheduler`、`RegisterBasicMissions`…），无法按约定
+    推导。让注册函数自己声明阶段，一个机制覆盖全部类别，新增一类不必改 codegen。
+  - 阶段固定序：`pre` → `kind` → `config` → `component` → `entity` → `protocol` →
+    `nest` → `route` → `post`。顺序是语义的：`kind` 必须早于 `entity`（注册 builder 时
+    要解析 kind→category），`config` 必须早于任何读配置表的注册。`pre`/`post` 让业务的
+    "必须最先/最后"有位置，因此不需要另外一个 custom 钩子文件。
+  - 输出**确定**：阶段 → `order` → import 路径 → 函数名，不受文件遍历或 map 顺序影响。
+  - 标记无法执行时**直接报错**而非跳过（缺 `phase`、未知 `phase`、未知选项、
+    非整数 `order`、带参数、未导出、返回值不是空或单个 `error`、打在方法上、同名重复标记）——
+    静默丢掉一个注册，症状是很远处的一个 nil。
+  - 生成的 entity wire 代码自带 `//cube:register phase=entity`，entity 因此走同一条路径。
+  - **迁移守卫**：检测到手写聚合器仍在（`game/bootstrap/register.go` 的 `RegisterAll`、
+    `game/entities/register/`、`game/components/register/`）时拒绝生成并给出迁移步骤。
+    两个聚合器并存不会重复注册（每个叶子自带 `sync.Once`），但下次加实体的人不知道
+    该改哪个。守卫按**内容**判断，不只看路径存在。
+  - 12 条测试，含"生成物必须能解析且 import 了它调用的一切"这条——它抓的正是模板
+    产出 `fmt.Errorf` 却没 import `fmt` 这一类。5 条变异验证。
+- `generator` 新增 `Always` 字段：无条件运行，且不受 `--changed` 的前缀过滤影响。
+- 四个阶段已接入：`entity`（生成的 wire 代码自带标记）、`component`（业务手写函数打标记）、
+  `config`（`tablegen` 与 `cfggen` 各产出一个带标记的无参包装 `RegisterConfigData()`，
+  内部用默认 registry；带参的 `RegisterGeneratedConfigData` 保持导出供测试与自建 registry 使用）、
+  `nest`（生成的 `RegisterNestHandlers()` 打标记）。生成的 `bootstrap.New()` 相应删掉了
+  对 nest 与 config 的显式调用——两份清单并存正是聚合器要取消的东西。
+- **protocol 与 webroute 不并入**，因为签名说明它们不属于层 A：
+  `RegisterPlayerProtocols(*player_agent.ProtocolRegistry, *app.Registry) error` 要 app registry，
+  `RegisterRoutes(webroute.Registerer, *Service) error` 要活的 Service 实例。两者都不能在
+  `app.New()` 之前运行，而它们今天已经在正确的位置（前者走一个 `app.IManager` 与生成的
+  access mod，后者绑在 web service 上）。
+
+### Added
+- `manager` mod 进入 catalog 与**新项目默认 mod 集**。它是 per Service 的（内存单例按 Service 类型选择启动），因此：
+  - 构造器按 Service 渲染成 `kitmanager.NewManagerMod(service<X>.Managers()...)`；
+  - 生成 `internal/service/<name>/managers.go` 作为**业务可编辑、仅缺失时创建**的钩子（与 `service.go` 同规则，沿用 `nest` 的 `RegisterNestHandlers` 先例）——启动哪些 manager 是业务决策，mod 只拥有生命周期；
+  - `shared_mods` 里声明 `manager` 会被 `Validate` 拒绝并提示应放到 `services.<name>.mods`：进程级的 manager mod 会把某个 Service 的单例在所有 Service 里都启起来。
+
+### Changed
+- 跟随 core/kit 的命名整理：`roost.yaml` 的 mod 键 `sync` 改为 `room`，feature 键
+  `replication-quic/kcp/udp` 改为 `nettransport-quic/kcp/udp`。**旧键仍然接受**——
+  `Manifest.Validate` 会把它们归一化成规范名（`Validate` 是所有构造路径的共同入口，
+  因此手写 YAML、`project new` 的默认清单和 `upgrade` 的合并结果都覆盖到），
+  下一次 `make sync` 写回规范拼写。未知的 mod/feature 仍然报错：归一化只映射已知的
+  旧拼写，不会让校验变宽松。
+- 生成代码的 import 路径随 kit 更新：`cube-kit/remote_entity` → `cube-kit/remoteentity`。
+
+
 ### Added — Data Engine
 - DAO 生成器现在产出事务内 `PersistChange`、Put/Patch/Delete mutation、字段级 BSON patch、schema migration 与 tracker version 接受逻辑；普通 Entity wire 不再生成 Snapshot/RemoveSnapshot 写路径。
 - Remote Entity wire 从当前 Nest transaction 领取变更，在 lease/fence 下冻结 commit，并只在权威远端确认后推进 DAO version；不再读取或回滚持久化 dirty。

@@ -462,6 +462,17 @@ func generate(meta *Meta, pkg string) ([]byte, error) {
 	b.WriteString("func MustRegisterGeneratedConfigData(r *configdata.Registry) {\n")
 	b.WriteString("\tif err := RegisterGeneratedConfigData(r); err != nil {\n\t\tpanic(err)\n\t}\n}\n\n")
 
+	// The aggregate in internal/registry calls registrations without
+	// arguments, so the marked entry point is this wrapper over the default
+	// registry. RegisterGeneratedConfigData stays exported and explicit for
+	// tests and for services that build their own registry.
+	b.WriteString("// RegisterConfigData registers the generated definitions on the default\n")
+	b.WriteString("// registry. This is the entry point the generated aggregate calls.\n")
+	b.WriteString("//\n")
+	b.WriteString("//cube:register phase=config\n")
+	b.WriteString("func RegisterConfigData() error {\n")
+	b.WriteString("\treturn RegisterGeneratedConfigData(configdata.DefaultRegistry())\n}\n\n")
+
 	// Typed snapshot accessors.
 	for _, table := range meta.Tables {
 		keyField, _ := fieldByName(table.Fields, table.Key)

@@ -20,6 +20,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-codegen/internal/eventgen"
 	"github.com/tjbdwanghaibo/roost-codegen/internal/nest"
 	"github.com/tjbdwanghaibo/roost-codegen/internal/protocol"
+	"github.com/tjbdwanghaibo/roost-codegen/internal/registry"
 	"github.com/tjbdwanghaibo/roost-codegen/internal/tablegen"
 	"github.com/tjbdwanghaibo/roost-codegen/internal/webroute"
 )
@@ -45,7 +46,13 @@ type generator struct {
 	Feature  string
 	Name     string
 	Prefixes []string
-	Run      func(io.Writer) error
+	// Always runs this generator regardless of the feature set and regardless
+	// of which files changed. The registry aggregate is Always because its
+	// inputs are //cube:register markers anywhere in the tree — including in
+	// code that another generator in this same run just emitted — so neither
+	// the feature gate nor a changed-file prefix can decide for it.
+	Always bool
+	Run    func(io.Writer) error
 }
 
 func forceArg(args []string, force bool) []string {
@@ -106,6 +113,11 @@ func generatorsFor(m Manifest, force bool) []generator {
 			return tablegen.Run([]string{"-meta", "./configs/schema", "-out", "./configs/generated", "-force"}, w)
 		}},
 		{Feature: "webroute", Name: "webroute", Prefixes: []string{"service/"}, Run: func(w io.Writer) error { return webroute.Run(forceArg([]string{"-dir", "./service"}, force), w) }},
+		// Last, and unconditional: the aggregate collects //cube:register
+		// markers, including the ones the generators above just wrote.
+		{Name: "registry", Always: true, Run: func(w io.Writer) error {
+			return registry.Run(".", m.Project.Module, w)
+		}},
 	}
 }
 
@@ -304,7 +316,7 @@ func runGenerators(root string, manifest Manifest, generators []generator, optio
 		}
 	}()
 	for _, gen := range generators {
-		if !hasFeature(manifest, gen.Feature) {
+		if !gen.Always && !hasFeature(manifest, gen.Feature) {
 			continue
 		}
 		if options.DryRun {
@@ -457,6 +469,10 @@ func gitChanged(root string) ([]string, error) {
 func filterChanged(gens []generator, changed []string) []generator {
 	var out []generator
 	for _, gen := range gens {
+		if gen.Always {
+			out = append(out, gen)
+			continue
+		}
 		matched := false
 		for _, file := range changed {
 			for _, prefix := range gen.Prefixes {

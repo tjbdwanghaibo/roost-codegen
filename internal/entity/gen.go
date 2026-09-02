@@ -200,6 +200,8 @@ import (
 var registerEntityOnce sync.Once
 
 // RegisterEntity registers the {{.Entity.Name}} entity builder.
+//
+//cube:register phase=entity
 func RegisterEntity() {
 	registerEntityOnce.Do(func() {
 		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{

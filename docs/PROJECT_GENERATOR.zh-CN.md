@@ -130,7 +130,7 @@ PATH 的目录就是 `D:\Program Files\Go\bin\bin`。关闭并重新打开 Power
     roost project new planet \
       -module github.com/acme/planet \
       -services game,gate \
-      -mods configdata,etcd,redis,mongo,nats,sync,remote_entity \
+      -mods configdata,etcd,redis,mongo,nats,room,remote_entity \
       -features protocol,config,entity,nest,event,dao,errcode \
       -out D:/work/planet
 
@@ -282,7 +282,7 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 | `mongo` | — | Mongo client、collection、session 和索引策略 |
 | `nats` | — | NATS、JetStream、RPC 和 Bus |
 | `sync` | `nats` | NATS 或 JetStream 同步 Bus |
-| `remote_entity` | `redis`、`mongo`、`sync` | 跨服实体所有权、原子事务、快照分发与版本锁 |
+| `remoteentity` | `redis`、`mongo`、`sync` | 跨服实体所有权、原子事务、快照分发与版本锁 |
 | `dataengine` | `mongo`、`nats` | Nest transaction WAL、Mongo projection、聚合加载/migration、effect outbox |
 | `nest` | `dataengine` | 实例级 Nest 引擎装配 |
 | `saga` | `dataengine` | saga 引擎与 Data Engine start effect（要求 core/kit >= v1.4.0） |

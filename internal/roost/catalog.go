@@ -50,17 +50,20 @@ var modCatalog = map[string]modSpec{
 		Config:     "nats:\n  url: nats://127.0.0.1:4222\n  prefix: roost\n  worker_num: 8\n  reliable:\n    enabled: false\n",
 		DevService: "nats",
 	},
-	"sync": {
-		ImportPath: "github.com/tjbdwanghaibo/cube-kit/sync", Alias: "kitsync", Constructor: "kitsync.NewSyncMod(0)", Depends: []string{"nats"},
-		Config: "sync:\n  transport: jetstream\n  prefix: roost.sync\n  storage: file\n  replicas: 1\n  publish_timeout: 3s\n",
+	"room": {
+		ImportPath: "github.com/tjbdwanghaibo/cube-kit/room", Alias: "kitroom", Constructor: "kitroom.NewRoomMod(0)", Depends: []string{"nats"},
+		Config: "room:\n  transport: jetstream\n  prefix: roost.room\n  storage: file\n  replicas: 1\n  publish_timeout: 3s\n",
 	},
 	"remote_entity": {
-		ImportPath: "github.com/tjbdwanghaibo/cube-kit/remote_entity", Alias: "kitremoteentity", Depends: []string{"redis", "mongo", "sync"},
+		ImportPath: "github.com/tjbdwanghaibo/cube-kit/remoteentity", Alias: "kitremoteentity", Depends: []string{"redis", "mongo", "room"},
 		Config: "remote_entity:\n  lock_ttl: 15s\n  retry_count: 3\n  retry_delay: 100ms\n  op_timeout: 3s\n  unlock_retry_count: 5\n  unlock_retry_interval: 100ms\n  version_ttl: 24h\n  finalize_retry_interval: 500ms\n  max_write_batch: 64\n  wrapper_capacity: 65536\n  wrapper_idle_ttl: 5m\n  snapshot_cache_shards: 64\n  snapshot_cache_entries: 10000\n  snapshot_cache_bytes: 268435456\n  snapshot_cache_ttl: 30s\n  snapshot_l2_ttl: 10m\n  snapshot_interest_ttl: 30s\n  snapshot_interest_keys: 10000\n  snapshot_interest_subs: 100000\n  marker_cache_ttl: 2s\n  snapshot_load_timeout: 3s\n  snapshot_max_waiters: 4096\n  async_finalize_capacity: 4096\n  async_finalize_workers: 16\n  transaction_track_limit: 100000\n  transaction_track_ttl: 10m\n  mongo:\n    database: remote_entity\n    transaction_ttl: 168h\n",
 	},
 	"dataengine": {
 		ImportPath: "github.com/tjbdwanghaibo/cube-kit/dataengine", Alias: "kitdataengine", Depends: []string{"mongo", "nats"},
 		Config: "persistence:\n  engine: dataengine\nnest:\n  worker_num: 8\n  heartbeat_worker_num: 2\n  queue_capacity: 4096\n  delayed_capacity: 4096\n  max_delay: 24h\n  tick_duration: 50ms\n  request_timeout: 3s\n  pipelined:\n    allowlist: []\n    async: false\n    async_workers: 8\n    async_queue_capacity: 4096\ndataengine:\n  database: game\n  startup_timeout: 30s\n  shutdown_timeout: 30s\n  transaction_receipt_ttl: 720h\n  receipt_ttl: 720h\n  wal:\n    dir: data/wal/dataengine\n    writer_version: 2\n    segment_bytes: 268435456\n    max_disk_bytes: 8589934592\n    max_unacked_age: 24h\n    queue_capacity: 8192\n    group_commit_interval: 2ms\n  projection:\n    batch_records: 256\n    retry_min: 100ms\n    retry_max: 5s\n  outbox:\n    workers: 2\n    batch_size: 64\n    lease_duration: 30s\n    poll_interval: 100ms\n    retry_min: 1s\n    retry_max: 1m\n    max_pending: 1000000\n    max_oldest_age: 30m\n  effects:\n    subject_prefix: roost.effect\n    stream: ROOST_EFFECTS\n    max_age: 168h\n    max_bytes: 8589934592\n    duplicate_window: 10m\n    replicas: 1\n",
+	},
+	"manager": {
+		ImportPath: "github.com/tjbdwanghaibo/cube-kit/manager", Alias: "kitmanager",
 	},
 	"nest": {
 		ImportPath: "github.com/tjbdwanghaibo/cube-kit/nest", Alias: "kitnest",
@@ -74,9 +77,9 @@ var modCatalog = map[string]modSpec{
 var knownFeatures = map[string]bool{
 	"protocol": true, "config": true, "entity": true, "nest": true,
 	"event": true, "dao": true, "attribute": true, "webroute": true,
-	"errcode":          true,
-	"saga":             true,
-	"replication-quic": true, "replication-kcp": true, "replication-udp": true,
+	"errcode":           true,
+	"saga":              true,
+	"nettransport-quic": true, "nettransport-kcp": true, "nettransport-udp": true,
 }
 
 func resolveMods(requested []string) ([]string, error) {

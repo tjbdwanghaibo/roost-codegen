@@ -96,6 +96,12 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		if err := addGo("internal/service/"+name+"/service.go", renderService(name), false); err != nil {
 			return nil, err
 		}
+		serviceMods, _ := resolveMods(m.Services[name].Mods)
+		if contains(serviceMods, "manager") {
+			if err := addGo("internal/service/"+name+"/managers.go", renderServiceManagers(name), false); err != nil {
+				return nil, err
+			}
+		}
 		add("configs/service/config."+name+".yaml", renderServiceConfig(m, name, false), false)
 		add("configs/service/config."+name+".prod.example.yaml", renderServiceConfig(m, name, true), false)
 	}
@@ -150,7 +156,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 			return nil, err
 		}
 	}
-	if hasFeature(m, "replication-quic") || hasFeature(m, "replication-kcp") || hasFeature(m, "replication-udp") {
+	if hasFeature(m, "nettransport-quic") || hasFeature(m, "nettransport-kcp") || hasFeature(m, "nettransport-udp") {
 		if err := addGo("internal/transport/generated.go", renderReplication(m), true); err != nil {
 			return nil, err
 		}
@@ -162,26 +168,26 @@ func renderReplication(m Manifest) string {
 	var b strings.Builder
 	b.WriteString(generatedHeader + "\npackage transport\n\nimport (\n")
 	b.WriteString("\t\"context\"\n")
-	if hasFeature(m, "replication-udp") {
+	if hasFeature(m, "nettransport-udp") {
 		b.WriteString("\t\"net\"\n")
 	}
 	b.WriteString("\tcoreentitysync \"github.com/tjbdwanghaibo/cube-core/entitysync\"\n")
-	b.WriteString("\tcorerep \"github.com/tjbdwanghaibo/cube-core/replication\"\n")
-	b.WriteString("\tkitrep \"github.com/tjbdwanghaibo/cube-kit/replication\"\n")
-	b.WriteString("\tkitsync \"github.com/tjbdwanghaibo/cube-kit/sync\"\n)\n\n")
-	b.WriteString("func AsyncConfig() kitrep.AsyncTransportConfig { return kitrep.DefaultAsyncTransportConfig() }\n\n")
-	b.WriteString("type SessionResolver func(coreentitysync.SubscriberRef) (corerep.SessionID, error)\n\n")
-	b.WriteString("func NewRoomSink(async *kitrep.AsyncTransport, resolve SessionResolver) (*kitsync.RoomTransportSink, error) {\n")
-	b.WriteString("\tif resolve == nil { return nil, kitsync.ErrRoomSessionResolver }\n")
-	b.WriteString("\treturn kitsync.NewRoomTransportSink(kitsync.RoomTransportSinkConfig{Transport: async, Sessions: kitsync.RoomSessionResolverFunc(func(_ context.Context, subscriber coreentitysync.SubscriberRef) (corerep.SessionID, error) { return resolve(subscriber) })})\n}\n\n")
-	if hasFeature(m, "replication-quic") {
-		b.WriteString("func NewQUIC() (*kitrep.AsyncTransport, *kitrep.QUICTransport, error) {\n\tprotocol := kitrep.NewQUICTransport(kitrep.QUICTransportConfig{})\n\tasync, err := kitrep.NewAsyncTransport(protocol, AsyncConfig())\n\treturn async, protocol, err\n}\n\n")
+	b.WriteString("\tcorerep \"github.com/tjbdwanghaibo/cube-core/statesync\"\n")
+	b.WriteString("\tkitrep \"github.com/tjbdwanghaibo/cube-kit/nettransport\"\n")
+	b.WriteString("\tkitsync \"github.com/tjbdwanghaibo/cube-kit/room\"\n)\n\n")
+	b.WriteString("func AsyncConfig() kitnet.AsyncTransportConfig { return kitnet.DefaultAsyncTransportConfig() }\n\n")
+	b.WriteString("type SessionResolver func(coreentitysync.SubscriberRef) (corestate.SessionID, error)\n\n")
+	b.WriteString("func NewRoomSink(async *kitnet.AsyncTransport, resolve SessionResolver) (*kitroom.RoomTransportSink, error) {\n")
+	b.WriteString("\tif resolve == nil { return nil, kitroom.ErrRoomSessionResolver }\n")
+	b.WriteString("\treturn kitroom.NewRoomTransportSink(kitroom.RoomTransportSinkConfig{Transport: async, Sessions: kitroom.RoomSessionResolverFunc(func(_ context.Context, subscriber coreentitysync.SubscriberRef) (corestate.SessionID, error) { return resolve(subscriber) })})\n}\n\n")
+	if hasFeature(m, "nettransport-quic") {
+		b.WriteString("func NewQUIC() (*kitnet.AsyncTransport, *kitnet.QUICTransport, error) {\n\tprotocol := kitnet.NewQUICTransport(kitnet.QUICTransportConfig{})\n\tasync, err := kitnet.NewAsyncTransport(protocol, AsyncConfig())\n\treturn async, protocol, err\n}\n\n")
 	}
-	if hasFeature(m, "replication-kcp") {
-		b.WriteString("func NewKCP() (*kitrep.AsyncTransport, *kitrep.KCPTransport, error) {\n\tprotocol, err := kitrep.NewKCPTransport(kitrep.DefaultKCPTransportConfig())\n\tif err != nil { return nil, nil, err }\n\tasync, err := kitrep.NewAsyncTransport(protocol, AsyncConfig())\n\treturn async, protocol, err\n}\n\n")
+	if hasFeature(m, "nettransport-kcp") {
+		b.WriteString("func NewKCP() (*kitnet.AsyncTransport, *kitnet.KCPTransport, error) {\n\tprotocol, err := kitnet.NewKCPTransport(kitnet.DefaultKCPTransportConfig())\n\tif err != nil { return nil, nil, err }\n\tasync, err := kitnet.NewAsyncTransport(protocol, AsyncConfig())\n\treturn async, protocol, err\n}\n\n")
 	}
-	if hasFeature(m, "replication-udp") {
-		b.WriteString("func NewUDP(conn net.PacketConn, reliable kitrep.ReliableSender) (*kitrep.AsyncTransport, *kitrep.UDPTransport, error) {\n\tprotocol, err := kitrep.NewUDPTransport(kitrep.UDPTransportConfig{PacketConn: conn})\n\tif err != nil { return nil, nil, err }\n\tcomposite := kitrep.CompositeTransport{Datagrams: protocol, Reliable: reliable}\n\tasync, err := kitrep.NewAsyncTransport(composite, AsyncConfig())\n\treturn async, protocol, err\n}\n")
+	if hasFeature(m, "nettransport-udp") {
+		b.WriteString("func NewUDP(conn net.PacketConn, reliable kitnet.ReliableSender) (*kitnet.AsyncTransport, *kitnet.UDPTransport, error) {\n\tprotocol, err := kitnet.NewUDPTransport(kitnet.UDPTransportConfig{PacketConn: conn})\n\tif err != nil { return nil, nil, err }\n\tcomposite := kitnet.CompositeTransport{Datagrams: protocol, Reliable: reliable}\n\tasync, err := kitnet.NewAsyncTransport(composite, AsyncConfig())\n\treturn async, protocol, err\n}\n")
 	}
 	return b.String()
 }
@@ -269,13 +275,7 @@ func renderBootstrap(m Manifest) string {
 			imports[m.Project.Module+"/internal/access/player/tcp"] = "accessplayertcp"
 		}
 	}
-	if hasFeature(m, "config") && contains(allMods, "configdata") {
-		imports["github.com/tjbdwanghaibo/cube-core/configdata"] = "coreconfigdata"
-		imports[m.Project.Module+"/configs/generated"] = "generatedconfig"
-	}
-	if hasFeature(m, "nest") {
-		imports[m.Project.Module+"/game/bootstrap"] = "gamebootstrap"
-	}
+	imports[m.Project.Module+"/internal/registry"] = "registry"
 	for _, name := range m.Sagas {
 		imports[m.Project.Module+"/saga/"+name] = "saga" + safeIdent(name)
 	}
@@ -299,18 +299,16 @@ func renderBootstrap(m Manifest) string {
 		b.WriteString("var EntityAccess = entity.NewManagerAccess(EntityManager)\n")
 	}
 	b.WriteString("\nfunc New() (*app.App, error) {\n")
-	if hasFeature(m, "nest") {
-		b.WriteString("\tgamebootstrap.RegisterNestHandlers()\n")
-	}
-	if hasFeature(m, "config") && contains(allMods, "configdata") {
-		b.WriteString("\tif err := generatedconfig.RegisterGeneratedConfigData(coreconfigdata.DefaultRegistry()); err != nil { return nil, err }\n")
-	}
+	// Static registration first, before app.New: an entity builder registered
+	// later than a Mod's Init is already too late for a Mod that resolves
+	// entities in Provide.
+	b.WriteString("\tif err := registry.RegisterAll(); err != nil { return nil, err }\n")
 	fmt.Fprintf(&b, "\ta := app.New(%q, buildinfo.VersionString())\n", m.Project.Name)
 	shared, _ := resolveMods(m.SharedMods)
 	if len(shared) > 0 {
 		b.WriteString("\ta.Mods(\n")
 		for _, name := range shared {
-			fmt.Fprintf(&b, "\t\t%s,\n", renderModConstructor(m, name, allMods))
+			fmt.Fprintf(&b, "\t\t%s,\n", renderModConstructor(m, name, allMods, ""))
 		}
 		b.WriteString("\t)\n")
 	}
@@ -318,7 +316,7 @@ func renderBootstrap(m Manifest) string {
 		mods, _ := resolveMods(m.Services[name].Mods)
 		fmt.Fprintf(&b, "\ta.RegisterServer(app.ServiceName(%q), service%s.New()", name, safeIdent(name))
 		for _, mod := range mods {
-			fmt.Fprintf(&b, ",\n\t\t%s", renderModConstructor(m, mod, allMods))
+			fmt.Fprintf(&b, ",\n\t\t%s", renderModConstructor(m, mod, allMods, name))
 		}
 		if access, enabled := m.Access["player"]; enabled && access.Service == name {
 			b.WriteString(",\n\t\taccessplayer.NewMod()")
@@ -332,8 +330,18 @@ func renderBootstrap(m Manifest) string {
 	return b.String()
 }
 
-func renderModConstructor(m Manifest, name string, allMods []string) string {
+func renderModConstructor(m Manifest, name string, allMods []string, service string) string {
 	switch name {
+	case "manager":
+		// Managers are per service: the same in-memory singleton may appear
+		// in several services' sets and only the running service starts it.
+		// The list itself is business code, so it comes from a hook the
+		// generator creates once and never overwrites.
+		if service == "" {
+			// Unreachable via Validate, which rejects manager in shared_mods.
+			return "kitmanager.NewManagerMod()"
+		}
+		return "kitmanager.NewManagerMod(service" + safeIdent(service) + ".Managers()...)"
 	case "dataengine":
 		options := []string{"kitdataengine.WithEntityAccess(EntityAccess)"}
 		if contains(allMods, "remote_entity") {
@@ -377,6 +385,31 @@ func (*Service) Shutdown(context.Context) error { return nil }
 
 var _ app.Service = (*Service)(nil)
 `, safeIdent(name), name)
+}
+
+// renderServiceManagers emits the business-owned manager list. It is created
+// once and never overwritten, like service.go: which in-memory singletons a
+// service starts is a business decision, and ManagerMod only owns the
+// lifecycle. Ordering comes from each manager's DependsOn, so this list is
+// registration order, not start order.
+func renderServiceManagers(name string) string {
+	return fmt.Sprintf(`package %s
+
+import "github.com/tjbdwanghaibo/cube-core/app"
+
+// Managers returns the in-memory singleton managers this service starts.
+//
+// A manager is process-wide singleton logic with a Start/Stop lifecycle and no
+// persistent state of its own — a scene registry, a routing table, a cache.
+// Add yours here; ManagerMod starts them in dependency order (declare
+// app.ManagerDependencyProvider to order one after another) and stops them in
+// reverse. Registering after startup is refused, so this is the one place.
+func Managers() []app.IManager {
+	return []app.IManager{
+		// mymgr.Mgr,
+	}
+}
+`, safeIdent(name))
 }
 
 func renderServiceConfig(m Manifest, service string, production bool) string {

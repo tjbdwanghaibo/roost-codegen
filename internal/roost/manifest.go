@@ -98,7 +98,7 @@ func DefaultManifest(name, module string, services, mods, features []string) Man
 	}
 	shared := []string{"lock", "ops", "statslog"}
 	if len(mods) == 0 {
-		mods = []string{"configdata", "etcd", "redis", "mongo", "nats", "sync", "remote_entity", "dataengine", "nest"}
+		mods = []string{"configdata", "etcd", "redis", "mongo", "nats", "room", "remote_entity", "dataengine", "nest", "manager"}
 	}
 	svc := make(map[string]ServiceSpec, len(services))
 	for _, service := range services {
@@ -155,6 +155,42 @@ func decodeManifest(root string) (Manifest, error) {
 	return manifest, nil
 }
 
+// legacyModNames and legacyFeatureNames map the pre-rename manifest vocabulary
+// onto the current one. roost.yaml is hand-written and lives in user
+// repositories, so an existing manifest must keep loading; the names are
+// rewritten in memory and the canonical spelling is what `project sync` writes
+// back out.
+var legacyModNames = map[string]string{
+	"sync": "room",
+}
+
+var legacyFeatureNames = map[string]string{
+	"replication-quic": "nettransport-quic",
+	"replication-kcp":  "nettransport-kcp",
+	"replication-udp":  "nettransport-udp",
+}
+
+// canonicalizeLegacyNames rewrites legacy names in place. The receiver is a
+// value, but mod and feature lists are slices and Services is a map, so the
+// rewrite is visible to the caller — that is deliberate: Validate is the one
+// gate every construction path passes through, so normalising here means a
+// manifest is canonical by the time anything reads it.
+func (m Manifest) canonicalizeLegacyNames() {
+	rename := func(values []string, table map[string]string) {
+		for i, value := range values {
+			if canonical, ok := table[value]; ok {
+				values[i] = canonical
+			}
+		}
+	}
+	rename(m.SharedMods, legacyModNames)
+	for name, service := range m.Services {
+		rename(service.Mods, legacyModNames)
+		m.Services[name] = service
+	}
+	rename(m.Features, legacyFeatureNames)
+}
+
 func (m Manifest) Marshal() ([]byte, error) {
 	if err := m.Validate(); err != nil {
 		return nil, err
@@ -171,6 +207,7 @@ func (m Manifest) Marshal() ([]byte, error) {
 }
 
 func (m Manifest) Validate() error {
+	m.canonicalizeLegacyNames()
 	var joined error
 	if m.Schema != 1 {
 		joined = errors.Join(joined, fmt.Errorf("unsupported schema %d", m.Schema))
@@ -232,8 +269,13 @@ func (m Manifest) Validate() error {
 			}
 		}
 	}
-	if _, err := resolveMods(m.SharedMods); err != nil {
+	if resolvedShared, err := resolveMods(m.SharedMods); err != nil {
 		joined = errors.Join(joined, fmt.Errorf("shared_mods: %w", err))
+	} else if contains(resolvedShared, "manager") {
+		// Managers are selected per service type, so a process-wide manager
+		// mod would start a service's singletons in every service. Putting it
+		// in shared_mods is a wiring mistake, not a supported choice.
+		joined = errors.Join(joined, errors.New("shared_mods: the manager mod is per service; declare it under services.<name>.mods"))
 	}
 	for _, feature := range m.Features {
 		if !knownFeatures[feature] {
@@ -294,7 +336,7 @@ func (m Manifest) Validate() error {
 			joined = errors.Join(joined, errors.New("sagas require the saga mod on at least one service"))
 		}
 	}
-	if hasReplicationFeature(m) && !versionAtLeast(m.Versions.Kit, 1, 1, 0) {
+	if hasNetTransportFeature(m) && !versionAtLeast(m.Versions.Kit, 1, 1, 0) {
 		joined = errors.Join(joined, fmt.Errorf("replication features require roost-kit >= v1.1.0; got %q", m.Versions.Kit))
 	}
 	if contains(allProjectMods(m), "saga") && (!versionAtLeast(m.Versions.Core, 1, 4, 0) || !versionAtLeast(m.Versions.Kit, 1, 4, 0)) {
@@ -354,8 +396,8 @@ func validModulePath(value string) bool {
 	return true
 }
 
-func hasReplicationFeature(m Manifest) bool {
-	return contains(m.Features, "replication-quic") || contains(m.Features, "replication-kcp") || contains(m.Features, "replication-udp")
+func hasNetTransportFeature(m Manifest) bool {
+	return contains(m.Features, "nettransport-quic") || contains(m.Features, "nettransport-kcp") || contains(m.Features, "nettransport-udp")
 }
 
 func versionAtLeast(version string, major, minor, patch int) bool {

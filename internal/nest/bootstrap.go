@@ -187,6 +187,7 @@ import (
 )
 {{- end }}
 
+//cube:register phase=nest
 func RegisterNestHandlers() {
 	nestOnce.Do(func() {
 {{- range . }}

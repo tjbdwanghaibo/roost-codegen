@@ -36,6 +36,8 @@ func renderBeginnerQuickstart(m Manifest) string {
 | Feature | 决定生成哪些代码和目录的开关，例如 protocol、entity、dao | roost.yaml 的 features |
 | Access | 已认证请求进入业务的边界，例如 player | roost.yaml 的 access |
 | Generated file | codegen 管理、带 DO NOT EDIT 标识的文件 | 不手改；修改声明后运行 make sync/generate |
+| //cube:register | 静态注册函数的标记；phase= 决定阶段，order= 决定阶段内顺序 | 打在无参数的包级函数上；roost generate 汇总进 internal/registry/generated.go |
+| //cube:register | 静态注册函数的标记；phase= 决定阶段，order= 决定阶段内顺序 | 打在无参数的包级函数上；roost generate 汇总进 internal/registry/generated.go |
 
 Mod 是运行时能力，Feature 是生成期能力，它们不是同一组选项。
 
@@ -285,7 +287,8 @@ make generate。未知字段会直接报错，避免拼写错误被静默忽略�
           - redis
           - mongo
           - nats
-          - sync
+          - room
+          - manager
           - remote_entity
           - dataengine
           - nest
@@ -305,7 +308,7 @@ make generate。未知字段会直接报错，避免拼写错误被静默忽略�
       - event
       - dao
       - errcode
-      - replication-quic
+      - nettransport-quic
     sagas:
       - alliance_rally
     ids:
@@ -408,8 +411,9 @@ feature，并要求目标 Service 有 nest Mod。access.player.transports 是显
 | redis | Redis 访问 | 无 |
 | mongo | MongoDB 访问 | 无 |
 | nats | NATS 消息传输 | 无 |
-| sync | Entity/状态同步 | nats |
-| remote_entity | 跨服 Remote Entity | redis、mongo、sync |
+| manager | 业务 Manager（内存单例逻辑）的生命周期：按 DependsOn 依赖序启动、逆序停止 | 无 |
+| room | 房间状态同步总线（Entity 状态推送） | nats |
+| remote_entity | 跨服 Remote Entity | redis、mongo、room |
 | dataengine | 统一事务持久化、加载、migration 与 effect outbox | mongo、nats |
 | nest | Nest 调度接入 | dataengine |
 | saga | 跨服务 Saga 编排 | dataengine、mongo、nats |
@@ -430,17 +434,17 @@ features 只控制生成期形态，不会自动启动同名基础设施：
 | attribute | 属性定义与访问代码 | 否 |
 | webroute | HTTP route 扫描和注册代码 | 否 |
 | saga | Saga definition 的生成与注册 | 否；由 roost add saga 维护 |
-| replication-udp | 房间帧同步 UDP 接线 | 否 |
-| replication-kcp | 房间帧同步 KCP 接线 | 否 |
-| replication-quic | 房间帧同步 QUIC 接线 | 否 |
+| nettransport-udp | 房间帧同步 UDP 接线 | 否 |
+| nettransport-kcp | 房间帧同步 KCP 接线 | 否 |
+| nettransport-quic | 房间帧同步 QUIC 接线 | 否 |
 
 例如启用 UDP 与 QUIC：
 
     features:
       - protocol
       - entity
-      - replication-udp
-      - replication-quic
+      - nettransport-udp
+      - nettransport-quic
 
 Feature 和 Mod 必须分别理解：config feature 生成配置代码，configdata mod 在运行时加载配置；
 nest feature 生成 handler/注册代码，nest mod 装配运行引擎。
