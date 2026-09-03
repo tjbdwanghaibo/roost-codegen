@@ -11,7 +11,7 @@ const webRouteSource = `package web
 
 import (
     "context"
-    "github.com/tjbdwanghaibo/cube-core/webroute"
+    "github.com/tjbdwanghaibo/roost-core/webroute"
 )
 
 type Service struct{}
@@ -19,12 +19,12 @@ type JSONRequest struct { Name string ` + "`json:\"name\"`" + ` }
 type JSONResponse struct { Message string ` + "`json:\"message\"`" + ` }
 type RawResponse struct { Code int ` + "`json:\"code\"`" + ` }
 
-//cube:web method=POST path=/external/json body=json
+//roost:web method=POST path=/external/json body=json
 func handleJSON(ctx context.Context, svc *Service, request JSONRequest) (JSONResponse, error) {
     return JSONResponse{}, nil
 }
 
-//cube:web method=POST path=/external/event body=raw
+//roost:web method=POST path=/external/event body=raw
 func handleRaw(ctx context.Context, svc *Service, request webroute.RawRequest) (RawResponse, error) {
     return RawResponse{}, nil
 }
@@ -50,7 +50,7 @@ func TestParseRejectsInvalidHandler(t *testing.T) {
 	_, _, err := ParseFile("handler.go", []byte(`package web
 import "context"
 type Service struct{}
-//cube:web method=POST path=/x body=json
+//roost:web method=POST path=/x body=json
 func bad(ctx context.Context, svc *Service) error { return nil }
 `))
 	if err == nil || !strings.Contains(err.Error(), "signature") {

@@ -22,7 +22,7 @@ func TestParseRejectsOrphanMarker(t *testing.T) {
 	// silently — a DAO that silently does not persist.
 	_, err := parseSource(t, `package def
 
-//cube:dao coll=heroes db=game
+//roost:dao coll=heroes db=game
 
 var unrelated = 1
 
@@ -41,7 +41,7 @@ func TestParseRejectsMarkerBindingMultipleStructs(t *testing.T) {
 	// collection with zero warning.
 	_, err := parseSource(t, `package def
 
-//cube:dao coll=heroes db=game
+//roost:dao coll=heroes db=game
 type (
 	AlphaDao struct{ Name string }
 	BetaDao  struct{ Name string }
@@ -60,7 +60,7 @@ func TestRunSweepsOrphansWhenAllDefinitionsRemoved(t *testing.T) {
 	outDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(defDir, "def.go"), []byte(`package def
 
-//cube:dao coll=heroes db=game
+//roost:dao coll=heroes db=game
 type HeroDao struct {
 	Name string
 }
@@ -86,7 +86,7 @@ func TestParseAcceptsMarkerAboveDocComment(t *testing.T) {
 	// must not unbind the marker.
 	defs, err := parseSource(t, `package def
 
-//cube:dao coll=heroes db=game
+//roost:dao coll=heroes db=game
 // HeroDao is the persistent hero aggregate.
 // It spans several doc lines to prove the distance rule
 // no longer breaks on documentation.
@@ -105,7 +105,7 @@ type HeroDao struct {
 func TestParseRejectsMarkerWithoutParameters(t *testing.T) {
 	_, err := parseSource(t, `package def
 
-//cube:dao
+//roost:dao
 type HeroDao struct {
 	Name string
 }
@@ -118,7 +118,7 @@ type HeroDao struct {
 func TestParseRejectsMarkerWithoutRequiredParams(t *testing.T) {
 	_, err := parseSource(t, `package def
 
-//cube:dao coll=heroes
+//roost:dao coll=heroes
 type HeroDao struct {
 	Name string
 }
@@ -144,7 +144,7 @@ func TestParseRejectsDaoTagTraps(t *testing.T) {
 	for _, tc := range cases {
 		_, err := parseSource(t, `package def
 
-//cube:dao coll=heroes db=game
+//roost:dao coll=heroes db=game
 type HeroDao struct {
 	Items map[int64]int32 `+tc.tag+`
 }
@@ -158,7 +158,7 @@ type HeroDao struct {
 func TestParseAcceptsExplicitTagIntents(t *testing.T) {
 	defs, err := parseSource(t, `package def
 
-//cube:dao coll=heroes db=game
+//roost:dao coll=heroes db=game
 type HeroDao struct {
 	A int64            `+"`dao:\"persist\"`"+`
 	B int64            `+"`dao:\"nopersist,sync\"`"+`
@@ -195,7 +195,7 @@ func TestRunRemovesOrphansAndCollapsesDaoSuffix(t *testing.T) {
 	}
 	write(defDir, "def.go", `package def
 
-//cube:dao coll=heroes db=game
+//roost:dao coll=heroes db=game
 type HeroDao struct {
 	Name string
 }
@@ -224,7 +224,7 @@ type HeroDao struct {
 	// replaced in the same run.
 	write(defDir, "def.go", `package def
 
-//cube:dao coll=heroes db=game
+//roost:dao coll=heroes db=game
 type ChampionDao struct {
 	Name string
 }
@@ -254,7 +254,7 @@ func TestParseRejectsUnsupportedFieldTypes(t *testing.T) {
 	for _, tc := range cases {
 		_, err := parseSource(t, `package def
 
-//cube:dao coll=heroes db=game
+//roost:dao coll=heroes db=game
 type HeroDao struct {
 	`+tc.field+`
 }

@@ -146,8 +146,8 @@ func TestGenerateRemoteManagedV2Participant(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := strings.Replace(string(source),
-		"//cube:entity entityKind=EntityKindPlayer sync=true",
-		"//cube:entity entityKind=EntityKindPlayer remote=managed sync=true", 1)
+		"//roost:entity entityKind=EntityKindPlayer sync=true",
+		"//roost:entity entityKind=EntityKindPlayer remote=managed sync=true", 1)
 	text = strings.Replace(text, "*entity.EntityBase", "*entity.RemoteEntityBase", 1)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "player.go"), []byte(text), 0644); err != nil {
@@ -227,7 +227,7 @@ func (e *Player) OnDataChange(_ []byte, _ int64) {}
 	if contains(generated, "func (e *Player) ApplyRemoteSync(") {
 		t.Fatal("generator must not emit the removed V1 remote sync protocol")
 	}
-	if !contains(generated, `"github.com/tjbdwanghaibo/cube-core/nest"`) || contains(generated, "func (e *Player) RemoveSnapshot(") {
+	if !contains(generated, `"github.com/tjbdwanghaibo/roost-core/nest"`) || contains(generated, "func (e *Player) RemoveSnapshot(") {
 		t.Fatal("persistent entity must use transactional delete without generated RemoveSnapshot")
 	}
 }

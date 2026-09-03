@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-codegen/internal/marker"
 	"io"
 	"os"
 	"os/exec"
@@ -48,7 +49,7 @@ type generator struct {
 	Prefixes []string
 	// Always runs this generator regardless of the feature set and regardless
 	// of which files changed. The registry aggregate is Always because its
-	// inputs are //cube:register markers anywhere in the tree — including in
+	// inputs are //roost:register markers anywhere in the tree — including in
 	// code that another generator in this same run just emitted — so neither
 	// the feature gate nor a changed-file prefix can decide for it.
 	Always bool
@@ -113,7 +114,7 @@ func generatorsFor(m Manifest, force bool) []generator {
 			return tablegen.Run([]string{"-meta", "./configs/schema", "-out", "./configs/generated", "-force"}, w)
 		}},
 		{Feature: "webroute", Name: "webroute", Prefixes: []string{"service/"}, Run: func(w io.Writer) error { return webroute.Run(forceArg([]string{"-dir", "./service"}, force), w) }},
-		// Last, and unconditional: the aggregate collects //cube:register
+		// Last, and unconditional: the aggregate collects //roost:register
 		// markers, including the ones the generators above just wrote.
 		{Name: "registry", Always: true, Run: func(w io.Writer) error {
 			return registry.Run(".", m.Project.Module, w)
@@ -315,6 +316,16 @@ func runGenerators(root string, manifest Manifest, generators []generator, optio
 			returnErr = errors.Join(returnErr, fmt.Errorf("restore generator working directory: %w", err))
 		}
 	}()
+	if legacy, err := marker.FindLegacy(root); err != nil {
+		return fmt.Errorf("scan for deprecated markers: %w", err)
+	} else if len(legacy) > 0 {
+		// Accepted this release, removed next: say so once per run, naming
+		// the files, rather than failing or staying silent.
+		fmt.Fprintf(options.Stdout, "warning: %d file(s) still use the deprecated //cube: marker prefix; rename to //roost: (accepted for now, removed in the next major):\n", len(legacy))
+		for _, rel := range legacy {
+			fmt.Fprintf(options.Stdout, "  %s\n", rel)
+		}
+	}
 	for _, gen := range generators {
 		if !gen.Always && !hasFeature(manifest, gen.Feature) {
 			continue

@@ -7,11 +7,11 @@ on:
   workflow_dispatch:
     inputs:
       core_ref:
-        description: cube-core ref for the source-head candidate set
+        description: roost-core ref for the source-head candidate set
         required: false
         default: main
       kit_ref:
-        description: cube-kit ref for the source-head candidate set
+        description: roost-kit ref for the source-head candidate set
         required: false
         default: main
       skill_ref:
@@ -90,17 +90,17 @@ jobs:
           KIT_REF: ${{ inputs.kit_ref || 'main' }}
           SKILL_REF: ${{ inputs.skill_ref || 'main' }}
         run: |
-          git clone --depth=1 https://github.com/tjbdwanghaibo/cube-core.git "${RUNNER_TEMP}/cube-core"
-          git clone --depth=1 https://github.com/tjbdwanghaibo/cube-kit.git "${RUNNER_TEMP}/cube-kit"
+          git clone --depth=1 https://github.com/tjbdwanghaibo/roost-core.git "${RUNNER_TEMP}/roost-core"
+          git clone --depth=1 https://github.com/tjbdwanghaibo/roost-kit.git "${RUNNER_TEMP}/roost-kit"
           git clone --depth=1 https://github.com/tjbdwanghaibo/roost-skill.git "${RUNNER_TEMP}/roost-skill"
-          git -C "${RUNNER_TEMP}/cube-core" fetch --depth=1 origin "$CORE_REF"
-          git -C "${RUNNER_TEMP}/cube-core" checkout --detach FETCH_HEAD
-          git -C "${RUNNER_TEMP}/cube-kit" fetch --depth=1 origin "$KIT_REF"
-          git -C "${RUNNER_TEMP}/cube-kit" checkout --detach FETCH_HEAD
+          git -C "${RUNNER_TEMP}/roost-core" fetch --depth=1 origin "$CORE_REF"
+          git -C "${RUNNER_TEMP}/roost-core" checkout --detach FETCH_HEAD
+          git -C "${RUNNER_TEMP}/roost-kit" fetch --depth=1 origin "$KIT_REF"
+          git -C "${RUNNER_TEMP}/roost-kit" checkout --detach FETCH_HEAD
           git -C "${RUNNER_TEMP}/roost-skill" fetch --depth=1 origin "$SKILL_REF"
           git -C "${RUNNER_TEMP}/roost-skill" checkout --detach FETCH_HEAD
           cd "${RUNNER_TEMP}"
-          go work init ./planet ./cube-core ./cube-kit ./roost-skill
+          go work init ./planet ./roost-core ./roost-kit ./roost-skill
           # The framework runtime modules support the lower consumer lane.
           # Codegen itself is already built and is intentionally not a member.
           go work edit -go=1.25.0
@@ -117,14 +117,14 @@ jobs:
           if [ "$SET" = source-head ]; then
             go test ./...
             go vet ./...
-            go run github.com/tjbdwanghaibo/cube-core/cmd/glsvet ./...
+            go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet ./...
           else
             GOWORK=off go mod tidy
             GOWORK=off go mod verify
             "${RUNNER_TEMP}/roost" generate --check
             GOWORK=off go test ./...
             GOWORK=off go vet ./...
-            GOWORK=off go run github.com/tjbdwanghaibo/cube-core/cmd/glsvet ./...
+            GOWORK=off go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet ./...
           fi
           for script in deploy/shell/*.sh deploy/docker/*.sh deploy/k8s/*.sh; do sh -n "$script"; done
           ROOST_IMAGE=ghcr.io/example/planet@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ROOST_CONFIG_ROOT=configs/service docker compose -f deploy/docker/docker-compose.prod.yaml config --quiet

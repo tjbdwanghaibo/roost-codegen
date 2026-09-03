@@ -2,8 +2,8 @@
 package player
 
 import (
-	frameworkEvent "github.com/tjbdwanghaibo/cube-core/event"
 	"github.com/tjbdwanghaibo/cube/event"
+	frameworkEvent "github.com/tjbdwanghaibo/roost-core/event"
 )
 
 func (p *Player) InitSub() {

@@ -4,8 +4,35 @@
 
 ## [Unreleased]
 
+### Changed（破坏性：源码标记 //cube: → //roost:，模块路径与版本下限）
+
+- 生成器读取的源码标记从 `//cube:<kind>` 改为 `//roost:<kind>`（entity、dao、redisdao、
+  component、nest、protocol、msg、object、table、attribute、web、reverse_proto、register），
+  生成的 .proto 溯源注释 `cube:source=go_def` → `roost:source=go_def`。**旧拼写本版仍被接受**：
+  全部解析器经新的 `internal/marker` 包匹配两种前缀，`roost generate` 对仍在用 `//cube:` 的文件
+  打印一次弃用告警并列出路径；下一个大版本移除。`roost doctor` 同样接受两种拼写。
+- 生成代码的 import 路径与 catalog 改为 `roost-core`/`roost-kit`；`roost.yaml` 的 `versions.core`/
+  `versions.kit` 最低版本提升到 v1.10.0（新模块路径下的首个版本）。
+- protocol 生成的默认 proto 包名 `cube.protocol` → `roost.protocol`（仅在未显式指定时生效）。
+- `roost add skill` 生成的技能定义使用 schema `roost.skill/v2`（随 roost-skill 改名）。
+- 生成的 Redis DAO 默认 key 前缀 `cube:redisdao` → `roost:redisdao`（仅在 `//roost:redisdao` 未写 `prefix=` 时
+  生效）。**不做兼容读取**：依赖默认前缀的已有项目升级后读不到旧 key，请在标记上显式写
+  `prefix=cube:redisdao` 沿用，或迁移数据。
+
+### Changed（生成项目结构）
+
+- **`game/bootstrap/` 并入 `internal/registry/`。** nest 聚合器改生成到
+  `internal/registry/nest_gen.go`（package registry），`nestOnce` 占位文件不再生成——
+  `RegisterAll()` 已统一持有 `sync.Once`。聚合器对同包注册函数不加限定符调用（包不能导入自己）。
+  迁移守卫新增对旧 `game/bootstrap/nest.go`、`register.go` 的识别。一个项目自此只有一处
+  "启动时把东西接起来"的地方。
+- 生成的文档新增目录约定四条：`game/` 玩法与实体；`internal/` 框架接线（bootstrap、registry、
+  access、service）；每类定义在自己的顶层 `<kind>/def`；`configs/` 配置。
+- **刻意不改的**：webroute 仍在 `service/web`。移到 `internal/access/web` 更一致，但 webroute
+  生成器按目录扫描 `//roost:web`，改目录会让已有项目的路由**静默**不再被扫描。
+
 ### Added
-- **静态注册统一为一份生成的清单。** 新增 `//cube:register` 标记与
+- **静态注册统一为一份生成的清单。** 新增 `//roost:register` 标记与
   `internal/registry/generated.go` 聚合器（由 `roost generate` 生成，无条件运行且排在
   最后——它要收集前面生成器刚写出的标记）。`bootstrap.New()` 在 `app.New()` **之前**
   调用 `registry.RegisterAll()`。
@@ -23,7 +50,7 @@
   - 标记无法执行时**直接报错**而非跳过（缺 `phase`、未知 `phase`、未知选项、
     非整数 `order`、带参数、未导出、返回值不是空或单个 `error`、打在方法上、同名重复标记）——
     静默丢掉一个注册，症状是很远处的一个 nil。
-  - 生成的 entity wire 代码自带 `//cube:register phase=entity`，entity 因此走同一条路径。
+  - 生成的 entity wire 代码自带 `//roost:register phase=entity`，entity 因此走同一条路径。
   - **迁移守卫**：检测到手写聚合器仍在（`game/bootstrap/register.go` 的 `RegisterAll`、
     `game/entities/register/`、`game/components/register/`）时拒绝生成并给出迁移步骤。
     两个聚合器并存不会重复注册（每个叶子自带 `sync.Once`），但下次加实体的人不知道

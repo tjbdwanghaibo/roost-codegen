@@ -1,13 +1,13 @@
 # cfggen 配置 schema（meta 文件）参考
 
-`cfggen` 是"meta 文件先行"的配置管线（简化版 Luban）：**一个 YAML 文件是唯一手写的配置定义**，Go 侧的行 struct、注册函数、类型化访问器全部生成；运行时（原子热更、回滚、内容 hash、请求一致性）由 cube-core 的 `configdata` 承担。
+`cfggen` 是"meta 文件先行"的配置管线（简化版 Luban）：**一个 YAML 文件是唯一手写的配置定义**，Go 侧的行 struct、注册函数、类型化访问器全部生成；运行时（原子热更、回滚、内容 hash、请求一致性）由 roost-core 的 `configdata` 承担。
 
 ```bash
 go run github.com/tjbdwanghaibo/roost-codegen/cmd/cfggen \
   -meta ./configs/schema/cfg.yaml -out ./cfg [-pkg cfg]
 ```
 
-产物固定为 `<out>/cfg_gen.go` 一个文件。可运行的端到端示例：cube-core 仓库 `examples/configgen`。
+产物固定为 `<out>/cfg_gen.go` 一个文件。可运行的端到端示例：roost-core 仓库 `examples/configgen`。
 
 ## 一分钟上手
 
@@ -135,7 +135,7 @@ bean 内部只能用标量/数组/其他 bean，**不能带 `index`/`ref`**；be
 
 ## 与 Luban 的关系
 
-cfggen 覆盖"JSON 数据 + 轻量 schema"的场景。需要 Excel 族数据源、bean 继承/多态、path/range 校验时直接用 Luban：Luban 管定义/校验/导出/代码生成，其生成的 `Tables` 聚合经 `configdata.RegisterExternalTables` 装进同一套运行时（热更/回滚/hash 全继承，内容经字节指纹进 hash）。真实接入示例见 cube-core `examples/lubanreal`。
+cfggen 覆盖"JSON 数据 + 轻量 schema"的场景。需要 Excel 族数据源、bean 继承/多态、path/range 校验时直接用 Luban：Luban 管定义/校验/导出/代码生成，其生成的 `Tables` 聚合经 `configdata.RegisterExternalTables` 装进同一套运行时（热更/回滚/hash 全继承，内容经字节指纹进 hash）。真实接入示例见 roost-core `examples/lubanreal`。
 
 ## 易错点速查
 

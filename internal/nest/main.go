@@ -10,7 +10,7 @@
 //   - <source>_nest_gen.go — invoke wrapper + RegisterNestHandlers()
 //   - sender/<source>_nest_gen.go — typed async sender functions (optional, with -sender)
 //   - syncsender/<source>_nest_gen.go — typed sync sender functions (optional, with -sender)
-//   - game/bootstrap/nest.go — aggregate RegisterNestHandlers() for game scans
+//   - internal/registry/nest_gen.go — aggregate RegisterNestHandlers() for game scans
 package nest
 
 import (
@@ -142,11 +142,14 @@ func run(args []string, stdout io.Writer) error {
 		return fmt.Errorf("walk: %w", err)
 	}
 	if generateBootstrap {
-		bootstrapDir := filepath.Join(absDir, "bootstrap")
-		if err := os.MkdirAll(bootstrapDir, 0755); err != nil {
-			return fmt.Errorf("mkdir bootstrap: %w", err)
+		// The aggregate lives with the other static registrations so the
+		// project has one registration package, not a game/bootstrap and an
+		// internal/registry that both mean "wire things up at startup".
+		registryDir := filepath.Join(moduleRoot, "internal", "registry")
+		if err := os.MkdirAll(registryDir, 0755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", registryDir, err)
 		}
-		outFile := filepath.Join(bootstrapDir, "nest.go")
+		outFile := filepath.Join(registryDir, "nest_gen.go")
 		changed, err := generateBootstrapNest(bootstrapRegs, outFile, *force)
 		if err != nil {
 			return fmt.Errorf("generate bootstrap %s: %w", outFile, err)

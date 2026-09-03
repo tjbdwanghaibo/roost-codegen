@@ -53,7 +53,7 @@ type moduleDownload struct {
 	Error    *struct{ Err string }
 }
 
-var internalPseudoVersion = regexp.MustCompile(`github\.com/tjbdwanghaibo/(?:cube-core|cube-kit|roost-skill)\s+v\d+\.\d+\.\d+-0\.\d{14}-[0-9a-f]{12}`)
+var internalPseudoVersion = regexp.MustCompile(`github\.com/tjbdwanghaibo/(?:roost-core|roost-kit|roost-skill)\s+v\d+\.\d+\.\d+-0\.\d{14}-[0-9a-f]{12}`)
 var goModReplaceDirective = regexp.MustCompile(`(?m)^[\t ]*replace(?:[\t ]|\()`)
 var consumerGoVersion = regexp.MustCompile(`^1\.(\d+)\.x$`)
 
@@ -114,8 +114,8 @@ func VerifyFrameworkRelease(manifestPath, expectedCodegen, lockPath, githubOutpu
 		return fmt.Errorf("framework release codegen %s does not match release tag %s", manifest.Codegen, expectedCodegen)
 	}
 	modules := []struct{ path, version string }{
-		{"github.com/tjbdwanghaibo/cube-core", manifest.Framework.Core},
-		{"github.com/tjbdwanghaibo/cube-kit", manifest.Framework.Kit},
+		{"github.com/tjbdwanghaibo/roost-core", manifest.Framework.Core},
+		{"github.com/tjbdwanghaibo/roost-kit", manifest.Framework.Kit},
 		{"github.com/tjbdwanghaibo/roost-skill", manifest.Framework.Skill},
 	}
 	lock := FrameworkReleaseLock{Schema: 1, Codegen: manifest.Codegen, Framework: manifest.Framework, ConsumerGo: append([]string(nil), manifest.ConsumerGo...)}

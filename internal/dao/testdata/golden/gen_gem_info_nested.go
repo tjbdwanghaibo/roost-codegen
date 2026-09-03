@@ -4,8 +4,8 @@ package testdata
 import (
 	"fmt"
 
-	"github.com/tjbdwanghaibo/cube-core/dataengine"
-	"github.com/tjbdwanghaibo/cube-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 // GemInfo is a nested struct with dirty propagation.

@@ -193,7 +193,7 @@ go run github.com/tjbdwanghaibo/roost-codegen/cmd/dao@latest \
 ```go
 package dbdef
 
-//cube:dao coll=players db=game dbscope=sid
+//roost:dao coll=players db=game dbscope=sid
 type PlayerDao struct {
     Name      string
     Level     int32
@@ -233,7 +233,7 @@ dao.DelItems(10001)
 
 持久化 setter/map mutator 不能在事务外调用，`durability=memory` handler 也不能修改 persistent 字段。新建、migration/replace、全字段修改生成 Put；普通字段或安全 map key 修改生成 Patch；删除生成带版本 tombstone 的 Delete。Patch 不携带整文档 fallback。启用这些生成物前必须保证目标集群所有 WAL reader 支持 v2 且 writer 已切到 v2。
 
-Redis DAO 使用 `//cube:redisdao`，生成类型化 Get/Set/Delete 包装；具体 marker 参数与 fail-fast 规则见根 README 的 DAO 章节。
+Redis DAO 使用 `//roost:redisdao`，生成类型化 Get/Set/Delete 包装；具体 marker 参数与 fail-fast 规则见根 README 的 DAO 章节。
 
 ## 5. Entity 生成器
 
@@ -265,7 +265,7 @@ go run github.com/tjbdwanghaibo/roost-codegen/cmd/entity@latest \
 ```go
 package player
 
-import "github.com/tjbdwanghaibo/cube-core/entity"
+import "github.com/tjbdwanghaibo/roost-core/entity"
 
 const (
     EntityCategoryPlayer entity.EntityCategory = 1
@@ -278,7 +278,7 @@ var _ = func() struct{} {
     return struct{}{}
 }()
 
-//cube:entity id=1 entityKind=EntityKindPlayer
+//roost:entity id=1 entityKind=EntityKindPlayer
 type Player struct {
     *entity.EntityBase
     entity.ComponentManager
@@ -293,9 +293,9 @@ type Player struct {
 
 DAO 必须实现 codegen 生成的标准方法，尤其是 `PrepareMutation(nest.PersistChange)`、`AcceptMutation(dataengine.Mutation)` 和 `DirtyTracker() *dataengine.Tracker`。Entity 不直接访问 `dao.tracker` 字段。不要为普通 Entity 手写 Snapshot、RemoveSnapshot 或在 release hook 中落库；历史数据迁移通过 Data Engine migration/import 工具完成。
 
-新生成的 map 字段从 `github.com/tjbdwanghaibo/cube-core/safemap` 导入容器（默认 alias
+新生成的 map 字段从 `github.com/tjbdwanghaibo/roost-core/safemap` 导入容器（默认 alias
 仍为 `fmap`）。从旧 source-head 升级后应重新运行 DAO 生成器；手写代码若仍导入
-`cube-core/map`，同步改为 `cube-core/safemap`。不会生成两套并行容器实现。
+`roost-core/map`，同步改为 `roost-core/safemap`。不会生成两套并行容器实现。
 
 ## 6. Nest handler 生成器
 
@@ -357,13 +357,13 @@ type PingRequest struct { ClientTime int64 `pb:"1"` }
 type PingResponse struct { ServerTime int64 `pb:"1"` }
 type Notice struct { Text string `pb:"1"` }
 
-//cube:protocol group=game handler=player
+//roost:protocol group=game handler=player
 type GameProtocol interface {
-    //cube:msg id=10001 tags=local
+    //roost:msg id=10001 tags=local
     Ping(PingRequest) PingResponse       // request/response
-    //cube:msg id=10002
+    //roost:msg id=10002
     Upload(PingRequest)                  // client push
-    //cube:msg id=10003
+    //roost:msg id=10003
     Notify() Notice                      // server notify
 }
 ```
@@ -417,14 +417,14 @@ world, _ := generated.WorldFrom(snap)
 ## 9. tablegen：Go metadata + CSV
 
 ```go
-//cube:table name=monster file=monster.csv json=monster.json key=ID
+//roost:table name=monster file=monster.csv json=monster.json key=ID
 type Monster struct {
     ID      int32  `csv:"id" json:"id" title:"ID" required:"true" unique:"true"`
     Name    string `csv:"name" json:"name" title:"名称" required:"true"`
     SceneID int32  `csv:"scene_id" json:"scene_id" ref:"scene"`
 }
 
-//cube:object name=world file=world.csv json=world.json
+//roost:object name=world file=world.csv json=world.json
 type World struct { Width int32 `csv:"width" json:"width"` }
 ```
 
@@ -473,7 +473,7 @@ go run .../cmd/eventgen@latest \
 ## 11. attribute
 
 ```go
-//cube:attribute index=1 max=64
+//roost:attribute index=1 max=64
 type PlayerProfile struct {
     HP     int64 `attr:"hp"`
     Attack int64 `attr:"attack"`
@@ -495,12 +495,12 @@ go run .../cmd/attribute@latest -dir ./game/attribute
 ## 12. webroute
 
 ```go
-//cube:web method=POST path=/gm/player body=json
+//roost:web method=POST path=/gm/player body=json
 func queryPlayer(ctx context.Context, svc *Service, req QueryRequest) (QueryResponse, error) {
     return QueryResponse{}, nil
 }
 
-//cube:web method=POST path=/webhook body=raw
+//roost:web method=POST path=/webhook body=raw
 func webhook(ctx context.Context, svc *Service, req webroute.RawRequest) (Ack, error) {
     return Ack{}, nil
 }
@@ -510,7 +510,7 @@ func webhook(ctx context.Context, svc *Service, req webroute.RawRequest) (Ack, e
 go run .../cmd/webroute@latest -dir ./service/web
 ```
 
-生成 `RegisterRoutes`。JSON 模式只接受一个完整 JSON 文档并统一返回 400 解码错误；raw 模式保留原始 body。是否拒绝未知 JSON 字段由 `cube-core/webroute.DecodeJSON` 的版本契约决定。重复 method/path、非法 body mode 或 handler 签名直接失败。
+生成 `RegisterRoutes`。JSON 模式只接受一个完整 JSON 文档并统一返回 400 解码错误；raw 模式保留原始 body。是否拒绝未知 JSON 字段由 `roost-core/webroute.DecodeJSON` 的版本契约决定。重复 method/path、非法 body mode 或 handler 签名直接失败。
 
 ## 13. errcode
 

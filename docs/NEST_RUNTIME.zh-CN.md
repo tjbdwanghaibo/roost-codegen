@@ -45,7 +45,7 @@ baghandler.RegisterHandlerBagNestHandlers(handler)
 同一源文件不能混合包函数和不同 receiver 的方法 Handler。方法 Handler 需要实例，
 因此不会进入无参 bootstrap；启动层必须显式构造并注册，注册时传入 nil 会立即失败。
 
-旧 `//cube:nest` 和 `rollback=dirty` 不属于生产协议；升级项目应先转换标记再重新生成。
+旧 `//roost:nest` 和 `rollback=dirty` 不属于生产协议；升级项目应先转换标记再重新生成。
 
 ## 注入式 Sender
 

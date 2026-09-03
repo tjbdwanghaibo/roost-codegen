@@ -202,8 +202,8 @@ services:
 		Summary: "生成私有存储、getter/mutator、dirty、patch、undo 和持久化代码",
 		Usage: `roost add dao <name> --entity <owner>
 go run github.com/tjbdwanghaibo/roost-codegen/cmd/dao@latest -def ./db/def -out ./db -pkg db [-force]`,
-		Configuration: `--entity 会自动把 DAO import、DaoManager、dao tag 和接口 getter 接入 Entity；省略时只创建独立 DAO。定义使用 //cube:dao coll=<collection> db=<database> [dbscope=sid|global]。字段一旦写 dao tag 就必须声明 persist/sync 意图；支持 persist、sync、nopersist、nosync、map=fast、map=sharded 和 -。不要声明 ID/id/tracker 保留字段。字段与 tracker 均为私有，业务通过生成方法访问。`,
-		Example: `//cube:dao coll=players db=game dbscope=sid
+		Configuration: `--entity 会自动把 DAO import、DaoManager、dao tag 和接口 getter 接入 Entity；省略时只创建独立 DAO。定义使用 //roost:dao coll=<collection> db=<database> [dbscope=sid|global]。字段一旦写 dao tag 就必须声明 persist/sync 意图；支持 persist、sync、nopersist、nosync、map=fast、map=sharded 和 -。不要声明 ID/id/tracker 保留字段。字段与 tracker 均为私有，业务通过生成方法访问。`,
+		Example: `//roost:dao coll=players db=game dbscope=sid
 type PlayerDao struct {
     Name  string          ` + "`dao:\"persist,sync\"`" + `
     Items map[int64]int32 ` + "`dao:\"persist,sync,map=fast\"`" + `
@@ -220,8 +220,8 @@ name := dao.GetName()`,
 roost add component <name> --entity <owner>
 roost add dao <name> --entity <owner>
 roost generate`,
-		Configuration: `高层 add 命令自动分配 ID、注册 Component 工厂、生成窄 Entity 接口，并更新 Entity 的 ComponentManager/DaoManager 与字段 tag；Entity wire 生成 getter。只有一个 Entity 时 Component 可省略 --entity；多个时拒绝猜测。底层 Entity marker 使用 //cube:entity entityKind=<const>，还可配置 remote=managed、sync=true、syncTopic、syncPacker、subjectPacker。`,
-		Example: `//cube:entity entityKind=EntityKindPlayer
+		Configuration: `高层 add 命令自动分配 ID、注册 Component 工厂、生成窄 Entity 接口，并更新 Entity 的 ComponentManager/DaoManager 与字段 tag；Entity wire 生成 getter。只有一个 Entity 时 Component 可省略 --entity；多个时拒绝猜测。底层 Entity marker 使用 //roost:entity entityKind=<const>，还可配置 remote=managed、sync=true、syncTopic、syncPacker、subjectPacker。`,
+		Example: `//roost:entity entityKind=EntityKindPlayer
 type Player struct {
     *entity.EntityBase
     entity.ComponentManager
@@ -244,10 +244,10 @@ func handlerTransfer(from IPlayerEntity, to IPlayerEntity, itemID int64) error {
 		Name: "protocol", Aliases: []string{"proto", "protobuf"},
 		Summary:       "生成 Proto、PB Go、消息 ID、binding、handler、robot registry 和 manifest",
 		Usage:         `go run github.com/tjbdwanghaibo/roost-codegen/cmd/protocol@latest -def ./protocol/def -proto ./protocol/proto -pb ./protocol/pb -msgid ./protocol/msgid -bind ./protocol/player_bind -handlers ./game/protocol_handlers`,
-		Configuration: `文件使用 //roost:proto package=<proto-package> go_package=<go-import;alias>；接口使用 //cube:protocol group=<group> handler=<name>；方法使用 //cube:msg id=<id>。支持 request/response、client push、server notify 和反向 proto 导入。`,
-		Example: `//cube:protocol group=game handler=player
+		Configuration: `文件使用 //roost:proto package=<proto-package> go_package=<go-import;alias>；接口使用 //roost:protocol group=<group> handler=<name>；方法使用 //roost:msg id=<id>。支持 request/response、client push、server notify 和反向 proto 导入。`,
+		Example: `//roost:protocol group=game handler=player
 type GameProtocol interface {
-    //cube:msg id=10001
+    //roost:msg id=10001
     Ping(PingRequest) PingResponse
 }`,
 	},
@@ -255,7 +255,7 @@ type GameProtocol interface {
 		Name: "cfggen", Aliases: []string{"configgen", "config-data"},
 		Summary:       "从 YAML schema 生成强类型配置表、对象、bean、索引和引用校验",
 		Usage:         `go run github.com/tjbdwanghaibo/roost-codegen/cmd/cfggen@latest -meta ./configs/schema/cfg.yaml -out ./configs/generated -pkg generated`,
-		Configuration: `schema 支持 package、beans、tables、globals；字段支持 type、key、index、ref、required、skipempty。运行时通过 RegisterGeneratedConfigData 注册到 cube-core/configdata。`,
+		Configuration: `schema 支持 package、beans、tables、globals；字段支持 type、key、index、ref、required、skipempty。运行时通过 RegisterGeneratedConfigData 注册到 roost-core/configdata。`,
 		Example: `package: generated
 tables:
   - name: monster
@@ -268,8 +268,8 @@ tables:
 		Name: "tablegen", Aliases: []string{"table", "csv"},
 		Summary:       "从 Go metadata 生成配置类型、CSV 模板并转换/校验 JSON",
 		Usage:         `go run github.com/tjbdwanghaibo/roost-codegen/cmd/tablegen@latest -meta ./configs/schema [-out dir] [-csv-template dir] [-csv dir -json dir] [-check] [-force]`,
-		Configuration: `类型使用 //cube:table name=<name> file=<csv> json=<json> key=<field> 或 //cube:object。字段通过 csv/json/title/required/unique/ref tag 描述。`,
-		Example: `//cube:table name=monster file=monster.csv json=monster.json key=ID
+		Configuration: `类型使用 //roost:table name=<name> file=<csv> json=<json> key=<field> 或 //roost:object。字段通过 csv/json/title/required/unique/ref tag 描述。`,
+		Example: `//roost:table name=monster file=monster.csv json=monster.json key=ID
 type Monster struct {
     ID   int32  ` + "`csv:\"id\" json:\"id\" required:\"true\" unique:\"true\"`" + `
     Name string ` + "`csv:\"name\" json:\"name\"`" + `
@@ -288,8 +288,8 @@ func (p *Player) DealEventPlayerLevelUp(e *event.EventPlayerLevelUp) {}`,
 		Name: "attribute", Aliases: []string{"attr", "attributes"},
 		Summary:       "生成属性 ID、mask、setter、派生公式、snapshot 和容器访问器",
 		Usage:         `go run github.com/tjbdwanghaibo/roost-codegen/cmd/attribute@latest -dir ./game/attribute [-output file] [-force]`,
-		Configuration: `profile 使用 //cube:attribute index=<start> max=<count>；字段可用 attr:"name" 或 attr:"-"。_Field 方法定义派生公式，参数名必须匹配输入字段；循环依赖、未知字段和类型不一致会失败。`,
-		Example: `//cube:attribute index=1 max=64
+		Configuration: `profile 使用 //roost:attribute index=<start> max=<count>；字段可用 attr:"name" 或 attr:"-"。_Field 方法定义派生公式，参数名必须匹配输入字段；循环依赖、未知字段和类型不一致会失败。`,
+		Example: `//roost:attribute index=1 max=64
 type PlayerProfile struct { HP int64; Attack int64; Power int64 }
 
 func (p *PlayerProfile) _Power(Attack int64, HP int64) int64 {
@@ -300,8 +300,8 @@ func (p *PlayerProfile) _Power(Attack int64, HP int64) int64 {
 		Name: "webroute", Aliases: []string{"web", "http"},
 		Summary:       "生成类型化 HTTP route 注册、请求解码和响应映射",
 		Usage:         `go run github.com/tjbdwanghaibo/roost-codegen/cmd/webroute@latest -dir ./service/web [-force]`,
-		Configuration: `handler 使用 //cube:web method=<HTTP method> path=<path> body=json|raw。JSON 接受一个完整文档；raw 使用 webroute.RawRequest。重复 method/path、非法模式和错误签名会失败。`,
-		Example: `//cube:web method=POST path=/gm/player body=json
+		Configuration: `handler 使用 //roost:web method=<HTTP method> path=<path> body=json|raw。JSON 接受一个完整文档；raw 使用 webroute.RawRequest。重复 method/path、非法模式和错误签名会失败。`,
+		Example: `//roost:web method=POST path=/gm/player body=json
 func queryPlayer(ctx context.Context, svc *Service, req QueryRequest) (QueryResponse, error) {
     return QueryResponse{}, nil
 }`,

@@ -6,10 +6,10 @@ package {{.Package}}
 import (
 	"fmt"
 
-	"github.com/tjbdwanghaibo/cube-core/dataengine"
-	"github.com/tjbdwanghaibo/cube-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/nest"
 {{- if hasMaps .Nested.Fields}}
-	fmap "github.com/tjbdwanghaibo/cube-core/safemap"
+	fmap "github.com/tjbdwanghaibo/roost-core/safemap"
 {{- end}}
 )
 

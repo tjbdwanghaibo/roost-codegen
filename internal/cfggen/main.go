@@ -1,4 +1,4 @@
-// cfggen generates cube-core/configdata bindings from a schema meta file —
+// cfggen generates roost-core/configdata bindings from a schema meta file —
 // a deliberately small, Luban-like pipeline: the meta file is the single
 // hand-written artifact, everything Go (row structs, registration, typed
 // snapshot accessors) is generated.
@@ -429,9 +429,9 @@ func generate(meta *Meta, pkg string) ([]byte, error) {
 		}
 	}
 	if needStrconv {
-		b.WriteString("import (\n\t\"strconv\"\n\n\t\"github.com/tjbdwanghaibo/cube-core/configdata\"\n)\n\n")
+		b.WriteString("import (\n\t\"strconv\"\n\n\t\"github.com/tjbdwanghaibo/roost-core/configdata\"\n)\n\n")
 	} else {
-		b.WriteString("import (\n\t\"github.com/tjbdwanghaibo/cube-core/configdata\"\n)\n\n")
+		b.WriteString("import (\n\t\"github.com/tjbdwanghaibo/roost-core/configdata\"\n)\n\n")
 	}
 
 	for _, bean := range meta.Beans {
@@ -469,7 +469,7 @@ func generate(meta *Meta, pkg string) ([]byte, error) {
 	b.WriteString("// RegisterConfigData registers the generated definitions on the default\n")
 	b.WriteString("// registry. This is the entry point the generated aggregate calls.\n")
 	b.WriteString("//\n")
-	b.WriteString("//cube:register phase=config\n")
+	b.WriteString("//roost:register phase=config\n")
 	b.WriteString("func RegisterConfigData() error {\n")
 	b.WriteString("\treturn RegisterGeneratedConfigData(configdata.DefaultRegistry())\n}\n\n")
 

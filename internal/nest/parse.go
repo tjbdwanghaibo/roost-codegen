@@ -3,6 +3,7 @@ package nest
 import (
 	"errors"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-codegen/internal/marker"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -13,8 +14,6 @@ import (
 	"strconv"
 	"strings"
 )
-
-const nestMarker = "//roost:nest"
 
 // FuncInfo describes a handler function to generate code for.
 type FuncInfo struct {
@@ -448,16 +447,17 @@ func parseFuncMarkers(fnDecl *ast.FuncDecl) funcMarkerInfo {
 	for _, c := range fnDecl.Doc.List {
 		text := strings.TrimSpace(c.Text)
 		switch {
-		case strings.HasPrefix(text, nestMarker):
+		case marker.Has(text, "nest") && strings.HasPrefix(strings.TrimSpace(text), "//"):
 			ret.HasNest = true
-			ret.NestOptions = parseMarkerOptions(strings.TrimSpace(strings.TrimPrefix(text, nestMarker)))
+			body, _ := marker.Cut(text, "nest")
+			ret.NestOptions = parseMarkerOptions(strings.TrimSpace(body))
 		}
 	}
 	return ret
 }
 
 func containsNestMarker(src string) bool {
-	return strings.Contains(src, nestMarker)
+	return marker.Has(src, "nest")
 }
 
 func parseMarkerOptions(raw string) map[string]string {

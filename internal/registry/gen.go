@@ -17,8 +17,8 @@ const OutputPath = "internal/registry/generated.go"
 
 // Generate writes the aggregate and reports whether the file changed, so a
 // no-op `roost generate` run stays quiet and leaves the mtime alone.
-func Generate(root string, registrations []Registration) (bool, error) {
-	content, err := render(registrations)
+func Generate(root string, modulePath string, registrations []Registration) (bool, error) {
+	content, err := render(modulePath, registrations)
 	if err != nil {
 		return false, err
 	}
@@ -75,7 +75,7 @@ var aggregateTemplate = template.Must(template.New("registry").Parse(`// Code ge
 // To add to the list, mark a package-level registration function and run
 // roost generate:
 //
-//	//cube:register phase=component
+//	//roost:register phase=component
 //	func RegisterComponent() { ... }
 package registry
 
@@ -107,7 +107,7 @@ func RegisterAll() error {
 
 func registerAll() error {
 {{- if not .Phases}}
-	// No //cube:register functions in this project yet.
+	// No //roost:register functions in this project yet.
 {{- end}}
 {{- range .Phases}}
 
@@ -127,8 +127,22 @@ func registerAll() error {
 }
 `))
 
-func render(registrations []Registration) ([]byte, error) {
-	aliases := importAliases(registrations)
+// ownImportPath is the aggregate's own package; registrations that live
+// there (the generated nest aggregate does) are called unqualified, since a
+// package cannot import itself.
+func ownImportPath(modulePath string) string {
+	return strings.TrimSuffix(modulePath, "/") + "/" + strings.TrimSuffix(OutputPath[:strings.LastIndex(OutputPath, "/")], "/")
+}
+
+func render(modulePath string, registrations []Registration) ([]byte, error) {
+	own := ownImportPath(modulePath)
+	external := make([]Registration, 0, len(registrations))
+	for _, registration := range registrations {
+		if registration.ImportPath != own {
+			external = append(external, registration)
+		}
+	}
+	aliases := importAliases(external)
 	data := templateData{Imports: make([]importSpec, 0, len(aliases))}
 
 	paths := make([]string, 0, len(aliases))
@@ -146,8 +160,12 @@ func render(registrations []Registration) ([]byte, error) {
 		if registration.ReturnsError {
 			data.NeedsFmt = true
 		}
+		expr := registration.Func + "()"
+		if registration.ImportPath != own {
+			expr = aliases[registration.ImportPath] + "." + expr
+		}
 		entry := call{
-			Expr:         fmt.Sprintf("%s.%s()", aliases[registration.ImportPath], registration.Func),
+			Expr:         expr,
 			Qualified:    registration.ImportPath + "." + registration.Func,
 			ReturnsError: registration.ReturnsError,
 		}

@@ -1,4 +1,4 @@
-// tool/tablegen builds Cube business config artifacts from Go table metadata.
+// tool/tablegen builds Roost business config artifacts from Go table metadata.
 //
 // Usage:
 //
@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-codegen/internal/marker"
 	"go/ast"
 	"go/format"
 	"go/parser"
@@ -30,10 +31,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-codegen/internal/project"
 )
 
-const (
-	markerTable  = "//cube:table"
-	markerObject = "//cube:object"
-)
+const ()
 
 type TableKind string
 
@@ -184,7 +182,7 @@ func parseMetaFile(root string, module string, path string) ([]Meta, error) {
 		return nil, err
 	}
 	text := string(raw)
-	if !strings.Contains(text, markerTable) && !strings.Contains(text, markerObject) {
+	if !marker.Has(text, "table") && !marker.Has(text, "object") {
 		return nil, nil
 	}
 	fset := token.NewFileSet()
@@ -200,11 +198,11 @@ func parseMetaFile(root string, module string, path string) ([]Meta, error) {
 			line := fset.Position(c.Pos()).Line
 			txt := strings.TrimSpace(c.Text)
 			switch {
-			case strings.HasPrefix(txt, markerTable):
-				markers[line] = parseMarkerOptions(strings.TrimSpace(strings.TrimPrefix(txt, markerTable)))
+			case hasMarker(txt, "table"):
+				markers[line] = parseMarkerOptions(cutMarker(txt, "table"))
 				kinds[line] = KindTable
-			case strings.HasPrefix(txt, markerObject):
-				markers[line] = parseMarkerOptions(strings.TrimSpace(strings.TrimPrefix(txt, markerObject)))
+			case hasMarker(txt, "object"):
+				markers[line] = parseMarkerOptions(cutMarker(txt, "object"))
 				kinds[line] = KindObject
 			}
 		}
@@ -541,7 +539,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/configdata"
+	"github.com/tjbdwanghaibo/roost-core/configdata"
 {{- range .Metas}}
 	{{.Alias}} "{{.ImportPath}}"
 {{- end}}
@@ -582,7 +580,7 @@ func RegisterGeneratedConfigData(r *configdata.Registry) error {
 // internal/registry calls; RegisterGeneratedConfigData stays exported and
 // explicit for tests and for services that build their own registry.
 //
-//cube:register phase=config
+//roost:register phase=config
 func RegisterConfigData() error {
 	return RegisterGeneratedConfigData(configdata.DefaultRegistry())
 }
@@ -891,3 +889,14 @@ func firstLower(s string) string {
 }
 
 var _ io.Reader
+
+// hasMarker and cutMarker adapt marker.Cut to the line-oriented switch above.
+func hasMarker(line, kind string) bool {
+	_, ok := marker.Cut(line, kind)
+	return ok
+}
+
+func cutMarker(line, kind string) string {
+	body, _ := marker.Cut(line, kind)
+	return strings.TrimSpace(body)
+}

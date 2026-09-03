@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-codegen/internal/marker"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -306,9 +307,9 @@ func checkFirstBusinessWorkflow(root string, manifest Manifest) ([]CheckItem, er
 	checks := []struct {
 		name, pattern, needle, detail, fix string
 	}{
-		{"entity", "game/entities/*/entity.go", "//cube:entity", "an Entity aggregate exists", "roost add entity Player"},
-		{"component", "game/entities/*/*_component.go", "//cube:component", "an Entity Component exists", "roost add component Profile --entity Player"},
-		{"dao", "db/def/*.go", "//cube:dao", "a DAO definition exists", "roost add dao Player --entity Player"},
+		{"entity", "game/entities/*/entity.go", "//roost:entity", "an Entity aggregate exists", "roost add entity Player"},
+		{"component", "game/entities/*/*_component.go", "//roost:component", "an Entity Component exists", "roost add component Profile --entity Player"},
+		{"dao", "db/def/*.go", "//roost:dao", "a DAO definition exists", "roost add dao Player --entity Player"},
 		{"nest-handler", "game/handler/*.go", "//roost:nest", "a Nest business handler exists", "roost add handler RenamePlayer --entity Player --component Profile"},
 		{"protocol", "protocol/def/*.go", "handler=", "a protocol is assigned to a controller", "roost add protocol RenamePlayer --group game --handler player"},
 		{"endpoint", "game/controllers/*/*.go", "generated Sender", "a protocol endpoint calls a generated Sender", "roost add endpoint RenamePlayer --handler player"},
@@ -401,7 +402,7 @@ func anyDAOHasBusinessField(root string) (bool, error) {
 		if readErr != nil {
 			return false, readErr
 		}
-		if !bytes.Contains(raw, []byte("//cube:dao")) {
+		if !marker.Has(string(raw), "dao") {
 			continue
 		}
 		file, parseErr := parser.ParseFile(token.NewFileSet(), path, raw, 0)
@@ -443,7 +444,7 @@ func anyNestHandlerImplemented(root string) (bool, error) {
 		if readErr != nil {
 			return false, readErr
 		}
-		if !bytes.Contains(raw, []byte("//roost:nest")) {
+		if !marker.Has(string(raw), "nest") {
 			continue
 		}
 		file, parseErr := parser.ParseFile(token.NewFileSet(), path, raw, 0)
@@ -721,6 +722,12 @@ func anyFileContains(root, pattern, needle string) (bool, error) {
 		raw, readErr := os.ReadFile(path)
 		if readErr != nil {
 			return false, readErr
+		}
+		// Marker needles accept the deprecated //cube: spelling as well, so
+		// doctor does not report a migrated-but-not-yet-renamed project as
+		// missing the thing it is looking at.
+		if body, isMarker := strings.CutPrefix(needle, marker.Prefix); isMarker && marker.Has(string(raw), body) {
+			return true, nil
 		}
 		if bytes.Contains(raw, []byte(needle)) {
 			return true, nil

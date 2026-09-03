@@ -2,6 +2,7 @@ package webroute
 
 import (
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-codegen/internal/marker"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -11,7 +12,6 @@ import (
 )
 
 const (
-	markerPrefix        = "//cube:web"
 	bodyJSON            = "json"
 	bodyRaw             = "raw"
 	generatedFileName   = "webroute_gen.go"
@@ -63,10 +63,11 @@ func parseMarker(group *ast.CommentGroup) (map[string]string, bool, error) {
 	}
 	for _, comment := range group.List {
 		text := strings.TrimSpace(comment.Text)
-		if !strings.HasPrefix(text, markerPrefix) {
+		body, isMarker := marker.Cut(text, "web")
+		if !isMarker {
 			continue
 		}
-		fields := strings.Fields(strings.TrimSpace(strings.TrimPrefix(text, markerPrefix)))
+		fields := strings.Fields(strings.TrimSpace(body))
 		options := make(map[string]string, len(fields))
 		for _, field := range fields {
 			parts := strings.SplitN(field, "=", 2)

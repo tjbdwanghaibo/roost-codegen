@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"time"
 
-	fcache "github.com/tjbdwanghaibo/cube-core/cache"
-	fredis "github.com/tjbdwanghaibo/cube-core/redis"
+	fcache "github.com/tjbdwanghaibo/roost-core/cache"
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
 )
 
 const (
-	RawSessionRedisDAODefaultPrefix = "cube:test:raw"
+	RawSessionRedisDAODefaultPrefix = "roost:test:raw"
 	RawSessionRedisDAOName          = "raw_session"
 )
 

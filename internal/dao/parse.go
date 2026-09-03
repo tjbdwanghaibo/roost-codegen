@@ -2,6 +2,7 @@ package dao
 
 import (
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-codegen/internal/marker"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -11,8 +12,8 @@ import (
 	"strings"
 )
 
-var daoMarkerRe = regexp.MustCompile(`^//cube:dao\s+(.+)$`)
-var redisDaoMarkerRe = regexp.MustCompile(`^//cube:redisdao\s+(.+)$`)
+var daoMarkerRe = marker.Regexp("dao", `\s+(.+)`)
+var redisDaoMarkerRe = marker.Regexp("redisdao", `\s+(.+)`)
 
 // Definitions holds all parsed DAO and nested struct definitions.
 type Definitions struct {
@@ -131,11 +132,11 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {
 			// A marker prefix without valid parameters is a mistake the
 			// author must hear about: a silently ignored marker means a DAO
 			// that silently does not persist.
-			if rest, ok := strings.CutPrefix(c.Text, "//cube:dao"); ok && (rest == "" || strings.TrimSpace(rest) == "") {
-				return fmt.Errorf("line %d: //cube:dao marker is missing parameters (want e.g. //cube:dao coll=heroes db=game)", fset.Position(c.Pos()).Line)
+			if rest, ok := marker.Cut(c.Text, "dao"); ok && strings.TrimSpace(rest) == "" {
+				return fmt.Errorf("line %d: //roost:dao marker is missing parameters (want e.g. //roost:dao coll=heroes db=game)", fset.Position(c.Pos()).Line)
 			}
-			if rest, ok := strings.CutPrefix(c.Text, "//cube:redisdao"); ok && (rest == "" || strings.TrimSpace(rest) == "") {
-				return fmt.Errorf("line %d: //cube:redisdao marker is missing parameters (want e.g. //cube:redisdao mode=ref-hmap key=... prefix=...)", fset.Position(c.Pos()).Line)
+			if rest, ok := marker.Cut(c.Text, "redisdao"); ok && strings.TrimSpace(rest) == "" {
+				return fmt.Errorf("line %d: //roost:redisdao marker is missing parameters (want e.g. //roost:redisdao mode=ref-hmap key=... prefix=...)", fset.Position(c.Pos()).Line)
 			}
 			if m := daoMarkerRe.FindStringSubmatch(c.Text); m != nil {
 				markers = append(markers, daoMarker{
@@ -210,12 +211,12 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {
 				// declaration with one marker on the group would silently
 				// write every struct into the same collection.
 				if m.consumed {
-					return fmt.Errorf("line %d: //cube:dao marker binds to multiple structs; grouped type declarations need one marker directly above each struct", m.line)
+					return fmt.Errorf("line %d: //roost:dao marker binds to multiple structs; grouped type declarations need one marker directly above each struct", m.line)
 				}
 				m.consumed = true
 
 				if m.params["coll"] == "" || m.params["db"] == "" {
-					return fmt.Errorf("line %d: //cube:dao on %s requires coll= and db=", m.line, typeSpec.Name.Name)
+					return fmt.Errorf("line %d: //roost:dao on %s requires coll= and db=", m.line, typeSpec.Name.Name)
 				}
 				fields, err := extractFieldDefs(structType, defs)
 				if err != nil {
@@ -240,12 +241,12 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {
 					continue
 				}
 				if m.consumed {
-					return fmt.Errorf("line %d: //cube:redisdao marker binds to multiple structs; grouped type declarations need one marker directly above each struct", m.line)
+					return fmt.Errorf("line %d: //roost:redisdao marker binds to multiple structs; grouped type declarations need one marker directly above each struct", m.line)
 				}
 				m.consumed = true
 
 				if m.params["key"] == "" || m.params["prefix"] == "" {
-					return fmt.Errorf("line %d: //cube:redisdao on %s requires key= and prefix=", m.line, typeSpec.Name.Name)
+					return fmt.Errorf("line %d: //roost:redisdao on %s requires key= and prefix=", m.line, typeSpec.Name.Name)
 				}
 				fields, err := extractFieldDefs(structType, defs)
 				if err != nil {
@@ -279,12 +280,12 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {
 	// silently not persist. Fail instead of generating a partial result.
 	for _, m := range markers {
 		if !m.consumed {
-			return fmt.Errorf("line %d: //cube:dao marker is not attached to a struct (it must be adjacent to, or inside the doc comment of, a struct type declaration)", m.line)
+			return fmt.Errorf("line %d: //roost:dao marker is not attached to a struct (it must be adjacent to, or inside the doc comment of, a struct type declaration)", m.line)
 		}
 	}
 	for _, m := range redisMarkers {
 		if !m.consumed {
-			return fmt.Errorf("line %d: //cube:redisdao marker is not attached to a struct (it must be adjacent to, or inside the doc comment of, a struct type declaration)", m.line)
+			return fmt.Errorf("line %d: //roost:redisdao marker is not attached to a struct (it must be adjacent to, or inside the doc comment of, a struct type declaration)", m.line)
 		}
 	}
 

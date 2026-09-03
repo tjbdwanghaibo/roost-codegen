@@ -384,7 +384,7 @@ func redisDaoDefaultPrefix(dao RedisDaoDef) string {
 	if dao.Prefix != "" {
 		return dao.Prefix
 	}
-	return "cube:redisdao"
+	return "roost:redisdao"
 }
 
 func redisDaoName(dao RedisDaoDef) string {

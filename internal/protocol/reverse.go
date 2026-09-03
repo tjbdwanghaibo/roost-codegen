@@ -3,6 +3,7 @@ package protocol
 import (
 	"bytes"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-codegen/internal/marker"
 	"go/format"
 	"os"
 	"path/filepath"
@@ -11,7 +12,7 @@ import (
 	"strings"
 )
 
-const reverseProtoIgnoreMarker = "//cube:reverse_proto ignore=true"
+const reverseProtoIgnoreMarker = marker.Prefix + "reverse_proto ignore=true"
 
 type reverseProtoDef struct {
 	enums    []EnumDef
@@ -57,7 +58,7 @@ func parseReverseProto(text string) (reverseProtoDef, error) {
 		if line == "" {
 			continue
 		}
-		if strings.Contains(line, "cube:source=go_def") {
+		if marker.HasProvenance(line) {
 			pendingGoDef = true
 			continue
 		}
@@ -248,7 +249,7 @@ func cleanProtoLine(line string) string {
 		return ""
 	}
 	if idx := strings.Index(line, "//"); idx >= 0 {
-		if strings.Contains(line[idx:], "cube:source=go_def") {
+		if marker.HasProvenance(line[idx:]) {
 			return strings.TrimSpace(line[idx+2:])
 		}
 		line = strings.TrimSpace(line[:idx])

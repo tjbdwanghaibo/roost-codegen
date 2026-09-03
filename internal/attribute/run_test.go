@@ -11,7 +11,7 @@ func TestRunGeneratesProfile(t *testing.T) {
 	dir := t.TempDir()
 	source := `package attribute
 
-//cube:attribute index=1 max=4
+//roost:attribute index=1 max=4
 type PlayerProfile struct {
 	HP int64
 }

@@ -472,14 +472,14 @@ package {{.Package}}
 
 import (
 {{- if not .SenderOnly}}
-	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/entity"
 	"errors"
 	"sync"
 	{{- end}}
 	{{- if .SenderOnly}}
 		"context"
 	{{- end}}
-		"github.com/tjbdwanghaibo/cube-core/nest"
+		"github.com/tjbdwanghaibo/roost-core/nest"
 	{{- if .AsyncSenderOnly}}
 		"time"
 	{{- end}}

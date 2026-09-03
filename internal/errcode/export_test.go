@@ -15,7 +15,7 @@ func TestExtractDefinitionsAndWriteCSV(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(source, "errors.go"), []byte(`package shop
 
-import "github.com/tjbdwanghaibo/cube-core/errcode"
+import "github.com/tjbdwanghaibo/roost-core/errcode"
 
 var (
 	ErrShopItemNotFound = errcode.Define(500101, "shop.item_not_found", "商店商品不存在")

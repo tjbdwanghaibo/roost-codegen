@@ -1,4 +1,4 @@
-// Package registry scans a project for //cube:register markers and generates
+// Package registry scans a project for //roost:register markers and generates
 // the single aggregate that performs every static registration.
 //
 // Static registration is everything that must complete before any app.Mod
@@ -12,12 +12,12 @@ package registry
 
 import (
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-codegen/internal/marker"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,7 +31,7 @@ import (
 //     have a place, which is why there is no separate custom hook file.
 var Phases = []string{"pre", "kind", "config", "component", "entity", "protocol", "nest", "route", "post"}
 
-var markerRe = regexp.MustCompile(`^//cube:register(\s+(.*))?$`)
+var markerRe = marker.Regexp("register", `(\s+(.*))?`)
 
 // Registration is one marked function.
 type Registration struct {
@@ -44,7 +44,7 @@ type Registration struct {
 	Position string
 }
 
-// Scan walks root and returns every //cube:register function, sorted into
+// Scan walks root and returns every //roost:register function, sorted into
 // execution order: by phase, then by the explicit order attribute, then by
 // import path and function name so the generated output never depends on
 // filesystem or map iteration order.
@@ -147,10 +147,10 @@ func markerOptions(doc *ast.CommentGroup) (map[string]string, bool) {
 func build(fnDecl *ast.FuncDecl, options map[string]string, importPath, position string) (Registration, error) {
 	name := fnDecl.Name.Name
 	if fnDecl.Recv != nil {
-		return Registration{}, fmt.Errorf("registry: %s: //cube:register on method %s; the marker only applies to package-level functions", position, name)
+		return Registration{}, fmt.Errorf("registry: %s: //roost:register on method %s; the marker only applies to package-level functions", position, name)
 	}
 	if !ast.IsExported(name) {
-		return Registration{}, fmt.Errorf("registry: %s: //cube:register on unexported function %s; the aggregate can only call exported functions", position, name)
+		return Registration{}, fmt.Errorf("registry: %s: //roost:register on unexported function %s; the aggregate can only call exported functions", position, name)
 	}
 	if fnDecl.Type.Params != nil && len(fnDecl.Type.Params.List) > 0 {
 		return Registration{}, fmt.Errorf("registry: %s: %s takes parameters; a registration function must take none", position, name)

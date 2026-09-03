@@ -4,9 +4,9 @@ package testdata
 import (
 	"fmt"
 
-	"github.com/tjbdwanghaibo/cube-core/dataengine"
-	"github.com/tjbdwanghaibo/cube-core/nest"
-	fmap "github.com/tjbdwanghaibo/cube-core/safemap"
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/nest"
+	fmap "github.com/tjbdwanghaibo/roost-core/safemap"
 )
 
 // EquipInfo is a nested struct with dirty propagation.

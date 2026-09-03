@@ -21,6 +21,10 @@ var legacyAggregators = []struct {
 	{Path: "game/bootstrap/register.go", Marker: "func RegisterAll(", Replaces: "RegisterAll"},
 	{Path: "game/entities/register/register.go", Marker: "func RegisterEntities(", Replaces: "RegisterEntities"},
 	{Path: "game/components/register/register.go", Marker: "func RegisterComponents(", Replaces: "RegisterComponents"},
+	// The nest aggregate used to be generated here with its own sync.Once
+	// holder next to it; both moved into internal/registry.
+	{Path: "game/bootstrap/nest.go", Marker: "func RegisterNestHandlers(", Replaces: "RegisterNestHandlers, now internal/registry/nest_gen.go"},
+	{Path: "game/bootstrap/register.go", Marker: "nestOnce", Replaces: "nestOnce holder, no longer needed"},
 }
 
 // Run scans root and writes the aggregate.
@@ -32,7 +36,7 @@ func Run(root string, modulePath string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	changed, err := Generate(root, registrations)
+	changed, err := Generate(root, modulePath, registrations)
 	if err != nil {
 		return err
 	}
@@ -59,7 +63,7 @@ func checkLegacyAggregators(root string) error {
 	return fmt.Errorf(`registry: a hand-written registration aggregator is still present:
   %s
 %s now owns this list. Migrate by marking each registration function with
-//cube:register phase=<phase> and deleting the hand-written aggregator, then
+//roost:register phase=<phase> and deleting the hand-written aggregator, then
 run roost generate again. Generating both would leave two lists with no way to
 tell which one to edit`, strings.Join(found, "\n  "), OutputPath)
 }

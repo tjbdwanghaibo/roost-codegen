@@ -1,6 +1,6 @@
 package def
 
-//cube:redisdao mode=ref-hmap key=Snapshot.InstanceRunID prefix=cube:test:session version=Version ttl=1h
+//roost:redisdao mode=ref-hmap key=Snapshot.InstanceRunID prefix=roost:test:session version=Version ttl=1h
 type CacheSession struct {
 	Snapshot CacheSnapshot
 	Meta     *CacheMeta

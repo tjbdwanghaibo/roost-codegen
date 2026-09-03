@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-codegen/internal/marker"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -33,9 +34,9 @@ func parseDefDir(dir string) (*Definitions, error) {
 	var files []parsedFile
 
 	defs := &Definitions{
-		ModulePath:   "github.com/tjbdwanghaibo/cube",
-		ProtoPackage: "cube.protocol",
-		GoPackage:    "github.com/tjbdwanghaibo/cube/protocol/pb;pb",
+		ModulePath:   "example.com/project",
+		ProtoPackage: "roost.protocol",
+		GoPackage:    "example.com/project/protocol/pb;pb",
 	}
 	structMap := make(map[string]StructDef)
 	enumTypes := make(map[string]string)
@@ -57,7 +58,7 @@ func parseDefDir(dir string) (*Definitions, error) {
 		if err != nil {
 			return err
 		}
-		if strings.Contains(string(content), "//cube:reverse_proto ignore=true") {
+		if marker.Has(string(content), "reverse_proto ignore=true") {
 			return nil
 		}
 		f, err := parser.ParseFile(fset, path, content, parser.ParseComments)
@@ -192,7 +193,7 @@ func extractInterfaceProtocolMarkers(pf parsedFile, defs *Definitions, msgIDs ma
 					group = v
 				}
 				if v, err := parseProtocolHandler(params, ""); err != nil {
-					return fmt.Errorf("cube:protocol interface %s has invalid handler: %w", sourceInterface, err)
+					return fmt.Errorf("roost:protocol interface %s has invalid handler: %w", sourceInterface, err)
 				} else {
 					handler = v
 				}
@@ -235,7 +236,7 @@ func extractInterfaceProtocolMarkers(pf parsedFile, defs *Definitions, msgIDs ma
 						}
 						defs.Pushes = append(defs.Pushes, push)
 					default:
-						return fmt.Errorf("cube:msg method %s has invalid protocol mode", methodName)
+						return fmt.Errorf("roost:msg method %s has invalid protocol mode", methodName)
 					}
 				}
 			}
@@ -269,23 +270,23 @@ type parsedProtocol struct {
 func methodMarkerToProtocol(methodName string, fn *ast.FuncType, params map[string]string, defaultHandler string) (parsedProtocol, error) {
 	id, ok := parseUint32(params["id"])
 	if !ok {
-		return parsedProtocol{}, fmt.Errorf("cube:msg method %s has invalid id", methodName)
+		return parsedProtocol{}, fmt.Errorf("roost:msg method %s has invalid id", methodName)
 	}
 	tags, err := parseProtocolTags(params["tags"])
 	if err != nil {
-		return parsedProtocol{}, fmt.Errorf("cube:msg method %s has invalid tags", methodName)
+		return parsedProtocol{}, fmt.Errorf("roost:msg method %s has invalid tags", methodName)
 	}
 	handler, err := parseProtocolHandler(params, defaultHandler)
 	if err != nil {
-		return parsedProtocol{}, fmt.Errorf("cube:msg method %s has invalid handler: %w", methodName, err)
+		return parsedProtocol{}, fmt.Errorf("roost:msg method %s has invalid handler: %w", methodName, err)
 	}
 	reqTypes := fieldListTypeNames(fn.Params)
 	respTypes := fieldListTypeNames(fn.Results)
 	if reqTypes.err != nil {
-		return parsedProtocol{}, fmt.Errorf("cube:msg method %s invalid param: %w", methodName, reqTypes.err)
+		return parsedProtocol{}, fmt.Errorf("roost:msg method %s invalid param: %w", methodName, reqTypes.err)
 	}
 	if respTypes.err != nil {
-		return parsedProtocol{}, fmt.Errorf("cube:msg method %s invalid result: %w", methodName, respTypes.err)
+		return parsedProtocol{}, fmt.Errorf("roost:msg method %s invalid result: %w", methodName, respTypes.err)
 	}
 	name := params["name"]
 	if name == "" {
@@ -327,7 +328,7 @@ func methodMarkerToProtocol(methodName string, fn *ast.FuncType, params map[stri
 			},
 		}, nil
 	default:
-		return parsedProtocol{}, fmt.Errorf("cube:msg method %s signature must be req/resp, psh, or ntf", methodName)
+		return parsedProtocol{}, fmt.Errorf("roost:msg method %s signature must be req/resp, psh, or ntf", methodName)
 	}
 }
 

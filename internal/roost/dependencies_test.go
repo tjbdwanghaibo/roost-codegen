@@ -78,8 +78,8 @@ func TestUpdateFrameworkDependenciesResolvesAllDirectModulesTogether(t *testing.
 	want := [][]string{
 		{
 			"get",
-			"github.com/tjbdwanghaibo/cube-core@latest",
-			"github.com/tjbdwanghaibo/cube-kit@latest",
+			"github.com/tjbdwanghaibo/roost-core@latest",
+			"github.com/tjbdwanghaibo/roost-kit@latest",
 			"github.com/tjbdwanghaibo/roost-skill@latest",
 		},
 		{"mod", "tidy"},
@@ -95,8 +95,8 @@ func TestUpdateFrameworkDependenciesUsesExplicitPolicies(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := DefaultManifest("planet", "example.com/planet", nil, nil, nil)
-	manifest.Versions.Core = "v1.9.0"
-	manifest.Versions.Kit = "v1.10.0"
+	manifest.Versions.Core = "v1.10.0"
+	manifest.Versions.Kit = "v1.11.0"
 	manifest.Versions.Skill = "v1.9.0"
 	var get []string
 	runner := func(_ context.Context, _ string, _, _ io.Writer, args ...string) error {
@@ -109,7 +109,7 @@ func TestUpdateFrameworkDependenciesUsesExplicitPolicies(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(get, " ")
-	for _, want := range []string{"cube-core@v1.9.0", "cube-kit@v1.10.0", "roost-skill@v1.9.0"} {
+	for _, want := range []string{"roost-core@v1.10.0", "roost-kit@v1.11.0", "roost-skill@v1.9.0"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("go get command missing %q: %v", want, get)
 		}

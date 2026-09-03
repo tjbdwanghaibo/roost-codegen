@@ -36,8 +36,8 @@ func renderBeginnerQuickstart(m Manifest) string {
 | Feature | 决定生成哪些代码和目录的开关，例如 protocol、entity、dao | roost.yaml 的 features |
 | Access | 已认证请求进入业务的边界，例如 player | roost.yaml 的 access |
 | Generated file | codegen 管理、带 DO NOT EDIT 标识的文件 | 不手改；修改声明后运行 make sync/generate |
-| //cube:register | 静态注册函数的标记；phase= 决定阶段，order= 决定阶段内顺序 | 打在无参数的包级函数上；roost generate 汇总进 internal/registry/generated.go |
-| //cube:register | 静态注册函数的标记；phase= 决定阶段，order= 决定阶段内顺序 | 打在无参数的包级函数上；roost generate 汇总进 internal/registry/generated.go |
+| //roost:register | 静态注册函数的标记；phase= 决定阶段，order= 决定阶段内顺序 | 打在无参数的包级函数上；roost generate 汇总进 internal/registry/generated.go |
+| //roost:register | 静态注册函数的标记；phase= 决定阶段，order= 决定阶段内顺序 | 打在无参数的包级函数上；roost generate 汇总进 internal/registry/generated.go |
 
 Mod 是运行时能力，Feature 是生成期能力，它们不是同一组选项。
 
@@ -91,7 +91,11 @@ go.mod/go.sum；全部成功后才提交，后置步骤失败不会留下半生�
 - game/entities：Entity 定义与 Component 组合；
 - db/def：DAO 定义；
 - game/handler：Nest handler 业务逻辑；
-- internal/service/{{SERVICE}}：服务接入和业务生命周期。
+- internal/service/{{SERVICE}}：服务接入、业务生命周期与 managers.go（该服务启动的内存单例）。
+
+目录约定只有四条：game/ 放玩法与实体；internal/ 放框架接线（bootstrap、registry、access、service）；
+每类定义放在自己的顶层 <kind>/def；configs/ 放配置。静态注册统一汇总在
+internal/registry/generated.go（含 nest_gen.go），由 //roost:register 标记驱动，不再有 game/bootstrap。
 
 生成器负责注册、访问器、Sender、装配和重复样板；它不会替你决定业务字段、权限和玩法规则。
 完整可复制例子见 FIRST_BUSINESS.zh-CN.md 和 ENTITY_COMPONENT.zh-CN.md。
@@ -356,8 +360,8 @@ name 是运行与部署身份；module 是 Go import 前缀。仓库目录名可
 
 | 字段 | 控制对象 | 当前兼容下限 | 值示例 |
 | --- | --- | --- | --- |
-| versions.core | cube-core 依赖解析 | %s | latest 或 %s |
-| versions.kit | cube-kit 依赖解析 | %s | latest 或 %s |
+| versions.core | roost-core 依赖解析 | %s | latest 或 %s |
+| versions.kit | roost-kit 依赖解析 | %s | latest 或 %s |
 | versions.skill | roost-skill 依赖解析 | %s | latest 或 %s |
 | versions.codegen | Makefile 使用的 roost-codegen | %s | latest 或 %s |
 

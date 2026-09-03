@@ -17,7 +17,7 @@ func addSkillDefinition(root string, manifest Manifest, options AddOptions) ([]s
 		return nil, err
 	}
 	definition := fmt.Sprintf(`{
-  "schema": "cube.skill/v2",
+  "schema": "roost.skill/v2",
   "id": "skill.%s.%s",
   "name": %q,
   "description": "TODO: describe the gameplay contract.",

@@ -10,7 +10,7 @@
 //
 // The generator scans for struct types annotated with the marker comment:
 //
-//	//cube:entity entityKind=EntityKindPlayer
+//	//roost:entity entityKind=EntityKindPlayer
 //	type Player struct { ... }
 //
 // And produces a <entity>_gen_wire.go file containing:
@@ -23,6 +23,7 @@ package entity
 import (
 	"flag"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-codegen/internal/marker"
 	"io"
 	"os"
 	"path/filepath"
@@ -126,7 +127,7 @@ func findEntityDirs(root string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		if strings.Contains(string(content), "//cube:entity") {
+		if marker.Has(string(content), "entity") {
 			dirs[filepath.Dir(path)] = true
 		}
 		return nil

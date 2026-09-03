@@ -41,7 +41,7 @@ package {{.Package}}
 
 import (
 	"{{.EventPkg}}"
-	frameworkEvent "github.com/tjbdwanghaibo/cube-core/event"
+	frameworkEvent "github.com/tjbdwanghaibo/roost-core/event"
 )
 
 func ({{recvVar .Receiver}} *{{.Receiver}}) InitSub() {

@@ -6,12 +6,12 @@ package {{.Package}}
 import (
 	"fmt"
 	"sort"
-	"github.com/tjbdwanghaibo/cube-core/dataengine"
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/migration"
-	"github.com/tjbdwanghaibo/cube-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/migration"
+	"github.com/tjbdwanghaibo/roost-core/nest"
 {{- if .HasMaps}}
-	fmap "github.com/tjbdwanghaibo/cube-core/safemap"
+	fmap "github.com/tjbdwanghaibo/roost-core/safemap"
 {{- end}}
 	"go.mongodb.org/mongo-driver/v2/bson"
 )

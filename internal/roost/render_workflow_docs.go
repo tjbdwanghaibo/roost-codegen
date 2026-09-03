@@ -513,7 +513,7 @@ func renderSkillGuide(manifest Manifest) string {
 # roost-skill 接入指南
 
 roost-skill 的稳定 import 是 github.com/tjbdwanghaibo/roost-skill/skill；JSON schema 仍叫
-cube.skill/v2，但 Go 目录没有 /v2 或 /skillv2。
+roost.skill/v2，但 Go 目录没有 /v2 或 /skillv2。
 
 ## 1. 创建定义
 

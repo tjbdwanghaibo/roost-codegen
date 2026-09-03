@@ -214,8 +214,8 @@ features 与 mods 的合法取值见第 4 节"features 完整清单"与第 5 节
 | `schema` | 是 | roost.yaml 格式版本；当前必须为 `1` |
 | `project.name` | 是 | 应用名；小写字母开头，只允许小写字母、数字和下划线 |
 | `project.module` | 是 | 生成代码使用的 Go module import path |
-| `versions.core` | 是 | cube-core 的 `latest` 策略或明确最低版本 |
-| `versions.kit` | 是 | cube-kit 的更新策略或最低版本 |
+| `versions.core` | 是 | roost-core 的 `latest` 策略或明确最低版本 |
+| `versions.kit` | 是 | roost-kit 的更新策略或最低版本 |
 | `versions.skill` | 是 | roost-skill 的更新策略或最低版本 |
 | `versions.codegen` | 是 | Makefile/模板使用的 codegen 策略 |
 | `shared_mods` | 否 | 进程级共享 Mod；每个 Service 不得重复声明 |
@@ -332,7 +332,7 @@ Saga 命令会自动给目标 Service 添加 `saga`、`dataengine` 及其传递�
 `EmitStart`，使 Entity mutation 与 Saga 启动意图进入同一个 WAL record；`Start` 仅用于
 durable consumer、管理和恢复路径。生成的 bootstrap 会把 manifest 中的
 定义传给 Saga Mod；自定义装配时才需要调用 `Register`。步骤消费者使用
-`cube-kit/saga.SubscribeStep`，并把
+`roost-kit/saga.SubscribeStep`，并把
 每个 command 的 `IdempotencyKey` 作为本地预留/确认/释放操作的唯一键；不要以
 投递次数或 `CommandID` 作为业务幂等键。
 
@@ -395,7 +395,7 @@ Entity wire 会生成 Component/DAO getter，
     roost id check
     make id-check
 
-当前扫描 //cube:* 和 //roost:* 标记，历史项目不需要立刻迁移 marker。
+当前扫描 //roost:* 和 //roost:* 标记，历史项目不需要立刻迁移 marker。
 
 ## 8. 生成流水线
 
@@ -434,7 +434,7 @@ check-generated 会复制项目到临时目录，在副本中执行全部生成�
       -robot-protocol "" \
       -force
 
-Cube 风格项目可以启用 player_bind、handler 和 robot registry 输出。生成器会从目标 go.mod 发现 module，不再硬编码 Cube 业务 module。
+业务仓（cube）风格项目可以启用 player_bind、handler 和 robot registry 输出。生成器会从目标 go.mod 发现 module，不再硬编码 Cube 业务 module。
 
 ## 10. ConfigData
 
@@ -549,8 +549,8 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 
 生成的 `go.mod` 直接引用各仓库真实发布的 module path。首次离线启动使用当前兼容下限作为合法 bootstrap：
 
-    github.com/tjbdwanghaibo/cube-core v1.8.0
-    github.com/tjbdwanghaibo/cube-kit v1.8.0
+    github.com/tjbdwanghaibo/roost-core v1.8.0
+    github.com/tjbdwanghaibo/roost-kit v1.8.0
     github.com/tjbdwanghaibo/roost-skill v1.9.0
 
 不生成 `replace`。在正常的 `project new/sync/deps` 路径中，上述版本会立即被当前最新 release 替换；具体版本留在 `go.mod/go.sum`，而“继续跟随最新”的策略留在 `roost.yaml`。生成的 `internal/frameworkdeps/generated.go` 通过稳定路径 `github.com/tjbdwanghaibo/roost-skill/skill` 的类型别名保留暂未被业务导入的 skill，因此 tidy 不会删掉它。旧模板中的 `/skillv2` 会在 `project sync/upgrade` 时迁移，不保留双版本兼容。若需要离线生成，bootstrap 下限仍可构建；恢复网络后执行 `make deps-update` 即可追到最新。
@@ -599,7 +599,7 @@ kubectl apply -f deploy/k8s/secret.game.local.yaml
 kubectl apply -k deploy/k8s
 ```
 
-有 WAL 的工作负载固定单副本并使用独占 PVC。直接提高 replicas 会复用 SID，可能形成双 writer；扩容必须为新实例分配唯一 SID 和存储身份。完整发布、回滚和灾备规则见 cube-core [生产部署手册](https://github.com/tjbdwanghaibo/cube-core/blob/main/docs/DEPLOYMENT.md)。
+有 WAL 的工作负载固定单副本并使用独占 PVC。直接提高 replicas 会复用 SID，可能形成双 writer；扩容必须为新实例分配唯一 SID 和存储身份。完整发布、回滚和灾备规则见 roost-core [生产部署手册](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/DEPLOYMENT.md)。
 
 ## 18. 三级项目文档
 
@@ -611,4 +611,4 @@ kubectl apply -k deploy/k8s
 
 这些文件中带 `Code generated` 标识的内容由 `roost project sync` 更新；业务补充应写到自有文档，避免和生成器争用同一个文件。
 
-这些 feature 要求 cube-kit/roost-kit >= v1.1.0；生成器会在 manifest 校验阶段直接拒绝更早版本，不能作为生产依赖。
+这些 feature 要求 roost-kit/roost-kit >= v1.1.0；生成器会在 manifest 校验阶段直接拒绝更早版本，不能作为生产依赖。

@@ -12,7 +12,7 @@ func TestParseMetaRootUsesTargetProjectModulePath(t *testing.T) {
 	metaDir := filepath.Join(root, "configs", "schema", "game")
 	writeTablegenTestFile(t, filepath.Join(metaDir, "monster.go"), `package game
 
-//cube:table name=monster file=monster.csv json=monster.json key=ID
+//roost:table name=monster file=monster.csv json=monster.json key=ID
 type Monster struct {
 	ID int32 `+"`csv:\"id\" json:\"id\"`"+`
 }

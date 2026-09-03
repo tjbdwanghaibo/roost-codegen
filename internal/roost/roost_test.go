@@ -74,7 +74,7 @@ func TestDefaultManifestUsesOnlyDataEnginePersistence(t *testing.T) {
 	}
 	for path, file := range plan {
 		generated := string(file.Body)
-		for _, forbidden := range []string{"kitcheckpoint", "kitnestwal", "cube-kit/checkpoint", "checkpoint.NewMod", "\n          - checkpoint", "\n          - nestwal"} {
+		for _, forbidden := range []string{"kitcheckpoint", "kitnestwal", "roost-kit/checkpoint", "checkpoint.NewMod", "\n          - checkpoint", "\n          - nestwal"} {
 			if strings.Contains(generated, forbidden) {
 				t.Fatalf("%s retained legacy persistence output %q", path, forbidden)
 			}
@@ -107,7 +107,7 @@ func TestNewProjectSyncPreservesBusinessFiles(t *testing.T) {
 		"internal/bootstrap/generated.go",
 		"internal/service/game/service.go",
 		"configs/generated/gen_table_config.go",
-		"game/bootstrap/nest.go",
+		"internal/registry/nest_gen.go",
 	} {
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("%s missing: %v", rel, err)
@@ -154,7 +154,7 @@ func TestAddProtocolAllocatesIDAndCheckDetectsDuplicate(t *testing.T) {
 		t.Fatalf("id check: %v", err)
 	}
 	duplicate := filepath.Join(root, "protocol", "def", "duplicate.go")
-	if err := os.WriteFile(duplicate, []byte("package protocoldef\n//cube:msg id=10000\n"), 0o644); err != nil {
+	if err := os.WriteFile(duplicate, []byte("package protocoldef\n//roost:msg id=10000\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := CheckIDs(root, m); err == nil {
@@ -1030,7 +1030,7 @@ func TestAddSkillUsesStablePackageAndNeutralDefinition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"schema": "cube.skill/v2"`, `"id": "skill.planet.fireball"`, `"flow": "finish"`} {
+	for _, want := range []string{`"schema": "roost.skill/v2"`, `"id": "skill.planet.fireball"`, `"flow": "finish"`} {
 		if !bytes.Contains(definition, []byte(want)) {
 			t.Errorf("Skill definition missing %q:\n%s", want, definition)
 		}
@@ -1136,7 +1136,7 @@ func TestAddSagaRequiresSteps(t *testing.T) {
 func TestFrameworkMinimumVersionGuard(t *testing.T) {
 	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"saga"}, []string{"saga"})
 	m.Versions.Core = "v1.7.9"
-	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "v1.8.0") {
+	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "v1.10.0") {
 		t.Fatalf("expected framework minimum version guard, got %v", err)
 	}
 	m.Versions.Core, m.Versions.Kit = minimumVersions.Core, minimumVersions.Kit
@@ -1293,16 +1293,16 @@ func TestBootstrapImportsTransitiveDataEngineDependencies(t *testing.T) {
 	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"nest"}, []string{"nest"})
 	bootstrap := renderBootstrap(m)
 	for _, want := range []string{
-		`kitdataengine "github.com/tjbdwanghaibo/cube-kit/dataengine"`,
-		`kitmongo "github.com/tjbdwanghaibo/cube-kit/mongo"`,
-		`kitnats "github.com/tjbdwanghaibo/cube-kit/nats"`,
+		`kitdataengine "github.com/tjbdwanghaibo/roost-kit/dataengine"`,
+		`kitmongo "github.com/tjbdwanghaibo/roost-kit/mongo"`,
+		`kitnats "github.com/tjbdwanghaibo/roost-kit/nats"`,
 		"kitdataengine.NewMod(kitdataengine.WithEntityAccess(EntityAccess))",
 	} {
 		if !strings.Contains(bootstrap, want) {
 			t.Errorf("bootstrap missing transitive dependency %q:\n%s", want, bootstrap)
 		}
 	}
-	for _, forbidden := range []string{"kitcheckpoint", "kitnestwal", "cube-kit/checkpoint", "checkpoint.NewMod"} {
+	for _, forbidden := range []string{"kitcheckpoint", "kitnestwal", "roost-kit/checkpoint", "checkpoint.NewMod"} {
 		if strings.Contains(bootstrap, forbidden) {
 			t.Fatalf("bootstrap retained legacy persistence output %q:\n%s", forbidden, bootstrap)
 		}
@@ -1313,9 +1313,9 @@ func TestBootstrapWiresDataEngineWithEntityAccess(t *testing.T) {
 	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"dataengine", "nest"}, []string{"entity", "nest", "dao"})
 	bootstrap := renderBootstrap(m)
 	for _, want := range []string{
-		`kitdataengine "github.com/tjbdwanghaibo/cube-kit/dataengine"`,
-		`kitmongo "github.com/tjbdwanghaibo/cube-kit/mongo"`,
-		`kitnats "github.com/tjbdwanghaibo/cube-kit/nats"`,
+		`kitdataengine "github.com/tjbdwanghaibo/roost-kit/dataengine"`,
+		`kitmongo "github.com/tjbdwanghaibo/roost-kit/mongo"`,
+		`kitnats "github.com/tjbdwanghaibo/roost-kit/nats"`,
 		"kitdataengine.NewMod(kitdataengine.WithEntityAccess(EntityAccess))",
 		"kitnest.NewMod(EntityAccess)",
 	} {
@@ -1332,8 +1332,8 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 	m := DefaultManifest("planet", "example.com/planet", nil, nil, nil)
 	goMod := renderGoMod(m)
 	for _, want := range []string{
-		"github.com/tjbdwanghaibo/cube-core " + minimumVersions.Core,
-		"github.com/tjbdwanghaibo/cube-kit " + minimumVersions.Kit,
+		"github.com/tjbdwanghaibo/roost-core " + minimumVersions.Core,
+		"github.com/tjbdwanghaibo/roost-kit " + minimumVersions.Kit,
 		"github.com/tjbdwanghaibo/roost-skill " + minimumVersions.Skill,
 	} {
 		if !strings.Contains(goMod, want) {
@@ -1343,7 +1343,7 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 	if strings.Contains(goMod, "replace ") {
 		t.Fatalf("generated release go.mod contains replace directive:\n%s", goMod)
 	}
-	if strings.Contains(goMod, "cube-core latest") || strings.Contains(goMod, "cube-kit latest") || strings.Contains(goMod, "roost-skill latest") {
+	if strings.Contains(goMod, "roost-core latest") || strings.Contains(goMod, "roost-kit latest") || strings.Contains(goMod, "roost-skill latest") {
 		t.Fatalf("go.mod must contain resolved semantic versions, not module queries:\n%s", goMod)
 	}
 	plan, err := renderProject(m)
@@ -1374,7 +1374,7 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 		"new-endpoint:",
 		"new-skill:",
 		"glsvet:",
-		"go run github.com/tjbdwanghaibo/cube-core/cmd/glsvet ./...",
+		"go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet ./...",
 	} {
 		if !strings.Contains(makefile, want) {
 			t.Errorf("generated Makefile missing %q:\n%s", want, makefile)
@@ -1384,7 +1384,7 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 	if strings.Contains(ci, "make deps-update") || strings.Contains(ci, "go get -u") {
 		t.Fatalf("ordinary generated CI must use the committed dependency graph:\n%s", ci)
 	}
-	for _, want := range []string{"go mod verify", "go test -race ./...", "cube-core/cmd/glsvet", "docker compose", "kubectl kustomize"} {
+	for _, want := range []string{"go mod verify", "go test -race ./...", "roost-core/cmd/glsvet", "docker compose", "kubectl kustomize"} {
 		if !strings.Contains(ci, want) {
 			t.Errorf("generated CI missing %q:\n%s", want, ci)
 		}

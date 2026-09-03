@@ -50,9 +50,9 @@ func TestPublishedFrameworkGoModRejectsLocalOrPseudoDependencies(t *testing.T) {
 	for _, test := range []struct {
 		name, goMod, want string
 	}{
-		{"replace", "module example.com/test\nreplace github.com/tjbdwanghaibo/cube-core => ../core\n", "replace directive"},
+		{"replace", "module example.com/test\nreplace github.com/tjbdwanghaibo/roost-core => ../core\n", "replace directive"},
 		{"replace-block", "module example.com/test\nreplace (\n example.com/a => ../a\n)\n", "replace directive"},
-		{"pseudo", "module example.com/test\nrequire github.com/tjbdwanghaibo/cube-core v1.8.1-0.20260826111010-16f057d5e22f\n", "pseudo-version"},
+		{"pseudo", "module example.com/test\nrequire github.com/tjbdwanghaibo/roost-core v1.8.1-0.20260826111010-16f057d5e22f\n", "pseudo-version"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := validatePublishedFrameworkGoMod("example.com/test", "v1.0.0", []byte(test.goMod))
@@ -61,7 +61,7 @@ func TestPublishedFrameworkGoModRejectsLocalOrPseudoDependencies(t *testing.T) {
 			}
 		})
 	}
-	if err := validatePublishedFrameworkGoMod("example.com/test", "v1.0.0", []byte("module example.com/test\nrequire github.com/tjbdwanghaibo/cube-core v1.9.1\n")); err != nil {
+	if err := validatePublishedFrameworkGoMod("example.com/test", "v1.0.0", []byte("module example.com/test\nrequire github.com/tjbdwanghaibo/roost-core v1.9.1\n")); err != nil {
 		t.Fatal(err)
 	}
 }

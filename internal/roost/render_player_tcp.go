@@ -32,7 +32,7 @@ import (
 	"net"
 
 	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/cube-core/gateway"
+	"github.com/tjbdwanghaibo/roost-core/gateway"
 )
 
 // applicationAuthenticator is application-owned. Validate a signed, expiring
@@ -138,9 +138,9 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/cube-core/app"
-	"github.com/tjbdwanghaibo/cube-core/gateway"
-	"github.com/tjbdwanghaibo/cube-core/metrics"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/gateway"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 	accessplayer %q
 	%q
 )
@@ -708,7 +708,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tjbdwanghaibo/cube-core/gateway"
+	"github.com/tjbdwanghaibo/roost-core/gateway"
 	accessplayer %q
 	%q
 )

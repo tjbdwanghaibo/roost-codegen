@@ -2,6 +2,7 @@ package entity
 
 import (
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-codegen/internal/marker"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -12,8 +13,8 @@ import (
 	"strings"
 )
 
-// Marker format: //cube:entity entityKind=EntityKindPlayer
-var markerRe = regexp.MustCompile(`^//cube:entity\s+(.+)$`)
+// Marker format: //roost:entity entityKind=EntityKindPlayer
+var markerRe = marker.Regexp("entity", `\s+(.+)`)
 
 // EntityDef holds parsed entity definition.
 type EntityDef struct {
@@ -135,7 +136,7 @@ func parseDir(dir string) ([]EntityDef, string, error) {
 	return entities, pkg, nil
 }
 
-// extractEntities finds //cube:entity markers and extracts struct info.
+// extractEntities finds //roost:entity markers and extracts struct info.
 func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath string, importMap map[string]ImportDef, methods map[string]map[string]bool) []EntityDef {
 	var entities []EntityDef
 
@@ -308,7 +309,7 @@ func collectEntityImports(ent EntityDef, importMap map[string]ImportDef) []Impor
 		if !ok {
 			continue
 		}
-		if imp.Path == "github.com/tjbdwanghaibo/cube-core/entity" {
+		if imp.Path == "github.com/tjbdwanghaibo/roost-core/entity" {
 			continue
 		}
 		out = append(out, imp)

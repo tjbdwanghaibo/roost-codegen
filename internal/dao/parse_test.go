@@ -134,8 +134,8 @@ func TestParseDefDir(t *testing.T) {
 	if redisDao.KeyType != "int64" {
 		t.Fatalf("expected redis key type int64, got %q", redisDao.KeyType)
 	}
-	if redisDao.Prefix != "cube:test:session" {
-		t.Fatalf("expected redis prefix cube:test:session, got %q", redisDao.Prefix)
+	if redisDao.Prefix != "roost:test:session" {
+		t.Fatalf("expected redis prefix roost:test:session, got %q", redisDao.Prefix)
 	}
 	if redisDao.Version != "Version" {
 		t.Fatalf("expected redis version Version, got %q", redisDao.Version)
@@ -246,7 +246,7 @@ func TestGenerateDao(t *testing.T) {
 	}
 	assertStructFieldsUnexported(t, outFile, "HeroDao")
 	for _, forbidden := range []string{
-		`"github.com/tjbdwanghaibo/cube-core/checkpoint"`,
+		`"github.com/tjbdwanghaibo/roost-core/checkpoint"`,
 		"checkpoint.DirtyTracker",
 		"persistPatchSet",
 		"func (d *HeroDao) PrepareCommit(",
@@ -421,7 +421,7 @@ func TestGenerateRedisDao(t *testing.T) {
 
 	checks := []string{
 		"package testdata",
-		`CacheSessionRedisDAODefaultPrefix = "cube:test:session"`,
+		`CacheSessionRedisDAODefaultPrefix = "roost:test:session"`,
 		"CacheSessionRedisDAOName",
 		`"cache_session"`,
 		"type CacheSessionRedisDAO interface {",
@@ -455,7 +455,7 @@ func TestGenerateRawRedisDao(t *testing.T) {
 		Mode:    "raw",
 		Key:     "Snapshot.InstanceRunID",
 		KeyType: "int64",
-		Prefix:  "cube:test:session",
+		Prefix:  "roost:test:session",
 		Version: "Version",
 		TTL:     "1h",
 	}

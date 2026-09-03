@@ -340,7 +340,7 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		if handler != "" && !validName(handler) {
 			return nil, fmt.Errorf("invalid protocol handler %q", o.Handler)
 		}
-		protocolMarker := "//cube:protocol"
+		protocolMarker := "//roost:protocol"
 		if group := o.Group; group != "" {
 			protocolMarker += " group=" + group
 		}
@@ -348,10 +348,10 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 			protocolMarker += " handler=" + handler
 		}
 		path = "protocol/def/" + snake + ".go"
-		body = fmt.Sprintf("//go:build protocoldef\n\npackage protocoldef\n\ntype %sRequest struct{}\ntype %sResponse struct {\n\tCode int32 `pb:\"1\"`\n\tReason string `pb:\"2\"`\n}\n\n%s\ntype %sProtocol interface {\n\t//cube:msg id=%d\n\t%s(%sRequest) %sResponse\n}\n", pascal, pascal, protocolMarker, pascal, o.ID, pascal, pascal, pascal)
+		body = fmt.Sprintf("//go:build protocoldef\n\npackage protocoldef\n\ntype %sRequest struct{}\ntype %sResponse struct {\n\tCode int32 `pb:\"1\"`\n\tReason string `pb:\"2\"`\n}\n\n%s\ntype %sProtocol interface {\n\t//roost:msg id=%d\n\t%s(%sRequest) %sResponse\n}\n", pascal, pascal, protocolMarker, pascal, o.ID, pascal, pascal, pascal)
 	case "entity":
 		path = "game/entities/" + snake + "/entity.go"
-		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/cube-core/entity\"\n\nconst (\n\tEntityCategory%s entity.EntityCategory = 1\n\tEntityKind%s entity.EntityKind = %d\n)\n\nvar _ = func() struct{} { entity.MustRegisterEntityKindCategory(EntityKind%s, EntityCategory%s); return struct{}{} }()\n\n// I%sEntity is the lock-safe business view used by Nest handlers.\ntype I%sEntity interface { entity.IThreadSafeEntity }\n\n//cube:entity id=%d entityKind=EntityKind%s\ntype %s struct {\n\t*entity.EntityBase\n\tentity.ComponentManager\n\tentity.DaoManager\n}\n", snake, pascal, pascal, o.ID, pascal, pascal, pascal, pascal, o.ID, pascal, pascal)
+		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/roost-core/entity\"\n\nconst (\n\tEntityCategory%s entity.EntityCategory = 1\n\tEntityKind%s entity.EntityKind = %d\n)\n\nvar _ = func() struct{} { entity.MustRegisterEntityKindCategory(EntityKind%s, EntityCategory%s); return struct{}{} }()\n\n// I%sEntity is the lock-safe business view used by Nest handlers.\ntype I%sEntity interface { entity.IThreadSafeEntity }\n\n//roost:entity id=%d entityKind=EntityKind%s\ntype %s struct {\n\t*entity.EntityBase\n\tentity.ComponentManager\n\tentity.DaoManager\n}\n", snake, pascal, pascal, o.ID, pascal, pascal, pascal, pascal, o.ID, pascal, pascal)
 	case "component":
 		return addEntityComponent(root, m, o)
 	case "handler":
@@ -391,7 +391,7 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		body = fmt.Sprintf("package eventdef\n\ntype Event%s struct{}\n", pascal)
 	case "table":
 		path = "configs/schema/" + snake + ".go"
-		body = fmt.Sprintf("package schema\n\n//cube:table name=%s key=ID\ntype %s struct {\n\tID int64 `csv:\"id\" json:\"id\" title:\"ID\" required:\"true\" unique:\"true\"`\n}\n", snake, pascal)
+		body = fmt.Sprintf("package schema\n\n//roost:table name=%s key=ID\ntype %s struct {\n\tID int64 `csv:\"id\" json:\"id\" title:\"ID\" required:\"true\" unique:\"true\"`\n}\n", snake, pascal)
 	case "dao":
 		if strings.TrimSpace(o.Entity) != "" {
 			return addEntityDAO(root, m, o)
@@ -400,13 +400,13 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		body = renderDAODefinition(snake, pascal+"Dao")
 	case "webroute":
 		path = "service/web/" + snake + ".go"
-		body = fmt.Sprintf("package web\n\nimport (\n\t\"context\"\n\t\"github.com/tjbdwanghaibo/cube-core/webroute\"\n)\n\ntype %sResponse struct{}\n\n//cube:web method=GET path=/%s body=raw\nfunc %s(context.Context, *Service, webroute.RawRequest) (%sResponse, error) { return %sResponse{}, nil }\n", pascal, snake, pascal, pascal, pascal)
+		body = fmt.Sprintf("package web\n\nimport (\n\t\"context\"\n\t\"github.com/tjbdwanghaibo/roost-core/webroute\"\n)\n\ntype %sResponse struct{}\n\n//roost:web method=GET path=/%s body=raw\nfunc %s(context.Context, *Service, webroute.RawRequest) (%sResponse, error) { return %sResponse{}, nil }\n", pascal, snake, pascal, pascal, pascal)
 	case "errcode":
 		path = "internal/errors/" + snake + ".go"
-		body = fmt.Sprintf("package errors\n\nimport \"github.com/tjbdwanghaibo/cube-core/errcode\"\n\nvar Err%s = errcode.Define(%d, %q, %q)\n", pascal, o.ID, snake, "TODO")
+		body = fmt.Sprintf("package errors\n\nimport \"github.com/tjbdwanghaibo/roost-core/errcode\"\n\nvar Err%s = errcode.Define(%d, %q, %q)\n", pascal, o.ID, snake, "TODO")
 	case "module":
 		path = "game/controllers/" + snake + "/controller.go"
-		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/cube-core/app\"\n\ntype Controller struct{}\nfunc FromRegistry(*app.Registry) (Controller, error) { return Controller{}, nil }\n", snake)
+		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/roost-core/app\"\n\ntype Controller struct{}\nfunc FromRegistry(*app.Registry) (Controller, error) { return Controller{}, nil }\n", snake)
 	case "saga":
 		if len(o.Steps) == 0 {
 			return nil, fmt.Errorf("saga %s requires -steps", o.Name)
@@ -428,9 +428,9 @@ import (
 	"context"
 	"time"
 
-	fnats "github.com/tjbdwanghaibo/cube-core/nats"
-	"github.com/tjbdwanghaibo/cube-core/saga"
-	kitsaga "github.com/tjbdwanghaibo/cube-kit/saga"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	"github.com/tjbdwanghaibo/roost-core/saga"
+	kitsaga "github.com/tjbdwanghaibo/roost-kit/saga"
 )
 
 const (

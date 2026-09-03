@@ -1,4 +1,4 @@
-// cube webroute generates HTTP route registrations from //cube:web markers.
+// roost webroute generates HTTP route registrations from //roost:web markers.
 package webroute
 
 import (
@@ -11,7 +11,7 @@ import (
 func Run(args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("webroute", flag.ContinueOnError)
 	flags.SetOutput(stdout)
-	dir := flags.String("dir", ".", "directory to scan recursively for //cube:web markers")
+	dir := flags.String("dir", ".", "directory to scan recursively for //roost:web markers")
 	force := flags.Bool("force", false, "regenerate files even when unchanged")
 	if err := flags.Parse(args); err != nil {
 		return err

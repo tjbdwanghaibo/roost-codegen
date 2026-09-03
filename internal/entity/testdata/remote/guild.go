@@ -1,9 +1,9 @@
 package remote
 
 import (
-	"github.com/tjbdwanghaibo/cube-core/dataengine"
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 const (
@@ -43,7 +43,7 @@ func (d *GuildDAO) AcceptMutation(mutation dataengine.Mutation) error {
 	return d.tracker.AcceptVersion(mutation.ExpectedVersion, mutation.NextVersion)
 }
 
-//cube:entity entityKind=EntityKindGuild remote=managed
+//roost:entity entityKind=EntityKindGuild remote=managed
 type Guild struct {
 	*entity.RemoteEntityBase
 	entity.DaoManager

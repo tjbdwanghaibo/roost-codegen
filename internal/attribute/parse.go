@@ -2,17 +2,17 @@ package attribute
 
 import (
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-codegen/internal/marker"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 )
 
-var attributeMarkerRe = regexp.MustCompile(`^//cube:attribute\s+(.+)$`)
+var attributeMarkerRe = marker.Regexp("attribute", `\s+(.+)`)
 
 type rawProfile struct {
 	def      ProfileDef

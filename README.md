@@ -1,12 +1,12 @@
 # roost-codegen
 
-roost 框架的项目脚手架与代码生成工具链：用源码里的标记注释（`//cube:dao`、`//roost:nest` 等）驱动一组 Go 代码生成器，把持久化、同步、协议、事件、配置表这些"写错就丢数据"的样板代码变成可重复生成、可 CI 校验的产物。版本与升级记录以 [CHANGELOG](CHANGELOG.md) 和仓库 release/tag 为准；生成器会在运行前校验框架兼容下限。
+roost 框架的项目脚手架与代码生成工具链：用源码里的标记注释（`//roost:dao`、`//roost:nest` 等）驱动一组 Go 代码生成器，把持久化、同步、协议、事件、配置表这些"写错就丢数据"的样板代码变成可重复生成、可 CI 校验的产物。版本与升级记录以 [CHANGELOG](CHANGELOG.md) 和仓库 release/tag 为准；生成器会在运行前校验框架兼容下限。
 
-生成物依赖 [cube-core](https://github.com/tjbdwanghaibo/cube-core) 运行时（`dataengine`、`entity`、`nest`、`fmap` 等包），见[与 cube-core 的关系](#学习路径与-cube-core-的关系)。
+生成物依赖 [roost-core](https://github.com/tjbdwanghaibo/roost-core) 运行时（`dataengine`、`entity`、`nest`、`fmap` 等包），见[与 roost-core 的关系](#学习路径与-roost-core-的关系)。
 
 文档按三级使用：完全新手先看 [小白逐步操作手册](docs/BEGINNER_WORKBOOK.zh-CN.md)，并在项目里反复运行
 `roost project next`；熟练用户看 [项目生成器完整说明](docs/PROJECT_GENERATOR.zh-CN.md)；维护者再看生成器的
-关键实现细节和 [Roost 实现原理](https://github.com/tjbdwanghaibo/cube-core/blob/main/docs/INTERNALS.md)。
+关键实现细节和 [Roost 实现原理](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/INTERNALS.md)。
 框架仓库与生成项目的质量门禁、兼容矩阵、依赖升级、Release，以及 Shell/Docker/Kubernetes 三种交付方式见
 [CI/CD P0/P1 实施方案](docs/CI_CD_IMPLEMENTATION.zh-CN.md)。
 
@@ -19,15 +19,15 @@ cfggen 的 schema 字段级参考见 [CFGGEN_META](docs/CFGGEN_META.zh-CN.md)。
 
 | 生成器 | 输入标记 / 约定 | 产出 | 解决什么问题 |
 | --- | --- | --- | --- |
-| `dao` | `//cube:dao`、`//cube:redisdao` + 字段 `dao:"..."` tag | `gen_<name>_dao.go`、`gen_<name>_nested.go`、`gen_<name>_redis_dao.go` | 持久化/同步字段的 dirty 追踪、字段级 patch、事务 rollback，全部经生成的 mutator 收口 |
+| `dao` | `//roost:dao`、`//roost:redisdao` + 字段 `dao:"..."` tag | `gen_<name>_dao.go`、`gen_<name>_nested.go`、`gen_<name>_redis_dao.go` | 持久化/同步字段的 dirty 追踪、字段级 patch、事务 rollback，全部经生成的 mutator 收口 |
 | `protocol` | `protocol/def` 下的 `//x:proto` `//x:protocol` `//x:msg` `//x:view` 标记 | `.proto`、pb Go 代码、msgid、player_bind、协议 handler、robot 注册表、协议 manifest | 用 Go struct 单一来源维护协议，也支持从 `.proto` 反向生成（`-reverse-proto`） |
-| `entity` | `//cube:entity entityKind=...` | `<entity>_gen_wire.go` | Entity 工厂、组件/DAO 装配、Snapshot、hook 接线 |
+| `entity` | `//roost:entity entityKind=...` | `<entity>_gen_wire.go` | Entity 工厂、组件/DAO 装配、Snapshot、hook 接线 |
 | `nest` | `//roost:nest target=... [sync] [rollback=state\|undo] [durability=memory\|async\|strict]` | `<source>_nest_gen.go`、`sender/`、`syncsender/`、`game/bootstrap/nest.go` | handler 的 invoke 包装、显式注册与可注入的类型化 Sender |
 | `eventgen` | `event/def` 下 `Event` 前缀 struct + game 目录中 `DealEventXXX` 方法 | `event_def_gen.go`、`event_type_gen.go`、`event_type_impl_gen.go`、`<receiver>_event_gen.go` | 事件类型常量、`Type()` 实现与订阅分发代码 |
-| `tablegen` | `configs/schema` 下 `//cube:table`、`//cube:object`（Go 元数据先行） | Go 访问代码（`configs/generated`）、CSV 模板、CSV→JSON 数据 | 配置表 schema、策划填表模板与运行时数据的一致性 |
+| `tablegen` | `configs/schema` 下 `//roost:table`、`//roost:object`（Go 元数据先行） | Go 访问代码（`configs/generated`）、CSV 模板、CSV→JSON 数据 | 配置表 schema、策划填表模板与运行时数据的一致性 |
 | `cfggen` | 一个 YAML schema 文件（**meta 文件先行**，类似简化版 Luban）：表/对象/bean、字段类型、key/index/ref | 单文件 Go 绑定（行 struct 带 `cfg` tag、`RegisterGeneratedConfigData`、类型化访问器） | 配置定义零手写 Go：只写 meta + 一行注册；ref 在生成期查表存在性与类型一致、运行期由 configdata 查悬空引用 |
-| `attribute` | `//cube:attribute` | `gen_<profile>_attribute.go` | 属性 profile 的计算/聚合代码 |
-| `webroute` | `//cube:web` | 路由注册代码 | HTTP 路由注册不再手写 |
+| `attribute` | `//roost:attribute` | `gen_<profile>_attribute.go` | 属性 profile 的计算/聚合代码 |
+| `webroute` | `//roost:web` | 路由注册代码 | HTTP 路由注册不再手写 |
 | `errcode` | 扫描 `errcode.Define(code, name, msg)` 调用 | `docs/generated/errcode.csv` | 错误码清单导出与查重 |
 | `roost id` | 扫描各类标记中的 `id=/kind=/type=/code=` | —（校验命令） | 按 `roost.yaml` 声明的 ID 空间检查冲突、分配下一个可用 ID |
 
@@ -52,7 +52,7 @@ tables:
 go run github.com/tjbdwanghaibo/roost-codegen/cmd/cfggen -meta ./configs/schema/cfg.yaml -out ./cfg
 ```
 
-业务侧接线只剩一行：`cfg.MustRegisterGeneratedConfigData(reg)`；读取用生成的 `cfg.MonsterTableFrom(snap)`，二级索引生成强类型访问器 `cfg.MonsterBySceneID(snap, 7)`（参数类型来自字段，不传索引名和字符串值）。运行期的悬空引用校验、原子热更、回滚由 cube-core/configdata 承担（`RegisterAutoTable` + `cfg` tag）。接真正 Luban 的方式见 cube-core `examples/lubanreal`（官方 luban CLI 真实生成的端到端示例）。
+业务侧接线只剩一行：`cfg.MustRegisterGeneratedConfigData(reg)`；读取用生成的 `cfg.MonsterTableFrom(snap)`，二级索引生成强类型访问器 `cfg.MonsterBySceneID(snap, 7)`（参数类型来自字段，不传索引名和字符串值）。运行期的悬空引用校验、原子热更、回滚由 roost-core/configdata 承担（`RegisterAutoTable` + `cfg` tag）。接真正 Luban 的方式见 roost-core `examples/lubanreal`（官方 luban CLI 真实生成的端到端示例）。
 
 ## 快速启动
 
@@ -174,7 +174,7 @@ tag 触发的 `framework-release` workflow 会锁定 core/kit/skill 精确版本
 ```go
 package def
 
-//cube:dao coll=heroes db=game dbscope=sid
+//roost:dao coll=heroes db=game dbscope=sid
 type HeroDao struct {
 	Name    string                          // 无 tag：persist + sync 全开
 	Level   int32
@@ -292,11 +292,11 @@ func (d *HeroDao) markItemsKeyDirty(key int64, val int32) {
 
 ### struct 级标记
 
-    //cube:dao coll=<collection> db=<database> [dbscope=global|sid]
+    //roost:dao coll=<collection> db=<database> [dbscope=global|sid]
 
 - `coll=`、`db=` 必填；`dbscope` 默认 `global`，`sid` 表示按服分库（`dataengine.DatabaseServer`）。
 - 标记必须**紧邻 struct**（相邻 1–2 行）或位于该 struct 的 doc 注释组内；标记和 struct 之间可以有普通文档注释。
-- Redis DAO：`//cube:redisdao key=<字段路径> prefix=<键前缀> [mode=ref-hmap|raw] [key_type=...] [version=...] [ttl=<Go duration>] [name=...]`，其中 `key=`、`prefix=` 必填，`mode` 默认 `ref-hmap`，`key_type` 缺省时按字段路径从 struct 定义推断。
+- Redis DAO：`//roost:redisdao key=<字段路径> prefix=<键前缀> [mode=ref-hmap|raw] [key_type=...] [version=...] [ttl=<Go duration>] [name=...]`，其中 `key=`、`prefix=` 必填，`mode` 默认 `ref-hmap`，`key_type` 缺省时按字段路径从 struct 定义推断。
 
 ### 字段级 `dao:"..."` tag
 
@@ -334,27 +334,27 @@ Name string `dao:"persits,sync"`
 
 孤儿标记——标记和 struct 之间隔了别的声明（v1.4 会静默丢弃，得到一个"不会持久化的 DAO"）：
 
-    parse definitions: hero.go: line 3: //cube:dao marker is not attached to a struct
+    parse definitions: hero.go: line 3: //roost:dao marker is not attached to a struct
     (it must be adjacent to, or inside the doc comment of, a struct type declaration)
 
 分组 `type (...)` 声明只放一个标记——第二个 struct 消费同一标记时报错（否则多个类型静默写进同一 collection）：
 
 ```go
-//cube:dao coll=heroes db=game
+//roost:dao coll=heroes db=game
 type (
 	AlphaDao struct{ Name string }
 	BetaDao  struct{ Name string }
 )
 ```
 
-    parse definitions: hero.go: line 3: //cube:dao marker binds to multiple structs;
+    parse definitions: hero.go: line 3: //roost:dao marker binds to multiple structs;
     grouped type declarations need one marker directly above each struct
 
 缺必填参数：
 
-    parse definitions: hero.go: line 3: //cube:dao on HeroDao requires coll= and db=
+    parse definitions: hero.go: line 3: //roost:dao on HeroDao requires coll= and db=
 
-其余硬错误：`//cube:dao` 后无任何参数、`persist` 与 `nopersist` 同写、未知 `map=` 值、`map=fast|sharded` 配非 string/整数 key、字段私有存储名与框架保留名（`id`/`tracker`/`persistPatch*`）冲突。
+其余硬错误：`//roost:dao` 后无任何参数、`persist` 与 `nopersist` 同写、未知 `map=` 值、`map=fast|sharded` 配非 string/整数 key、字段私有存储名与框架保留名（`id`/`tracker`/`persistPatch*`）冲突。
 
 ### 孤儿生成文件清理
 
@@ -464,7 +464,7 @@ func handlerTransfer(owner BagOwner, target TargetOwner, itemID int64) error { /
 
 `internal/dao/failfast_test.go` 则把上文每一条 fail-fast 报错固化为回归测试——每条错误都对应一个历史上真实存在过的静默陷阱。
 
-## 学习路径与 cube-core 的关系
+## 学习路径与 roost-core 的关系
 
 建议阅读顺序（由浅入深）：
 
@@ -473,7 +473,7 @@ func handlerTransfer(owner BagOwner, target TargetOwner, itemID int64) error { /
 3. **读实现**：每个生成器都是同一结构：`parse.go`（标记/AST → 中间定义）→ `gen.go` + `template_*.go`（text/template → `format.Source` → `WriteIfChanged`）→ `main.go`（flag 与文件编排）。从 `internal/dao` 读起，其余生成器同构。
 4. **编排层**：`internal/roost/generate.go`（顺序、`--changed`/`--check`/`--force`）、`manifest.go`（roost.yaml 校验）、`add.go`（脚手架）、`id.go`（ID 空间扫描）。
 
-**与 cube-core 的关系**：roost-codegen 只在**生成期**运行，本身不被业务依赖；生成出来的代码在**运行期**依赖 cube-core 提供的接口与容器——`dataengine.Tracker`/`DirtyHook`/`Mutation`、`entity.DaoInterface`、`nest.RollbackTx`/`RollbackSnapshotter`/`MutationParticipant`、`fmap`、`migration.MigrateDAO`，以及 `go.mongodb.org/mongo-driver/v2/bson`。升级 cube-core 后重新生成即可让产物对齐新接口；更新策略由 `roost.yaml` 的 `versions` 字段统一管理。
+**与 roost-core 的关系**：roost-codegen 只在**生成期**运行，本身不被业务依赖；生成出来的代码在**运行期**依赖 roost-core 提供的接口与容器——`dataengine.Tracker`/`DirtyHook`/`Mutation`、`entity.DaoInterface`、`nest.RollbackTx`/`RollbackSnapshotter`/`MutationParticipant`、`fmap`、`migration.MigrateDAO`，以及 `go.mongodb.org/mongo-driver/v2/bson`。升级 roost-core 后重新生成即可让产物对齐新接口；更新策略由 `roost.yaml` 的 `versions` 字段统一管理。
 
 ## 从 v1.4 升级到 v1.5
 
@@ -481,9 +481,9 @@ v1.5 的主题是把 DAO 解析从"静默容错"改为 **fail-fast**，以下行
 
 1. **`dao:"map=fast"` 这类只写辅助选项的 tag 直接报错**。v1.4 中它会静默关闭 persist 与 sync（数据丢失陷阱）；按原意图改写为 `dao:"nopersist,nosync,map=fast"` 或 `dao:"persist,sync,map=fast"`。
 2. **未知选项、未知 `map=` 值、`persist` 与 `nopersist` 冲突均为解析错误**，不再被忽略。
-3. **孤儿标记报错**：`//cube:dao` 没有绑定到任何 struct（隔了其他声明）不再被静默丢弃。
+3. **孤儿标记报错**：`//roost:dao` 没有绑定到任何 struct（隔了其他声明）不再被静默丢弃。
 4. **分组声明双绑定报错**：一个标记命中 `type (...)` 中多个 struct 直接失败；每个 struct 上方各放一个标记。
 5. **产物文件名修正**：`HeroDao` 的产物从 `gen_hero_dao_dao.go` 修正为 `gen_hero_dao.go`，旧文件会被孤儿回收自动清理。
 6. **孤儿回收覆盖"删光定义"场景**：删除或改名定义后，对应旧生成文件在下次生成时自动移除（仅限带 `DO NOT EDIT` 头的生成文件，手写文件不受影响）。
 7. **DAO 存储字段私有化**（v1.4 引入，v1.5 延续）：业务读写必须走生成的方法。这是有意的源码不兼容变更，升级后重新生成 DAO 并把直接字段访问迁移为方法调用。
-8. 标记与 struct 之间**允许普通 doc 注释**（v1.5 放宽）：`//cube:dao` 可以放在 doc 注释组最上方。
+8. 标记与 struct 之间**允许普通 doc 注释**（v1.5 放宽）：`//roost:dao` 可以放在 doc 注释组最上方。

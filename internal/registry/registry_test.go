@@ -31,10 +31,10 @@ func writeProject(t *testing.T, files map[string]string) string {
 // the phase list rather than from the order files happen to be walked in.
 func TestScanOrdersByPhaseThenOrderThenPath(t *testing.T) {
 	root := writeProject(t, map[string]string{
-		"game/z/z.go": "package z\n\n//cube:register phase=entity\nfunc RegisterEntity() {}\n",
-		"game/a/a.go": "package a\n\n//cube:register phase=component\nfunc RegisterComponent() {}\n",
-		"game/b/b.go": "package b\n\n//cube:register phase=component order=-10\nfunc RegisterScheduler() {}\n",
-		"game/c/c.go": "package c\n\n//cube:register phase=kind\nfunc RegisterKinds() {}\n",
+		"game/z/z.go": "package z\n\n//roost:register phase=entity\nfunc RegisterEntity() {}\n",
+		"game/a/a.go": "package a\n\n//roost:register phase=component\nfunc RegisterComponent() {}\n",
+		"game/b/b.go": "package b\n\n//roost:register phase=component order=-10\nfunc RegisterScheduler() {}\n",
+		"game/c/c.go": "package c\n\n//roost:register phase=kind\nfunc RegisterKinds() {}\n",
 	})
 	got, err := Scan(root, "example.com/planet")
 	if err != nil {
@@ -70,7 +70,7 @@ func TestScanIsDeterministicAcrossRuns(t *testing.T) {
 	files := map[string]string{}
 	for _, name := range []string{"alpha", "beta", "gamma", "delta", "epsilon", "zeta"} {
 		files["game/components/"+name+"/"+name+".go"] =
-			"package " + name + "\n\n//cube:register phase=component\nfunc RegisterComponent() {}\n"
+			"package " + name + "\n\n//roost:register phase=component\nfunc RegisterComponent() {}\n"
 	}
 	root := writeProject(t, files)
 
@@ -99,16 +99,16 @@ func TestScanRejectsUnusableMarkers(t *testing.T) {
 		source string
 		want   string
 	}{
-		{"missing phase", "//cube:register\nfunc RegisterX() {}", "missing phase="},
-		{"empty phase", "//cube:register phase=\nfunc RegisterX() {}", "missing phase="},
-		{"unknown phase", "//cube:register phase=whenever\nfunc RegisterX() {}", "unknown phase"},
-		{"unknown option", "//cube:register phase=entity mode=lazy\nfunc RegisterX() {}", "unknown marker option"},
-		{"non-integer order", "//cube:register phase=entity order=soon\nfunc RegisterX() {}", "non-integer order"},
-		{"takes parameters", "//cube:register phase=entity\nfunc RegisterX(n int) {}", "takes parameters"},
-		{"unexported", "//cube:register phase=entity\nfunc registerX() {}", "unexported function"},
-		{"two results", "//cube:register phase=entity\nfunc RegisterX() (int, error) { return 0, nil }", "returns 2 values"},
-		{"non-error result", "//cube:register phase=entity\nfunc RegisterX() int { return 0 }", "non-error value"},
-		{"on a method", "type T struct{}\n\n//cube:register phase=entity\nfunc (T) RegisterX() {}", "on method"},
+		{"missing phase", "//roost:register\nfunc RegisterX() {}", "missing phase="},
+		{"empty phase", "//roost:register phase=\nfunc RegisterX() {}", "missing phase="},
+		{"unknown phase", "//roost:register phase=whenever\nfunc RegisterX() {}", "unknown phase"},
+		{"unknown option", "//roost:register phase=entity mode=lazy\nfunc RegisterX() {}", "unknown marker option"},
+		{"non-integer order", "//roost:register phase=entity order=soon\nfunc RegisterX() {}", "non-integer order"},
+		{"takes parameters", "//roost:register phase=entity\nfunc RegisterX(n int) {}", "takes parameters"},
+		{"unexported", "//roost:register phase=entity\nfunc registerX() {}", "unexported function"},
+		{"two results", "//roost:register phase=entity\nfunc RegisterX() (int, error) { return 0, nil }", "returns 2 values"},
+		{"non-error result", "//roost:register phase=entity\nfunc RegisterX() int { return 0 }", "non-error value"},
+		{"on a method", "type T struct{}\n\n//roost:register phase=entity\nfunc (T) RegisterX() {}", "on method"},
 	} {
 		root := writeProject(t, map[string]string{
 			"game/x/x.go": "package x\n\n" + testCase.source + "\n",
@@ -123,7 +123,7 @@ func TestScanRejectsUnusableMarkers(t *testing.T) {
 	}
 	// The valid phases must be listed, or the author cannot fix the mistake.
 	root := writeProject(t, map[string]string{
-		"game/x/x.go": "package x\n\n//cube:register phase=whenever\nfunc RegisterX() {}\n",
+		"game/x/x.go": "package x\n\n//roost:register phase=whenever\nfunc RegisterX() {}\n",
 	})
 	_, err := Scan(root, "example.com/planet")
 	if err == nil || !strings.Contains(err.Error(), "component") {
@@ -135,11 +135,11 @@ func TestScanRejectsUnusableMarkers(t *testing.T) {
 // registration in a _test.go file would be compiled into production startup.
 func TestScanIgnoresTestdataVendorAndTestFiles(t *testing.T) {
 	root := writeProject(t, map[string]string{
-		"game/real/real.go":       "package real\n\n//cube:register phase=entity\nfunc RegisterEntity() {}\n",
-		"game/real/real_test.go":  "package real\n\n//cube:register phase=entity\nfunc RegisterFromTest() {}\n",
-		"game/real/testdata/x.go": "package testdata\n\n//cube:register phase=entity\nfunc RegisterFromTestdata() {}\n",
-		"vendor/dep/dep.go":       "package dep\n\n//cube:register phase=entity\nfunc RegisterFromVendor() {}\n",
-		".hidden/hidden.go":       "package hidden\n\n//cube:register phase=entity\nfunc RegisterFromHidden() {}\n",
+		"game/real/real.go":       "package real\n\n//roost:register phase=entity\nfunc RegisterEntity() {}\n",
+		"game/real/real_test.go":  "package real\n\n//roost:register phase=entity\nfunc RegisterFromTest() {}\n",
+		"game/real/testdata/x.go": "package testdata\n\n//roost:register phase=entity\nfunc RegisterFromTestdata() {}\n",
+		"vendor/dep/dep.go":       "package dep\n\n//roost:register phase=entity\nfunc RegisterFromVendor() {}\n",
+		".hidden/hidden.go":       "package hidden\n\n//roost:register phase=entity\nfunc RegisterFromHidden() {}\n",
 	})
 	got, err := Scan(root, "example.com/planet")
 	if err != nil {
@@ -170,7 +170,7 @@ func TestGeneratedAggregateParsesAndImportsWhatItUses(t *testing.T) {
 			true,
 		},
 	} {
-		content, err := render(testCase.registrations)
+		content, err := render("example.com/p", testCase.registrations)
 		if err != nil {
 			t.Fatalf("%s: %v", testCase.label, err)
 		}
@@ -201,7 +201,7 @@ func TestGeneratedAggregateParsesAndImportsWhatItUses(t *testing.T) {
 // (game/entities/player and game/components/player), and the aliases must not
 // collide or the generated file will not compile.
 func TestRenderDisambiguatesSameBaseNamePackages(t *testing.T) {
-	content, err := render([]Registration{
+	content, err := render("example.com/p", []Registration{
 		{ImportPath: "example.com/p/game/entities/player", Func: "RegisterEntity", Phase: "entity"},
 		{ImportPath: "example.com/p/game/components/player", Func: "RegisterComponent", Phase: "component"},
 		{ImportPath: "example.com/p/game/view/player", Func: "RegisterView", Phase: "pre"},
@@ -234,8 +234,8 @@ func TestRenderDisambiguatesSameBaseNamePackages(t *testing.T) {
 // the generator should say so rather than emit a duplicate call.
 func TestScanRejectsDuplicateMarkersOnOneFunction(t *testing.T) {
 	root := writeProject(t, map[string]string{
-		"game/x/x.go": "package x\n\n//cube:register phase=entity\nfunc RegisterEntity() {}\n",
-		"game/x/y.go": "package x\n\n//cube:register phase=component\nfunc RegisterEntity() {}\n",
+		"game/x/x.go": "package x\n\n//roost:register phase=entity\nfunc RegisterEntity() {}\n",
+		"game/x/y.go": "package x\n\n//roost:register phase=component\nfunc RegisterEntity() {}\n",
 	})
 	_, err := Scan(root, "example.com/planet")
 	if err == nil || !strings.Contains(err.Error(), "marked twice") {
@@ -256,14 +256,14 @@ func TestGenerateSkipsUnchangedFile(t *testing.T) {
 	root := t.TempDir()
 	registrations := []Registration{{ImportPath: "example.com/p/game/a", Func: "RegisterComponent", Phase: "component"}}
 
-	changed, err := Generate(root, registrations)
+	changed, err := Generate(root, "example.com/p", registrations)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !changed {
 		t.Fatal("first Generate reported no change")
 	}
-	changed, err = Generate(root, registrations)
+	changed, err = Generate(root, "example.com/p", registrations)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestGenerateSkipsUnchangedFile(t *testing.T) {
 	}
 
 	registrations = append(registrations, Registration{ImportPath: "example.com/p/game/b", Func: "RegisterEntity", Phase: "entity"})
-	changed, err = Generate(root, registrations)
+	changed, err = Generate(root, "example.com/p", registrations)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,11 +313,17 @@ func TestRunRefusesWhenAHandWrittenAggregatorIsStillPresent(t *testing.T) {
 			fires: true,
 		},
 		{
+			label: "old nest aggregate location",
+			path:  "game/bootstrap/nest.go",
+			body:  "package bootstrap\n\nfunc RegisterNestHandlers() {}\n",
+			fires: true,
+		},
+		{
 			// The same path may hold unrelated code after the migration; only
-			// the aggregator function itself is the signal.
+			// the aggregator content itself is the signal.
 			label: "same path without the aggregator function",
 			path:  "game/bootstrap/register.go",
-			body:  "package bootstrap\n\nimport \"sync\"\n\nvar nestOnce sync.Once\n",
+			body:  "package bootstrap\n\nfunc Helper() {}\n",
 			fires: false,
 		},
 	} {
@@ -327,7 +333,7 @@ func TestRunRefusesWhenAHandWrittenAggregatorIsStillPresent(t *testing.T) {
 			if err == nil {
 				t.Fatalf("%s: Run proceeded alongside a hand-written aggregator", testCase.label)
 			}
-			for _, want := range []string{testCase.path, OutputPath, "//cube:register", "roost generate"} {
+			for _, want := range []string{testCase.path, OutputPath, "//roost:register", "roost generate"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("%s: guard message is missing %q:\n%s", testCase.label, want, err)
 				}
@@ -356,5 +362,28 @@ func TestRunWritesAValidAggregateForAProjectWithNoMarkers(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "func RegisterAll() error") {
 		t.Fatalf("the empty aggregate does not expose RegisterAll:\n%s", raw)
+	}
+}
+
+// The generated nest aggregate lives in the registry package itself. A package
+// cannot import itself, so a same-package registration is called unqualified
+// and must not appear in the import block.
+func TestRenderCallsSamePackageRegistrationsUnqualified(t *testing.T) {
+	content, err := render("example.com/p", []Registration{
+		{ImportPath: "example.com/p/internal/registry", Func: "RegisterNestHandlers", Phase: "nest"},
+		{ImportPath: "example.com/p/game/a", Func: "RegisterComponent", Phase: "component"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	if strings.Contains(text, `"example.com/p/internal/registry"`) {
+		t.Fatalf("aggregate imports its own package:\n%s", text)
+	}
+	if !strings.Contains(text, "\tRegisterNestHandlers()\n") {
+		t.Fatalf("same-package registration is not called unqualified:\n%s", text)
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "generated.go", content, parser.ParseComments); err != nil {
+		t.Fatalf("generated source does not parse: %v\n%s", err, content)
 	}
 }

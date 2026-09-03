@@ -23,8 +23,8 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // used only as an offline/bootstrap go.mod baseline and as compatibility
 // guards for users that intentionally pin a release.
 var minimumVersions = VersionSpec{
-	Core:    "v1.8.0",
-	Kit:     "v1.8.0",
+	Core:    "v1.10.0",
+	Kit:     "v1.10.0",
 	Skill:   "v1.9.0",
 	Codegen: "v1.7.0",
 }

@@ -151,11 +151,6 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 			return nil, err
 		}
 	}
-	if hasFeature(m, "nest") {
-		if err := addGo("game/bootstrap/register.go", "package bootstrap\n\nimport \"sync\"\n\nvar nestOnce sync.Once\n", false); err != nil {
-			return nil, err
-		}
-	}
 	if hasFeature(m, "nettransport-quic") || hasFeature(m, "nettransport-kcp") || hasFeature(m, "nettransport-udp") {
 		if err := addGo("internal/transport/generated.go", renderReplication(m), true); err != nil {
 			return nil, err
@@ -171,10 +166,10 @@ func renderReplication(m Manifest) string {
 	if hasFeature(m, "nettransport-udp") {
 		b.WriteString("\t\"net\"\n")
 	}
-	b.WriteString("\tcoreentitysync \"github.com/tjbdwanghaibo/cube-core/entitysync\"\n")
-	b.WriteString("\tcorerep \"github.com/tjbdwanghaibo/cube-core/statesync\"\n")
-	b.WriteString("\tkitrep \"github.com/tjbdwanghaibo/cube-kit/nettransport\"\n")
-	b.WriteString("\tkitsync \"github.com/tjbdwanghaibo/cube-kit/room\"\n)\n\n")
+	b.WriteString("\tcoreentitysync \"github.com/tjbdwanghaibo/roost-core/entitysync\"\n")
+	b.WriteString("\tcorerep \"github.com/tjbdwanghaibo/roost-core/statesync\"\n")
+	b.WriteString("\tkitrep \"github.com/tjbdwanghaibo/roost-kit/nettransport\"\n")
+	b.WriteString("\tkitsync \"github.com/tjbdwanghaibo/roost-kit/room\"\n)\n\n")
 	b.WriteString("func AsyncConfig() kitnet.AsyncTransportConfig { return kitnet.DefaultAsyncTransportConfig() }\n\n")
 	b.WriteString("type SessionResolver func(coreentitysync.SubscriberRef) (corestate.SessionID, error)\n\n")
 	b.WriteString("func NewRoomSink(async *kitnet.AsyncTransport, resolve SessionResolver) (*kitroom.RoomTransportSink, error) {\n")
@@ -201,8 +196,8 @@ go 1.25.0
 // bootstrap file starts at the supported minimum and roost project deps
 // resolves all three direct framework modules together to their latest tags.
 require (
-	github.com/tjbdwanghaibo/cube-core %s
-	github.com/tjbdwanghaibo/cube-kit %s
+	github.com/tjbdwanghaibo/roost-core %s
+	github.com/tjbdwanghaibo/roost-kit %s
 	github.com/tjbdwanghaibo/roost-skill %s
 )
 `, m.Project.Module,
@@ -249,8 +244,8 @@ func main() {
 
 func renderBootstrap(m Manifest) string {
 	imports := map[string]string{
-		"github.com/tjbdwanghaibo/cube-core/app":           "",
-		"github.com/tjbdwanghaibo/cube-core/app/buildinfo": "",
+		"github.com/tjbdwanghaibo/roost-core/app":           "",
+		"github.com/tjbdwanghaibo/roost-core/app/buildinfo": "",
 	}
 	allMods := allProjectMods(m)
 	// Persistence and Remote Entity constructors require instance-scoped
@@ -259,7 +254,7 @@ func renderBootstrap(m Manifest) string {
 	// without generating Nest handlers.
 	instanceRuntime := contains(allMods, "dataengine") || contains(allMods, "nest") || contains(allMods, "remote_entity")
 	if instanceRuntime {
-		imports["github.com/tjbdwanghaibo/cube-core/entity"] = ""
+		imports["github.com/tjbdwanghaibo/roost-core/entity"] = ""
 	}
 	for _, name := range allMods {
 		spec := modCatalog[name]
@@ -372,7 +367,7 @@ func renderService(name string) string {
 import (
 	"context"
 
-	"github.com/tjbdwanghaibo/cube-core/app"
+	"github.com/tjbdwanghaibo/roost-core/app"
 )
 
 type Service struct{}
@@ -395,7 +390,7 @@ var _ app.Service = (*Service)(nil)
 func renderServiceManagers(name string) string {
 	return fmt.Sprintf(`package %s
 
-import "github.com/tjbdwanghaibo/cube-core/app"
+import "github.com/tjbdwanghaibo/roost-core/app"
 
 // Managers returns the in-memory singleton managers this service starts.
 //
@@ -491,7 +486,7 @@ WORKLOAD ?=
 COMMIT := $(shell git rev-parse --short HEAD)
 BUILD_TIME := $(shell git show -s --format=%%cI HEAD)
 DIRTY := $(shell git status --porcelain)
-LDFLAGS := -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Version=$(VERSION) -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Commit=$(COMMIT) -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.BuildTime=$(BUILD_TIME) -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Dirty=$(DIRTY)
+LDFLAGS := -X github.com/tjbdwanghaibo/roost-core/app/buildinfo.Version=$(VERSION) -X github.com/tjbdwanghaibo/roost-core/app/buildinfo.Commit=$(COMMIT) -X github.com/tjbdwanghaibo/roost-core/app/buildinfo.BuildTime=$(BUILD_TIME) -X github.com/tjbdwanghaibo/roost-core/app/buildinfo.Dirty=$(DIRTY)
 
 .PHONY: help sync project-upgrade deps-update roost-up codegen-up next doctor fmt fmt-check vet glsvet test test-race build run generate generate-changed check-generated config-check config-check-all player-tcp-enable player-tcp-disable id-check ci cicd-check release-check image-build compose-check k8s-render k8s-check deploy-shell rollback-shell deploy-docker rollback-docker deploy-k8s rollback-k8s dev-up dev-down dev-logs clean
 .PHONY: new-service add-mod new-access new-transport new-module new-protocol new-entity new-component new-handler new-lifecycle new-endpoint new-skill new-event new-table new-dao new-webroute new-errcode new-saga
@@ -520,7 +515,7 @@ fmt-check:
 vet:
 	go vet ./...
 glsvet:
-	go run github.com/tjbdwanghaibo/cube-core/cmd/glsvet ./...
+	go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet ./...
 test:
 	go test ./...
 test-race:
@@ -682,7 +677,7 @@ jobs:
       - if: runner.os == 'Linux'
         run: go vet ./...
       - if: runner.os == 'Linux'
-        run: go run github.com/tjbdwanghaibo/cube-core/cmd/glsvet ./...
+        run: go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet ./...
       - if: runner.os == 'Linux'
         run: go test -race ./...
 
@@ -777,7 +772,7 @@ ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_TIME=unknown
 RUN CGO_ENABLED=0 go build -trimpath \
-    -ldflags "-s -w -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Version=${VERSION} -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.Commit=${COMMIT} -X github.com/tjbdwanghaibo/cube-core/app/buildinfo.BuildTime=${BUILD_TIME}" \
+    -ldflags "-s -w -X github.com/tjbdwanghaibo/roost-core/app/buildinfo.Version=${VERSION} -X github.com/tjbdwanghaibo/roost-core/app/buildinfo.Commit=${COMMIT} -X github.com/tjbdwanghaibo/roost-core/app/buildinfo.BuildTime=${BUILD_TIME}" \
     -o /out/%s . && \
     CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/healthprobe ./cmd/healthprobe
 %s

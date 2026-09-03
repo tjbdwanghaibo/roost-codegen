@@ -13,7 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/tjbdwanghaibo/cube-core/gateway"
+	"github.com/tjbdwanghaibo/roost-core/gateway"
 )
 
 var (
@@ -344,8 +344,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/viper"
-	"github.com/tjbdwanghaibo/cube-core/app"
-	corenest "github.com/tjbdwanghaibo/cube-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	%q
 	protocolbootstrap %q
 )

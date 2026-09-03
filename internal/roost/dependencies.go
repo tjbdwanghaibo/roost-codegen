@@ -118,8 +118,8 @@ func updateFrameworkDependencies(root string, manifest Manifest, stdout, stderr 
 	ctx, cancel := context.WithTimeout(context.Background(), dependencyUpdateTimeout)
 	defer cancel()
 	queries := []string{
-		"github.com/tjbdwanghaibo/cube-core@" + normalizedVersionPolicy(manifest.Versions.Core),
-		"github.com/tjbdwanghaibo/cube-kit@" + normalizedVersionPolicy(manifest.Versions.Kit),
+		"github.com/tjbdwanghaibo/roost-core@" + normalizedVersionPolicy(manifest.Versions.Core),
+		"github.com/tjbdwanghaibo/roost-kit@" + normalizedVersionPolicy(manifest.Versions.Kit),
 		"github.com/tjbdwanghaibo/roost-skill@" + normalizedVersionPolicy(manifest.Versions.Skill),
 	}
 	if err := run(ctx, absRoot, stdout, stderr, append([]string{"get"}, queries...)...); err != nil {

@@ -3,7 +3,7 @@ package def
 // VarietyDao exercises the explicit tag intents and every map mode so the
 // golden files lock those template branches too.
 //
-//cube:dao coll=varieties db=game
+//roost:dao coll=varieties db=game
 type VarietyDao struct {
 	PersistOnly int64            `dao:"persist"`
 	SyncOnly    int64            `dao:"nopersist,sync"`
@@ -12,7 +12,7 @@ type VarietyDao struct {
 	ShardedTags map[int32]string `dao:"persist,sync,map=sharded"`
 }
 
-//cube:redisdao mode=raw key=RunID prefix=cube:test:raw
+//roost:redisdao mode=raw key=RunID prefix=roost:test:raw
 type RawSession struct {
 	RunID int64
 	State int32

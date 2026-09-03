@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-const coreEntityImport = "github.com/tjbdwanghaibo/cube-core/entity"
+const coreEntityImport = "github.com/tjbdwanghaibo/roost-core/entity"
 
 // addEntityComponent creates a component in its owning Entity package and
 // updates the Entity aggregate in one operation. A component generated in an
@@ -315,10 +315,10 @@ func renderEntityComponent(pkg, entityType, name, componentType string, id int64
 import (
 	"fmt"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
-//cube:component type=%d
+//roost:component type=%d
 const CompType%s entity.ComponentType = %d
 
 // %sComponent owns %s gameplay logic. Persistent or replicated state should
@@ -358,7 +358,7 @@ func (component *%sComponent) Owner() *%s { return component.owner }
 }
 
 func renderDAODefinition(collection, typeName string) string {
-	return fmt.Sprintf("package dbdef\n\n//cube:dao coll=%s db=game\ntype %s struct {\n\t// Add domain fields here. Example:\n\t// Name string `bson:\"name\" dao:\"persist,sync\"`\n\t// Never declare ID/id or tracker: codegen owns identity and dirty tracking.\n}\n", collection, typeName)
+	return fmt.Sprintf("package dbdef\n\n//roost:dao coll=%s db=game\ntype %s struct {\n\t// Add domain fields here. Example:\n\t// Name string `bson:\"name\" dao:\"persist,sync\"`\n\t// Never declare ID/id or tracker: codegen owns identity and dirty tracking.\n}\n", collection, typeName)
 }
 
 func writeRelatedBusinessFiles(entityPath string, entityBefore, entityBody []byte, newPath string, newBody []byte) error {

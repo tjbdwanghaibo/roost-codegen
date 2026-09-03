@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/tjbdwanghaibo/cube-core/entity"
-	"github.com/tjbdwanghaibo/cube-core/nest"
 	"github.com/tjbdwanghaibo/cube/game/clientsync"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 var registerEntityOnce sync.Once

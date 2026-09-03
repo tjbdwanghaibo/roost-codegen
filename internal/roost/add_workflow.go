@@ -33,7 +33,7 @@ func addEntityLifecycle(root string, manifest Manifest, options AddOptions) ([]s
 		return nil, fmt.Errorf("Entity lifecycle requires the instance Entity runtime published by Nest; run: roost add mod nest -service %s", service)
 	}
 	persistenceAlias := "kitdataengine"
-	persistenceImport := "github.com/tjbdwanghaibo/cube-kit/dataengine"
+	persistenceImport := "github.com/tjbdwanghaibo/roost-kit/dataengine"
 	path := filepath.Join(root, "game", "lifecycle", entityName+".go")
 	if _, err := os.Stat(path); err == nil {
 		return nil, fmt.Errorf("%s already exists", relativeSlash(root, path))
@@ -47,10 +47,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tjbdwanghaibo/cube-core/app"
-	"github.com/tjbdwanghaibo/cube-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/entity"
 	{{PERSISTENCE_IMPORT}}
-	"github.com/tjbdwanghaibo/cube-kit/mods"
+	"github.com/tjbdwanghaibo/roost-kit/mods"
 	%s %q
 )
 
@@ -294,8 +294,8 @@ func renderNestController(domain string) string {
 import (
 	"fmt"
 
-	"github.com/tjbdwanghaibo/cube-core/app"
-	corenest "github.com/tjbdwanghaibo/cube-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 )
 
 type Controller struct {

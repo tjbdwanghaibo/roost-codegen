@@ -157,12 +157,12 @@ func buildImportBlock(ent EntityDef, needsFmt, needsDataEngine, needsNest bool) 
 		}
 	}
 	if needsDataEngine {
-		local = append(local, `"github.com/tjbdwanghaibo/cube-core/dataengine"`)
+		local = append(local, `"github.com/tjbdwanghaibo/roost-core/dataengine"`)
 	}
 	if needsNest {
-		local = append(local, `"github.com/tjbdwanghaibo/cube-core/nest"`)
+		local = append(local, `"github.com/tjbdwanghaibo/roost-core/nest"`)
 	}
-	local = append(local, `"github.com/tjbdwanghaibo/cube-core/entity"`)
+	local = append(local, `"github.com/tjbdwanghaibo/roost-core/entity"`)
 	groups = append(groups, local)
 
 	var b strings.Builder
@@ -201,7 +201,7 @@ var registerEntityOnce sync.Once
 
 // RegisterEntity registers the {{.Entity.Name}} entity builder.
 //
-//cube:register phase=entity
+//roost:register phase=entity
 func RegisterEntity() {
 	registerEntityOnce.Do(func() {
 		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{

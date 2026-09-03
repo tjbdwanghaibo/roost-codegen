@@ -1,6 +1,6 @@
 package def
 
-//cube:dao coll=heroes db=game dbscope=sid
+//roost:dao coll=heroes db=game dbscope=sid
 type HeroDao struct {
 	Name    string
 	Level   int32
