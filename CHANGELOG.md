@@ -52,6 +52,27 @@
   tag 未存在、无 replace、工作区干净、`GOWORK=off` 下 build/vet/test 通过）。
   由 tag push 触发的 CI 运行在 tag 已存在之后，能报告但阻止不了。
 
+### Changed
+
+- **`go.mod` 的 go 指令 1.26.5 → 1.27.0**，四仓（core / kit / codegen / service）与
+  `go.work` 统一到同一条线上。取 1.27.0 而不是当前最新的 1.27.1：一个补丁级的 go 指令
+  什么都买不到，还会让停在 1.27.0 的工具链去下载一个新工具链。
+
+  这条不是整理格式，它有一个**外溢后果**必须写下来。消费方仓库把本仓当**工具依赖**
+  接进来时（`go get -tool .../cmd/servicerpc`，让 `GOWORK=off` 下也能 `go generate`），
+  `go mod tidy` 会把消费方自己的 go 指令顶到本仓的高度，而且**手工按回去不管用**——
+  下一次 `go mod tidy` 又顶回来。`roost-service` 就是这么从 1.25.0 变成 1.26.5 的。
+  所以一个生成器的 go 指令是**每个消费它的仓库都要满足的下限**，不是本仓的私事。
+
+- **`ci/framework-release.yaml` 的 `consumer_go` 从 `[1.25.x, 1.26.x]` 改为 `[1.27.x]`**，
+  `framework-compat.yml` 的矩阵与 `go work edit -go=` 同步。
+
+  这是上一条的直接代价，值得单独列出来而不是藏在"顺带"里：**1.25.x / 1.26.x 两条
+  consumer lane 没了**。core 和 kit 的 go 指令是 1.27.0，那两个工具链构建不了它们——
+  留着那两行不是"还在测老版本"，是让 release 矩阵红着。compat workflow 里那句
+  "The framework runtime modules support the lower consumer lane" 的注释也随之作废，
+  已改写成为什么不能再往下 pin。
+
 ### Changed（破坏性：源码标记 //cube: → //roost:，模块路径与版本下限）
 
 - 生成器读取的源码标记从 `//cube:<kind>` 改为 `//roost:<kind>`（entity、dao、redisdao、

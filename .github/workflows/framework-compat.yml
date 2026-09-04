@@ -35,7 +35,7 @@ jobs:
       matrix:
         dependency-set: [minimum, released, source-head]
         scenario: [minimal, full]
-        consumer-go: ["1.25.x", "1.26.x"]
+        consumer-go: ["1.27.x"]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -101,9 +101,13 @@ jobs:
           git -C "${RUNNER_TEMP}/roost-skill" checkout --detach FETCH_HEAD
           cd "${RUNNER_TEMP}"
           go work init ./planet ./roost-core ./roost-kit ./roost-skill
-          # The framework runtime modules support the lower consumer lane.
+          # The workspace go directive must be at least every member's own.
+          # It used to be pinned DOWN to 1.25.0, because the framework runtime
+          # modules supported a lower consumer lane than codegen did. They no
+          # longer do: core and kit are go 1.27.0, so pinning the workspace
+          # below that fails outright rather than exercising an older lane.
           # Codegen itself is already built and is intentionally not a member.
-          go work edit -go=1.25.0
+          go work edit -go=1.27.0
       - name: select generated-project Go compatibility version
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
