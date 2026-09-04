@@ -29,9 +29,46 @@ cfggen 的 schema 字段级参考见 [CFGGEN_META](docs/CFGGEN_META.zh-CN.md)。
 | `attribute` | `//roost:attribute` | `gen_<profile>_attribute.go` | 属性 profile 的计算/聚合代码 |
 | `webroute` | `//roost:web` | 路由注册代码 | HTTP 路由注册不再手写 |
 | `errcode` | 扫描 `errcode.Define(code, name, msg)` 调用 | `docs/generated/errcode.csv` | 错误码清单导出与查重 |
+| `servicerpc` | `//roost:rpc service_type=... capability=...` 打在**手写的服务接口**上，方法上可选 `//roost:rpc affinity=...` | `<接口名小写>_rpc_gen.go`：线上类型、handler 注册、打字的 `BusClient`、`Server`、`ClientMod`、capability 包装 | 服务拆成独立进程后，调用方只查接口（`app.Lookup[mail.Mail]`），两种实现都满足它；传输层从接口本身生成，所以**漂移结构上不可能**而不是被检测到 |
 | `roost id` | 扫描各类标记中的 `id=/kind=/type=/code=` | —（校验命令） | 按 `roost.yaml` 声明的 ID 空间检查冲突、分配下一个可用 ID |
 
 所有生成器都可以独立运行（`cmd/<name>`），也可以由 `roost generate` 按依赖顺序统一编排：DAO → Event → Errcode → Protocol → Entity → Nest → Attribute → Config → WebRoute。
+
+### servicerpc 速览（接口先行，不另立 def 文件）
+
+```go
+// mail/mail.go —— 唯一手写的跨进程契约
+//
+//go:generate go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir .
+//
+//roost:rpc service_type=mail capability=service.mail
+type Mail interface {
+	Send(ctx context.Context, req SendRequest) (envelope Envelope, err error)
+	//roost:rpc affinity=queue.Key()
+	List(ctx context.Context, playerID int64, cursor string, limit int) (page Page, err error)
+}
+```
+
+拥有者进程：`mods.RegisterAll(r, OwnerCapabilities(service)...)` + 一个手写的
+`func (s *Server) run(ctx context.Context) error`。调用方进程：`mail.NewClientMod()`。
+两者发布同一个 capability 名，所以**同一个进程里放不下两份**——registry 会拒绝第二个，
+这正是想要的行为。
+
+`-check` 模式用于 CI：生成物与源码不一致时非零退出。
+
+**它拒绝什么，和它生成什么一样重要**（每条都对应一个真实踩过的坑）：
+
+| 拒绝 | 为什么 |
+| --- | --- |
+| 未命名的参数/返回值 | 线上类型没有字段名可用 |
+| `time.Duration` / `time.Time` | 纳秒整数抓包读不懂，非 Go 调用方造不出。校验**递归进包内结构体**，因为真实形状是"Duration 藏在整体传递的 request 里" |
+| **未导出字段** | 任何 codec 都会静默丢掉它，对面拿到的值不完整而不是报错 |
+| 未导出类型、`any`、chan、func、嵌套超过 8 层 | 同上，或根本无法编码 |
+| 首参不是 `context.Context` | 一个不接 ctx 的方法不做 I/O，没有理由是一次往返 |
+| 包里没有 `ErrRequestInvalid` | 生成的 handler 需要一个带码的错误来回答"这一帧我读不懂"；用 `CodeInternal` 回答会把调用方的畸形请求报成服务端故障 |
+| `affinity=` 指向不存在的参数，或裸 key 不是 string | 亲和 key 是在调用时从实参读的；派生形式写 `affinity=x.Key()` |
+| **生成名与包内已有声明撞名** | `account` 有 `type Server struct`（服务器列表的一行），生成的进程壳也叫 `Server`。编译器只会说 "Server redeclared in this block" 并指向生成的文件——它告诉你重复在哪，不告诉你为什么在那儿、哪一边能动。生成的那边不能动：`pkg.Server` 在每个服务里都要读法一致。撞名的若是**函数或常量**更危险，它能在什么都编不过之前先改掉整个包的含义 |
+| **一个包里两个被标记的接口** | 生成文件在包级别声明十几个固定名字，两份就是每个都声明两次。这条只是把一件早就成立的事说出来：`app.Service` 每进程一个，所以两个被标记的接口是两个独立部署的东西，而那应该是两个包。备选方案（按接口加前缀）会让 `pkg.Server` 在有些包里叫 `pkg.FooServer`，把成本转给每个读者，只为省这一次拆包 |
 
 ### cfggen 速览（meta 文件先行）
 

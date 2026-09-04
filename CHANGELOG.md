@@ -5,6 +5,49 @@
 ## [Unreleased]
 
 ### Added
+
+- **`servicerpc` 生成器**（`cmd/servicerpc`）：从**手写的服务接口**生成跨进程传输层
+  ——线上类型、handler 注册、打字的 `BusClient`、`Server`、`ClientMod`、capability
+  包装。输入是打在接口上的 `//roost:rpc service_type=... capability=...`，不另立 def
+  文件。产出 `<接口名小写>_rpc_gen.go`，`-check` 模式给 CI 用。
+
+  从接口生成而不是从单独的 IDL 生成，是这个生成器唯一值得存在的理由：它省的打字量
+  不多，但让**接口与传输层漂移在结构上不可能**，而不是可被检测到。
+
+  拒绝规则和生成物一样重要（清单见 README）。每一条都对应一个真实踩过的坑，其中
+  三条值得记：
+
+  - **未导出字段**：任何 codec 都会静默丢掉它。`chat.ChannelRef` 的 key 字段是故意
+    未导出的（ref 只能来自 `Resolve`），所以它根本过不了总线——对面拿到的 ref 指向
+    空，而不是报错。生成器点名说的是 `ref.key`，不是 `ref`。
+  - **首参必须是 `context.Context`**：这条看着像形式要求，实际是个信号。
+    `platform.ValidateSession(playerID, token)` 没有 ctx，因为它不做任何 I/O，只用本
+    进程已有的密钥重算一个 MAC；把它做成一次往返意味着全集群的会话校验都排在一个
+    进程后面。一个什么都不碰的方法没有理由上总线。
+  - **包里必须有 `ErrRequestInvalid`**：生成的 handler 需要一个带码的错误来回答"这
+    一帧我读不懂"。这条规则第一版是**空转的**——`hasRequestInvalid` 在 `parseFile`
+    返回之后才赋值，而检查跑在 `buildService` 里面。golden 测试抓到了它，之后所有
+    包级事实都收进一个 `pkgFacts` 结构体，规则读不到零值。
+
+- **`servicerpc`：两条包级拒绝规则**，都由真实事故推出来：
+
+  - **生成名与包内已有声明撞名**。`roost-service` 的 `account` 包有
+    `type Server struct`（服务器列表里的一行），而生成的进程壳也叫 `Server`：两个
+    文件放一起编不过，而编译器给的是 "Server redeclared in this block" 并指向生成
+    的文件——它告诉你重复在哪，不告诉你为什么在那儿、以及哪一边能动。生成的那边
+    不能动（`pkg.Server`/`pkg.CapabilityName` 要在每个服务里读法一致），所以现在
+    点名拒绝并说清该改哪个。检查覆盖类型、函数、常量、变量，导出与未导出都算。
+
+    配套的 `emittedNames` 是一张手写清单，因此有一条测试**解析生成的 golden 文件**
+    并要求清单覆盖它实际声明的每个包级名字：漏列一个名字的后果很安静——规则继续
+    接受那个包，失败以"redeclared"的形式出现在生成代码里，正是规则要防的那件事。
+
+  - **一个包里只能有一个被标记的接口**。这条不是绕不过去的限制，而是把一件早就成立
+    的事说出来：`app.Service` 每进程一个，所以两个被标记的接口就是两个独立部署的
+    东西，而那应该是两个包。备选方案（按接口给生成名字加前缀）会让 `pkg.Server` 在
+    有些包里叫 `pkg.FooServer`，把成本转给每个服务的每个读者。`roost-service` 的
+    `global` 包正是被这条顶出来拆成了 `global/` + `global/activity/`。
+
 - `scripts/pretag.sh`：打 tag 之前的发布预检（tag major 与 module 路径后缀一致、
   tag 未存在、无 replace、工作区干净、`GOWORK=off` 下 build/vet/test 通过）。
   由 tag push 触发的 CI 运行在 tag 已存在之后，能报告但阻止不了。
