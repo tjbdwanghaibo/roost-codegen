@@ -1,6 +1,7 @@
 package servicerpc
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -794,5 +795,96 @@ type M interface {
 	}
 	if len(services) != 1 {
 		t.Fatalf("parsed %d services, want 1", len(services))
+	}
+}
+
+// -check compares the generated output against what is on disk and fails on
+// any difference.
+//
+// This mode used to return right after the refusals ran, so it exited 0 on a
+// generated file that was stale, hand-edited, or produced by a different
+// version of this generator — while being documented in two READMEs as the CI
+// drift gate. A gate that cannot fail is worse than no gate: it reports that
+// the committed transport matches the interface when nobody looked.
+//
+// It was found by deliberately appending a comment to a committed generated
+// file and watching -check exit 0.
+func TestCheckDetectsDrift(t *testing.T) {
+	dir := writeDir(t, goodService)
+
+	// Nothing generated yet: missing must be reported, and reported AS
+	// missing, because "nobody ran the generator" and "someone edited the
+	// output" are different problems with different fixes.
+	err := Run([]string{"-dir", dir, "-check"}, io.Discard)
+	if err == nil {
+		t.Fatal("-check passed with no generated file at all")
+	}
+	if !contains(err.Error(), "missing") {
+		t.Fatalf("the error does not distinguish a missing file: %v", err)
+	}
+
+	// Generate, then -check must pass.
+	if err := Run([]string{"-dir", dir}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"-dir", dir, "-check"}, io.Discard); err != nil {
+		t.Fatalf("-check failed immediately after generating: %v", err)
+	}
+
+	// Drift the file the way a hand edit or an older generator would.
+	path := filepath.Join(dir, "mail_rpc_gen.go")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(content, []byte("\n// hand edit\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = Run([]string{"-dir", dir, "-check"}, io.Discard)
+	if err == nil {
+		t.Fatal("-check passed on a generated file that does not match the interface")
+	}
+	if !contains(err.Error(), "mail_rpc_gen.go") {
+		t.Fatalf("the error does not name the stale file: %v", err)
+	}
+	if contains(err.Error(), "missing") {
+		t.Fatalf("a differing file was reported as missing: %v", err)
+	}
+
+	// And -check must not have repaired it: writing in check mode would make
+	// the gate pass on its second run and hide the drift from CI.
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) == len(content) {
+		t.Fatal("-check rewrote the file; a check mode that writes cannot gate anything")
+	}
+}
+
+// The refusals still run before the comparison, so an author fixing an
+// interface gets the design answer rather than a diff.
+func TestCheckReportsRefusalsBeforeDrift(t *testing.T) {
+	// No generated file AND an unsafe type: the refusal must win.
+	err := Run([]string{"-dir", writeDir(t, `package m
+
+import (
+	"context"
+	"time"
+)
+
+var ErrRequestInvalid error
+
+//roost:rpc service_type=m capability=c
+type M interface {
+	Do(ctx context.Context, wait time.Duration) (err error)
+}
+`), "-check"}, io.Discard)
+	if err == nil {
+		t.Fatal("-check accepted a time.Duration on the wire")
+	}
+	if contains(err.Error(), "missing") || contains(err.Error(), "does not match") {
+		t.Fatalf("the drift report shadowed the refusal, so the author sees a diff instead of "+
+			"the design problem: %v", err)
 	}
 }
