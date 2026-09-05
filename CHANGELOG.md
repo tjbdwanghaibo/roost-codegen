@@ -62,7 +62,7 @@
 
 ### Changed
 
-- **版本下限抬到 core v1.12.0 / kit v1.12.0 / skill v1.10.3**（service v1.5.1、codegen v1.7.0 不变）。四个框架
+- **版本下限抬到 core v1.12.0 / kit v1.12.0 / skill v1.10.3 / service v1.5.2**（codegen v1.7.0 不变）。service 的下限是含 ClientMod 依赖修正（U-0024）的第一个版本：钉 v1.5.1 的工程一用 `uses` 就起不来。四个框架
   模块是一起演进的：roost-service v1.5.1 要求 core / kit v1.12.0，钉在 v1.10.0 的工程一旦托管框架服务就解析不了
   （framework-compat 的 minimum × full 场景在 `-template game` 后立刻红）。下限从此是"能整体解析的最老组合"
   而非各模块自己的最老 tag。钉了旧版本的 roost.yaml 会在校验时得到明确的升级提示。
