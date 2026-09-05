@@ -38,6 +38,9 @@
 
 ### Changed
 
+- **`ci/framework-release.yaml` 对齐到当前正式 tag**：kit v1.12.1（v1.12.0 的 tag CI 因既有问题红，
+  修复后补打）、skill v1.10.3、service v1.5.1、codegen v1.13.1；core 仍 v1.12.0。此前清单指向的
+  v1.12.0 / v1.10.1 是有效但非最新的 tag。收敛待办 B-13。
 - **生成的 Kubernetes base 移到 `deploy/k8s/base/`**，overlay 改引用 `../../base`。kustomize
   v5.7+（kubectl 1.34+ 内置）拒绝 base 目录是 overlay 祖先的布局：
   `cycle detected: candidate root deploy/k8s contains visited root deploy/k8s/overlays/staging`
