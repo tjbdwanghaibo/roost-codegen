@@ -10,7 +10,7 @@ import (
 
 func TestFrameworkReleaseManifestStrictValidation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "framework-release.yaml")
-	valid := []byte("schema: 1\ncodegen: v1.10.0\nframework: {core: v1.9.1, kit: v1.9.2, skill: v1.9.1}\nconsumer_go: [1.25.x, 1.26.x]\n")
+	valid := []byte("schema: 1\ncodegen: v1.10.0\nframework: {core: v1.9.1, kit: v1.9.2, skill: v1.9.1, service: v1.1.0}\nconsumer_go: [1.25.x, 1.26.x]\n")
 	if err := os.WriteFile(path, valid, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -27,6 +27,8 @@ func TestFrameworkReleaseManifestStrictValidation(t *testing.T) {
 		"go":       bytes.Replace(valid, []byte("1.26.x"), []byte("1.26.0"), 1),
 		"old-go":   bytes.Replace(valid, []byte("1.26.x"), []byte("1.24.x"), 1),
 		"empty-go": bytes.Replace(valid, []byte("[1.25.x, 1.26.x]"), []byte("[]"), 1),
+		// service joined the release chain; a manifest that omits it must not verify.
+		"no-service": bytes.Replace(valid, []byte(", service: v1.1.0"), []byte(""), 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := os.WriteFile(path, raw, 0o644); err != nil {
@@ -67,7 +69,7 @@ func TestPublishedFrameworkGoModRejectsLocalOrPseudoDependencies(t *testing.T) {
 }
 
 func TestFrameworkGitHubOutputAndBuildVersion(t *testing.T) {
-	manifest := FrameworkReleaseManifest{Codegen: "v1.10.0", Framework: FrameworkReleaseVersionSpec{Core: "v1.9.1", Kit: "v1.9.2", Skill: "v1.9.1"}, ConsumerGo: []string{"1.25.x", "1.26.x"}}
+	manifest := FrameworkReleaseManifest{Codegen: "v1.10.0", Framework: FrameworkReleaseVersionSpec{Core: "v1.9.1", Kit: "v1.9.2", Skill: "v1.9.1", Service: "v1.1.0"}, ConsumerGo: []string{"1.25.x", "1.26.x"}}
 	path := filepath.Join(t.TempDir(), "github", "output")
 	if err := appendFrameworkGitHubOutput(path, manifest); err != nil {
 		t.Fatal(err)
@@ -76,7 +78,7 @@ func TestFrameworkGitHubOutputAndBuildVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"codegen=v1.10.0", "core=v1.9.1", "kit=v1.9.2", "skill=v1.9.1", "consumer_go=1.25.x,1.26.x", `consumer_go_json=["1.25.x","1.26.x"]`} {
+	for _, want := range []string{"codegen=v1.10.0", "core=v1.9.1", "kit=v1.9.2", "skill=v1.9.1", "service=v1.1.0", "consumer_go=1.25.x,1.26.x", `consumer_go_json=["1.25.x","1.26.x"]`} {
 		if !bytes.Contains(raw, []byte(want)) {
 			t.Errorf("GitHub output missing %q: %s", want, raw)
 		}

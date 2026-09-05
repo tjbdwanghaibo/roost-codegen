@@ -26,6 +26,7 @@ jobs:
       core: ${{ steps.release.outputs.core }}
       kit: ${{ steps.release.outputs.kit }}
       skill: ${{ steps.release.outputs.skill }}
+      service: ${{ steps.release.outputs.service }}
       consumer_go: ${{ steps.release.outputs.consumer_go_json }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -85,6 +86,7 @@ jobs:
           CORE: ${{ needs.gate.outputs.core }}
           KIT: ${{ needs.gate.outputs.kit }}
           SKILL: ${{ needs.gate.outputs.skill }}
+          SERVICE: ${{ needs.gate.outputs.service }} # plumbed now; `project new` learns -roost-service-version with the game template
           CODEGEN: ${{ needs.gate.outputs.version }}
         run: |
           "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -services game,gate -mods configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest,saga -roost-core-version "$CORE" -roost-kit-version "$KIT" -roost-skill-version "$SKILL" -codegen-version "$CODEGEN"

@@ -1,9 +1,10 @@
 schema: 1
-codegen: v1.10.0
+codegen: v1.13.0
 framework:
-  core: v1.9.1
-  kit: v1.9.2
-  skill: v1.9.1
+  core: v1.12.0
+  kit: v1.12.0
+  skill: v1.10.1
+  service: v1.5.0
 consumer_go:
   # 只剩 1.27.x：roost-core / roost-kit / roost-codegen 的 go 指令都是 1.27.0，
   # Go 1.25.x 和 1.26.x 的工具链构建不了它们，所以那两条 lane 不是"没测"而是

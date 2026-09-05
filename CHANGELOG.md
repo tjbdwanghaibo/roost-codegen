@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`ci/framework-release.yaml` 加入 `framework.service`**，roost-service 成为发布链的一层：
+  `framework verify` 同样下载它并拒绝 replace / 伪版本，GitHub output 多一个 `service`，
+  缺少该字段的清单不再通过校验。清单里的版本同时从 core v1.9.1 / kit v1.9.2 / skill v1.9.1 /
+  codegen v1.10.0 更新到当前正式 tag（core v1.11.3 / kit v1.11.3 / skill v1.10.0 /
+  service v1.4.0 / codegen v1.12.1）——它落后了两个次版本，release 门禁一直在校验旧组合。
+  `release.yml` 先把 `SERVICE` 传到 smoke 步骤；`project new` 的 `-roost-service-version`
+  随 game 模板一起来。
+
 ### Added
 
 - **`servicerpc` 生成器**（`cmd/servicerpc`）：从**手写的服务接口**生成跨进程传输层

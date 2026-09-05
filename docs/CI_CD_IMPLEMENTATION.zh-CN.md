@@ -37,9 +37,9 @@
 
 每个场景必须生成两次且第二次零差异，并至少覆盖 minimal、entity/nest、persistence、remote/saga、replication、skill 和多服务项目。
 
-source-head 与 release 是两道独立门禁：前者证明当前四仓代码同代，后者必须显式
+source-head 与 release 是两道独立门禁：前者证明当前五仓代码同代，后者必须显式
 `GOWORK=off` 并只解析正式 tag。尚未发布新 API 时允许 source-head 继续研发，但 release
-矩阵必须保持失败，直到按 core → kit → skill → codegen 完成版本闭包。
+矩阵必须保持失败，直到按 core → kit → skill → service → codegen 完成版本闭包。
 
 ### 历史项目升级
 
