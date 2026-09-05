@@ -158,6 +158,12 @@ func (lifecycle *%s) Destroy(ctx context.Context, value *%s.%s, reason entity.En
 		toPascal(entityName)+"Lifecycle", entityName, toPascal(entityName), toPascal(entityName),
 		toPascal(entityName)+"Lifecycle", entityName, toPascal(entityName), toPascal(entityName))
 	body = strings.ReplaceAll(body, "{{PERSISTENCE_IMPORT}}", persistenceAlias+" \""+persistenceImport+"\"")
+	// One lifecycle file per Entity, all in package lifecycle: the registry
+	// entry point carries the Entity's name, or the second Entity's file
+	// redeclares FromRegistry and the package stops compiling (found when the
+	// game template added World next to Player).
+	body = strings.Replace(body, "// FromRegistry is the normal application entry point.", "// "+toPascal(entityName)+"FromRegistry is the normal application entry point.", 1)
+	body = strings.Replace(body, "func FromRegistry(registry *app.Registry)", "func "+toPascal(entityName)+"FromRegistry(registry *app.Registry)", 1)
 	body = strings.ReplaceAll(body, "{{PERSISTENCE_NOT_FOUND}}", persistenceAlias+".ErrEntityAggregateNotFound")
 	formatted, err := format.Source([]byte(body))
 	if err != nil {

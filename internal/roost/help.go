@@ -70,7 +70,7 @@ roost project next [--workflow first-business|player-tcp]
 roost project doctor --workflow first-business
 roost project upgrade [--root dir] [--dry-run] [-core version] [-kit version] [-skill version] [-service version] [-codegen version]
 make project-upgrade`,
-		Configuration: `-module 必填，防止项目意外使用框架作者的仓库命名空间。默认 -out=<name>、-services=game、features=protocol,config,entity,nest,event,dao,errcode；不传 -mods 时启用除 saga 外的生产基础 Mod，新手建议显式使用 -mods configdata。-template game 是可选的起步形态：account、mail、match、chat 四个 roost-service 服务各作为独立子命令托管（services.<name>.framework），第一个业务 Service 通过 services.<name>.uses 拿到它们的 ClientMod 与类型化访问器；托管服务的协作者（身份校验、投递、频道策略……）在 internal/service/<name>/collaborators.go 里，默认全部拒绝，需要项目自己实现。project next 根据项目真实文件计算进度，只给一个当前动作，不会替业务决定字段或生成 preset；默认先完成 first-business，再进入可选 player-tcp。项目声明位于 roost.yaml。sync 在同级临时副本完成全部生成和所有权预检后提交；失败回滚已写文件，并拒绝覆盖提交期间发生的并发修改。upgrade 只覆盖 codegen 受控文件。`,
+		Configuration: `-module 必填，防止项目意外使用框架作者的仓库命名空间。默认 -out=<name>、-services=game、features=protocol,config,entity,nest,event,dao,errcode；不传 -mods 时启用除 saga 外的生产基础 Mod，新手建议显式使用 -mods configdata。-template game 是可选的起步形态：account、mail、match、chat 四个 roost-service 服务各作为独立子命令托管（services.<name>.framework），第一个业务 Service 通过 services.<name>.uses 拿到它们的 ClientMod 与类型化访问器，并带 nest 运行时、Player 与 World 两个 Entity 及其 lifecycle；World 是进程内单例（game/lifecycle/world_singleton.go 的 EnsureWorld，Service.Init 里确保存在）；托管服务的协作者（身份校验、投递、频道策略……）在 internal/service/<name>/collaborators.go 里，默认全部拒绝，需要项目自己实现。project next 根据项目真实文件计算进度，只给一个当前动作，不会替业务决定字段或生成 preset；默认先完成 first-business，再进入可选 player-tcp。项目声明位于 roost.yaml。sync 在同级临时副本完成全部生成和所有权预检后提交；失败回滚已写文件，并拒绝覆盖提交期间发生的并发修改。upgrade 只覆盖 codegen 受控文件。`,
 		Example: `roost project new planet -module example.com/planet -services game,gate
 cd planet
 roost project next
@@ -164,9 +164,9 @@ roost project doctor --workflow player-tcp
 		Name: "lifecycle", Aliases: []string{"entity-lifecycle"},
 		Summary:       "生成 Entity 登录加载、首次创建和销毁边界",
 		Usage:         `roost add lifecycle <entity> [--entity <entity>] [--service <service>]`,
-		Configuration: `生成 Get/Create/GetOrCreate/Destroy 和 FromRegistry。它通过实例级 entity.runtime 与 Data Engine loader 工作；普通玩法读写仍走 Nest Sender。GetOrCreate 只把确切的未找到视为可创建，不吞数据库或解码错误。`,
+		Configuration: `生成 Get/Create/GetOrCreate/Destroy 和 <Entity>FromRegistry（每个 Entity 一个，同包不重名）。它通过实例级 entity.runtime 与 Data Engine loader 工作；普通玩法读写仍走 Nest Sender。GetOrCreate 只把确切的未找到视为可创建，不吞数据库或解码错误。`,
 		Example: `roost add lifecycle Player --service game
-# 应用初始化：lifecycle.FromRegistry(registry)`,
+# 应用初始化：lifecycle.PlayerFromRegistry(registry)`,
 	},
 	{
 		Name: "endpoint", Aliases: []string{"protocol-endpoint", "protocol-to-nest"},

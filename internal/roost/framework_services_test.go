@@ -1,6 +1,11 @@
 package roost
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -148,6 +153,66 @@ func TestAProjectWithoutFrameworkServicesDoesNotDependOnRoostService(t *testing.
 	for _, path := range []string{"go.mod", "internal/frameworkdeps/generated.go", "internal/bootstrap/generated.go"} {
 		if strings.Contains(string(plan[path].Body), "roost-service") {
 			t.Errorf("%s mentions roost-service without any framework service", path)
+		}
+	}
+}
+
+// The game template scaffolds Player and World with their lifecycles, the
+// World singleton accessor, and a game Service that ensures the World in
+// Init — and the two lifecycle files must coexist in one package, which they
+// did not while both declared FromRegistry.
+func TestGameTemplateScaffoldsWorldAndPlayer(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	result, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target,
+		Mods: []string{"configdata"}, Template: "game"})
+	if err != nil {
+		t.Fatalf("new project: %v (created %v)", err, result.Created)
+	}
+	for _, rel := range []string{
+		"game/entities/player/entity.go", "game/entities/world/entity.go",
+		"game/lifecycle/player.go", "game/lifecycle/world.go", "game/lifecycle/world_singleton.go",
+		"internal/service/game/service.go", "internal/service/game/framework_clients_gen.go",
+		"internal/service/mail/collaborators.go",
+	} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("%s missing: %v", rel, err)
+		}
+	}
+	service, _ := os.ReadFile(filepath.Join(root, "internal", "service", "game", "service.go"))
+	if !strings.Contains(string(service), "lifecycle.EnsureWorld(") {
+		t.Errorf("the template game Service does not ensure its World:\n%s", service)
+	}
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved, _ := resolveMods(m.Services["game"].Mods); !contains(resolved, "nest") {
+		t.Errorf("template game service lacks the nest runtime: %v", m.Services["game"].Mods)
+	}
+	// Both lifecycles in one package: no redeclared top-level identifier.
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, filepath.Join(root, "game", "lifecycle"), nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]string{}
+	for _, pkg := range pkgs {
+		for file, f := range pkg.Files {
+			for _, decl := range f.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Recv != nil {
+					continue
+				}
+				if prev, dup := seen[fn.Name.Name]; dup {
+					t.Errorf("%s is declared in both %s and %s", fn.Name.Name, prev, file)
+				}
+				seen[fn.Name.Name] = file
+			}
+		}
+	}
+	for _, want := range []string{"PlayerFromRegistry", "WorldFromRegistry", "EnsureWorld"} {
+		if _, ok := seen[want]; !ok {
+			t.Errorf("lifecycle package lacks %s", want)
 		}
 	}
 }

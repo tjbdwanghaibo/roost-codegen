@@ -111,6 +111,17 @@ func NewProject(options NewOptions) (SyncResult, string, error) {
 	if err := renameProjectStage(stage, absTarget); err != nil {
 		return SyncResult{}, "", fmt.Errorf("commit project: %w", err)
 	}
+	if strings.TrimSpace(options.Template) == "game" {
+		services := options.Services
+		if len(services) == 0 {
+			services = []string{"game"}
+		}
+		created, err := scaffoldGameTemplate(absTarget, manifest, toSnake(services[0]))
+		result.Created = append(result.Created, created...)
+		if err != nil {
+			return result, absTarget, err
+		}
+	}
 	return result, absTarget, nil
 }
 

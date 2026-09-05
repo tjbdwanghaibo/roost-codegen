@@ -281,8 +281,8 @@ PB、消息 ID、typed binding、controller 注册和聚合 bootstrap。
 
 ## 4. Entity 创建与登录加载
 
-game/lifecycle/player.go 提供 Get、Create、GetOrCreate、Destroy 和 FromRegistry。登录/创角边界通过
-FromRegistry 获取实例级 Entity runtime；普通玩法请求只走 Sender。不要在 endpoint 中每次 GetOrCreate，
+game/lifecycle/player.go 提供 Get、Create、GetOrCreate、Destroy 和 PlayerFromRegistry。登录/创角边界通过
+PlayerFromRegistry 获取实例级 Entity runtime；普通玩法请求只走 Sender。不要在 endpoint 中每次 GetOrCreate，
 也不要使用包级全局 EntityManager。
 
 ## 5. 接入真实网络
@@ -323,7 +323,7 @@ Nest Sender 解决“已有或可冷加载 Entity 上执行一次业务命令”
 
 ## 2. 方法语义
 
-- FromRegistry：从当前 App 实例的 entity.runtime 获取 ManagerAccess，避免跨实例全局状态。
+- <Entity>FromRegistry（如 PlayerFromRegistry）：从当前 App 实例的 entity.runtime 获取 ManagerAccess，避免跨实例全局状态；每个 Entity 一个，同包不重名。
 - Get：构造完整 EntityID，并通过 Data Engine loader 做 singleflight 冷加载。
 - Create：仅创建不存在的聚合；并发创建由 EntityManager 的 ErrEntityExists 收敛。
 - GetOrCreate：只在“持久化记录不存在”时创建；数据库、解码、超时错误不会误判成不存在。
@@ -331,7 +331,7 @@ Nest Sender 解决“已有或可冷加载 Entity 上执行一次业务命令”
 
 ## 3. 正确调用位置
 
-登录 controller、创角流程或后台管理可以在初始化时调用 lifecycle.FromRegistry(registry)。普通协议
+登录 controller、创角流程或后台管理可以在初始化时调用 lifecycle.PlayerFromRegistry(registry)。普通协议
 handler 应调用生成 Sender，让 Nest 统一锁、事务、WAL、回滚和同步。不要缓存裸 Entity 指针跨请求，
 不要在 Entity 锁外调用 Component/DAO mutator。
 

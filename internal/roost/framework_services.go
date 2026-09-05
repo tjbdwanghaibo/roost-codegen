@@ -3,6 +3,9 @@ package roost
 import (
 	"errors"
 	"fmt"
+	"go/format"
+	"io"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -286,6 +289,129 @@ func applyGameTemplate(m *Manifest, gameService string) error {
 		}
 	}
 	sort.Strings(service.Uses)
+	// Player and World are Nest entities, so the game process runs the Nest
+	// runtime (which brings the dataengine, Mongo and NATS).
+	if resolved, err := resolveMods(service.Mods); err == nil && !contains(resolved, "nest") {
+		service.Mods = append(service.Mods, "nest")
+	}
 	m.Services[gameService] = service
 	return nil
+}
+
+// scaffoldGameTemplate adds what the game template owns beyond the manifest:
+// the Player and World entities with their lifecycles, the World singleton
+// accessor, and a game Service that ensures the World exists before serving.
+// Everything it writes is business-owned and written once.
+func scaffoldGameTemplate(root string, m Manifest, gameService string) ([]string, error) {
+	var created []string
+	for _, step := range []AddOptions{
+		{Kind: "entity", Name: "Player"},
+		{Kind: "entity", Name: "World"},
+		{Kind: "lifecycle", Name: "Player", Service: gameService},
+		{Kind: "lifecycle", Name: "World", Service: gameService},
+	} {
+		files, err := Add(root, step)
+		if err != nil {
+			return created, fmt.Errorf("template game: add %s %s: %w", step.Kind, step.Name, err)
+		}
+		created = append(created, files...)
+	}
+	for rel, body := range map[string]string{
+		"game/lifecycle/world_singleton.go":               renderWorldSingleton(m),
+		"internal/service/" + gameService + "/service.go": renderGameTemplateService(m, gameService),
+	} {
+		formatted, err := format.Source([]byte(body))
+		if err != nil {
+			return created, fmt.Errorf("template game: format %s: %w\n%s", rel, err, body)
+		}
+		if err := writeAtomic(filepath.Join(root, filepath.FromSlash(rel)), formatted, 0o644); err != nil {
+			return created, err
+		}
+		created = append(created, rel)
+	}
+	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err != nil {
+		return created, fmt.Errorf("template game: regenerate: %w", err)
+	}
+	return created, nil
+}
+
+// renderWorldSingleton is the one-World-per-process accessor. The World is an
+// ordinary Nest entity with a fixed unique id, created on the first start of
+// this process and loaded on every later one; "singleton" is a property of
+// this process, not of the cluster.
+func renderWorldSingleton(m Manifest) string {
+	return fmt.Sprintf(`package lifecycle
+
+import (
+	"context"
+	"fmt"
+
+	world %q
+	"github.com/tjbdwanghaibo/roost-core/app"
+)
+
+// WorldUniqueID is the unique id of this process's one World. There is
+// exactly one World per game process: every game server has its own.
+const WorldUniqueID int64 = 1
+
+// EnsureWorld returns this process's World, creating it on the first start
+// and loading it on every later one. The game Service calls it from Init, so
+// the World exists before any request is served.
+func EnsureWorld(ctx context.Context, registry *app.Registry) (*world.World, error) {
+	lifecycle, err := WorldFromRegistry(registry)
+	if err != nil {
+		return nil, err
+	}
+	value, _, err := lifecycle.GetOrCreate(ctx, WorldUniqueID)
+	if err != nil {
+		return nil, fmt.Errorf("world: ensure singleton: %%w", err)
+	}
+	return value, nil
+}
+`, m.Project.Module+"/game/entities/world")
+}
+
+// renderGameTemplateService is the template's business Service: the plain
+// scaffold plus the World it owns.
+func renderGameTemplateService(m Manifest, name string) string {
+	return fmt.Sprintf(`package %s
+
+import (
+	"context"
+	"fmt"
+
+	world %q
+	lifecycle %q
+	"github.com/tjbdwanghaibo/roost-core/app"
+)
+
+// Service is the %s server. It owns this process's World.
+type Service struct {
+	world *world.World
+}
+
+func New() *Service                    { return &Service{} }
+func (*Service) Name() app.ServiceName { return app.ServiceName(%q) }
+
+// Init runs after every Mod has started, so the Entity runtime is up. The
+// World — this process's one singleton Entity — is created or loaded here,
+// before any request is served; a game server without its World does not
+// start.
+func (s *Service) Init(registry *app.Registry) error {
+	value, err := lifecycle.EnsureWorld(context.Background(), registry)
+	if err != nil {
+		return fmt.Errorf("%s: %%w", err)
+	}
+	s.world = value
+	return nil
+}
+
+// World is this process's World. It is set in Init and never nil afterwards.
+func (s *Service) World() *world.World { return s.world }
+
+func (*Service) Serve(ctx context.Context) error { <-ctx.Done(); return nil }
+func (*Service) Shutdown(context.Context) error  { return nil }
+
+var _ app.Service = (*Service)(nil)
+`, safeIdent(name), m.Project.Module+"/game/entities/world", m.Project.Module+"/game/lifecycle", name, name, name)
 }

@@ -6,6 +6,21 @@
 
 ### Added
 
+- **game 模板第二切片：Player 与 World 实体**。`-template game` 现在给业务 Service 补 nest 运行时，生成
+  Player、World 两个 Entity 及其 lifecycle，并生成 `game/lifecycle/world_singleton.go`（`WorldUniqueID = 1`、
+  `EnsureWorld`）与一个在 `Init` 里确保 World 存在的 game Service：World 是**进程内单例**——每个 game
+  进程自己的一份，首次启动创建、之后加载，没有 World 的 game 进程不启动。本地验证：对真实 Mongo 副本集 +
+  NATS 集群 + Redis 连续两次启动 game 进程，`Init` 均通过、进程存活。
+
+### Fixed
+
+- **`add lifecycle` 对第二个 Entity 生成的文件与第一个重复声明 `FromRegistry`**，同包编译不过（U-0026）。
+  入口改为 `<Entity>FromRegistry`（`PlayerFromRegistry`、`WorldFromRegistry`）；已生成的工程文件是业务所有、
+  不会被改写。`TestGameTemplateScaffoldsWorldAndPlayer` 用 go/parser 检查 lifecycle 包无重复顶层声明。
+- **默认生成的工程一个都起不来，根因在 kit**（U-0025）：dataengine / saga / remoteentity 的 `DependsOn` 写了
+  非 Mod 名（`health`、`nats.jetstream`），app 按 Mod 名解析依赖。已在 roost-kit 修复并加守卫测试；生成器目录
+  无需改动（health 不是 Mod）。这是模板工程第一次真正启动才发现的第三个"装配级"缺陷。
+
 - **托管 roost-service 服务与 `-template game`**（方向二第一切片）。roost.yaml 新增
   `services.<name>.framework`（account / mail / match / chat 之一：该进程就是这个服务的 Server 加 owner
   Mod，redis、nats 自动补齐）与 `services.<name>.uses`（业务 Service 要调用的托管服务：装配 ClientMod、
