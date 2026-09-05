@@ -4,6 +4,33 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **生成的 `deploy/docker/docker-compose.prod.yaml` 在 `docker compose config` 下报
+  `service "game" refers to undefined volume configs/service/config.game.yaml`**。配置文件挂载
+  用的是短语法 `${ROOST_CONFIG_ROOT}/config.<svc>.yaml:/etc/roost/config.yaml:ro`；compose 把不以
+  `/`、`./`、`../` 开头的 source 当作**命名卷**，于是 `ROOST_CONFIG_ROOT=configs/service`（生成的
+  Makefile、生成的 CI、本仓三条工作流都这么传）渲染成对一个未定义卷的引用。每个生成工程的 CI
+  "production compose renders" 步骤因此必红。现在两个挂载都用长语法并显式 `type: bind` /
+  `type: volume`；同时生成的 Makefile 改传 `$(CURDIR)/configs/service`、生成的 CI 改传
+  `${{ github.workspace }}/configs/service`——compose 对相对 bind source 是相对 compose **文件**
+  所在目录（`deploy/docker/`）解析的，相对路径即使通过校验，`up` 时挂的也是错目录。
+- **生成的部署脚本过不了 shellcheck**（生成工程 CI 的 "deployment shell syntax" 步骤）：
+  六个脚本的 `ROOT=$(CDPATH= cd -- …)` 报 SC1007，改为 `CDPATH=''`；`install.sh` / `rollback.sh`
+  用 `case " game gate " in *" $SERVICE "*)` 在一个常量词上做 case 报 SC2194，改为在 `$SERVICE`
+  上做 `case "$SERVICE" in game|gate)`——顺带消除了名字互为子串的服务被误放行的可能。有状态
+  服务的 WAL 目录守卫在没有有状态服务时整块省略，而不是渲染成一个空的（非法的）case。
+- **本仓四条工作流自 v1.12.1 起全红，五个互不相关的原因**（收敛单元 U-0015）：
+  ① `release.yml` 三处 `! grep …` 独立语句不受 `set -e` 约束（SC2251）——所谓的发布卫生检查
+  从来没有真正失败过；改为 `if grep …; then exit 1; fi`。② `sha256sum *.tar.gz` 裸通配（SC2035）。
+  ③ `framework-compat` 的 `minimum` 依赖集钉在 core/kit v1.8.0，而生成器下限是 v1.10.0，
+  `project new` 直接拒绝——两处字面量一个事实，新增测试把工作流里的最小集与 `minimumVersions`
+  钉在一起。④ `upgrade-compat` 用 codegen v1.9.0 / v1.10.0 造历史工程，那两版写的是改名前的
+  `cube-core` / `cube-kit` 模块路径，`go get` 永远解析不了；矩阵改为 v1.11.0 / v1.12.1（首个写
+  roost-* 路径的版本起），并有测试守住下界。⑤ `framework-release` 的 consumer-acceptance 在生成
+  工程目录跑 actionlint，那里没有 `.git`，actionlint 以 "no project was found" 退出 3；先 `git init`。
+  以上五项加生成器两项共七条断言进 `internal/roost/deploy_hygiene_test.go`。
+
 ### Changed
 
 - **`ci/framework-release.yaml` 加入 `framework.service`**，roost-service 成为发布链的一层：

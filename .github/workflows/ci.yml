@@ -99,7 +99,7 @@ jobs:
         working-directory: ${{ runner.temp }}/planet
         env:
           ROOST_IMAGE: ghcr.io/example/planet@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          ROOST_CONFIG_ROOT: configs/service
+          ROOST_CONFIG_ROOT: ${{ runner.temp }}/planet/configs/service
         run: |
           docker compose -f deploy/docker/docker-compose.prod.yaml config --quiet
           kubectl kustomize deploy/k8s/overlays/staging > "${RUNNER_TEMP}/staging.yaml"

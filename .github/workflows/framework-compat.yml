@@ -53,7 +53,7 @@ jobs:
         run: |
           version_args=()
           if [ "$SET" = minimum ]; then
-            version_args=(-roost-core-version v1.8.0 -roost-kit-version v1.8.0 -roost-skill-version v1.9.0 -codegen-version v1.7.0)
+            version_args=(-roost-core-version v1.10.0 -roost-kit-version v1.10.0 -roost-skill-version v1.9.0 -codegen-version v1.7.0)
           fi
           mods=configdata
           services=game
@@ -131,7 +131,7 @@ jobs:
             GOWORK=off go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet ./...
           fi
           for script in deploy/shell/*.sh deploy/docker/*.sh deploy/k8s/*.sh; do sh -n "$script"; done
-          ROOST_IMAGE=ghcr.io/example/planet@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ROOST_CONFIG_ROOT=configs/service docker compose -f deploy/docker/docker-compose.prod.yaml config --quiet
+          ROOST_IMAGE=ghcr.io/example/planet@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ROOST_CONFIG_ROOT="$PWD/configs/service" docker compose -f deploy/docker/docker-compose.prod.yaml config --quiet
           kubectl kustomize deploy/k8s/overlays/staging >/dev/null
       - name: source workspace remains temporary and modules stay publishable
         if: matrix.dependency-set == 'source-head'

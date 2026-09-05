@@ -584,7 +584,7 @@ release-check: cicd-check
 image-build:
 	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) -t $(APP_NAME):$(VERSION) .
 compose-check:
-	ROOST_IMAGE=ghcr.io/example/$(APP_NAME)@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ROOST_CONFIG_ROOT=configs/service docker compose -f deploy/docker/docker-compose.prod.yaml config --quiet
+	ROOST_IMAGE=ghcr.io/example/$(APP_NAME)@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ROOST_CONFIG_ROOT=$(CURDIR)/configs/service docker compose -f deploy/docker/docker-compose.prod.yaml config --quiet
 k8s-render:
 	kubectl kustomize deploy/k8s/overlays/$(ENV)
 k8s-check:
@@ -706,7 +706,7 @@ jobs:
       - name: production compose renders
         env:
           ROOST_IMAGE: ghcr.io/example/{{APP}}@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          ROOST_CONFIG_ROOT: configs/service
+          ROOST_CONFIG_ROOT: ${{ github.workspace }}/configs/service
         run: docker compose -f deploy/docker/docker-compose.prod.yaml config --quiet
       - name: kubernetes manifests render
         run: |

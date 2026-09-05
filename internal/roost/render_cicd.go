@@ -450,10 +450,16 @@ func renderProductionCompose(m Manifest) string {
 		fmt.Fprintf(&b, "    command: [%q, \"--sid=%d\", \"--config=/etc/roost/config.yaml\"]\n", service, sid)
 		b.WriteString("    restart: unless-stopped\n    read_only: true\n    init: true\n    user: \"65532:65532\"\n    cap_drop: [ALL]\n    security_opt: [no-new-privileges:true]\n    tmpfs: [/tmp:rw,noexec,nosuid,size=64m]\n")
 		b.WriteString("    stop_grace_period: 45s\n    healthcheck:\n      test: [CMD, /app/healthprobe, http://127.0.0.1:9100/readyz]\n      interval: 10s\n      timeout: 3s\n      retries: 6\n      start_period: 30s\n")
+		// Long syntax with an explicit type. In short syntax a source that
+		// does not begin with "/", "./" or "../" is a NAMED volume, so a
+		// relative ROOST_CONFIG_ROOT made compose report "refers to undefined
+		// volume" — in every generated project's CI.
 		b.WriteString("    volumes:\n")
-		fmt.Fprintf(&b, "      - ${ROOST_CONFIG_ROOT:?ROOST_CONFIG_ROOT is required}/config.%s.yaml:/etc/roost/config.yaml:ro\n", service)
+		b.WriteString("      - type: bind\n")
+		fmt.Fprintf(&b, "        source: ${ROOST_CONFIG_ROOT:?ROOST_CONFIG_ROOT is required}/config.%s.yaml\n", service)
+		b.WriteString("        target: /etc/roost/config.yaml\n        read_only: true\n")
 		if serviceUsesPersistentWAL(m, service) {
-			fmt.Fprintf(&b, "      - %s-%s-wal:/var/lib/roost/wal\n", m.Project.Name, service)
+			fmt.Fprintf(&b, "      - type: volume\n        source: %s-%s-wal\n        target: /var/lib/roost/wal\n", m.Project.Name, service)
 		}
 		b.WriteString("    deploy:\n      resources:\n        limits: {cpus: \"2\", memory: 2G}\n        reservations: {cpus: \"0.25\", memory: 256M}\n")
 	}

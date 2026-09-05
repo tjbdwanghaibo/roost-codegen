@@ -48,8 +48,8 @@ jobs:
           echo "value=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
       - name: repository release hygiene
         run: |
-          ! grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod
-          ! grep -Eq 'v[0-9]+\.[0-9]+\.[0-9]+-0\.[0-9]{14}-[0-9a-f]{12}' go.mod
+          if grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod; then echo "go.mod has a replace directive"; exit 1; fi
+          if grep -Eq 'v[0-9]+\.[0-9]+\.[0-9]+-0\.[0-9]{14}-[0-9a-f]{12}' go.mod; then echo "go.mod depends on a pseudo-version"; exit 1; fi
           go mod download
           go mod verify
           go test ./...
@@ -114,10 +114,13 @@ jobs:
         run: |
           GOWORK=off go mod tidy
           GOWORK=off go mod verify
-          ! grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod
+          if grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod; then echo "consumer go.mod has a replace directive"; exit 1; fi
           "${RUNNER_TEMP}/roost" generate --check
           GOWORK=off go test ./...
           GOWORK=off go vet ./...
+          # actionlint locates the project by its .git directory and exits 3
+          # ("no project was found") in a bare generated tree.
+          git init -q .
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
   binary-smoke:
@@ -195,7 +198,7 @@ jobs:
       - name: checksum release set
         run: |
           cd dist
-          sha256sum *.tar.gz *.zip *.json > SHA256SUMS
+          sha256sum ./*.tar.gz ./*.zip ./*.json > SHA256SUMS
       - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: |

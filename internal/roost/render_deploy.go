@@ -43,7 +43,7 @@ func renderShellBuild(m Manifest) string {
 	return replaceDeployTokens(`#!/usr/bin/env sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 OUTPUT_DIR=${OUTPUT_DIR:-"$ROOT/dist"}
 GOOS=${GOOS:-linux}
 GOARCH=${GOARCH:-amd64}
@@ -87,12 +87,12 @@ VERSION=$3
 CONFIG_SOURCE=$4
 RUN_USER=${5:-roost}
 case "$SERVICE" in *[!a-zA-Z0-9_-]*|'') printf 'invalid service: %s\n' "$SERVICE" >&2; exit 2;; esac
-case " {{SERVICES}} " in *" $SERVICE "*) ;; *) printf 'unknown service: %s (allowed: {{SERVICES}})\n' "$SERVICE" >&2; exit 2;; esac
+case "$SERVICE" in {{SERVICE_ALTERNATIVES}}) ;; *) printf 'unknown service: %s (allowed: {{SERVICES}})\n' "$SERVICE" >&2; exit 2;; esac
 case "$SID" in *[!0-9]*|'0'|'') printf 'sid must be a positive integer\n' >&2; exit 2;; esac
 case "$VERSION" in *[!a-zA-Z0-9._-]*|'') printf 'invalid version: %s\n' "$VERSION" >&2; exit 2;; esac
 [ -f "$CONFIG_SOURCE" ] || { printf 'config not found: %s\n' "$CONFIG_SOURCE" >&2; exit 2; }
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 BINARY=${BINARY:-"$ROOT/dist/{{APP}}"}
 [ -x "$BINARY" ] || { printf 'binary not found; run: sh deploy/shell/build.sh\n' >&2; exit 2; }
 
@@ -106,16 +106,7 @@ HEALTH_URL=${HEALTH_URL:-http://127.0.0.1:9100/readyz}
 HEALTH_ATTEMPTS=${HEALTH_ATTEMPTS:-30}
 [ ! -e "$RELEASE_ROOT" ] || { printf 'release already exists and is immutable: %s\n' "$RELEASE_ROOT" >&2; exit 2; }
 
-case " {{STATEFUL_SERVICES}} " in
-  *" $SERVICE "*)
-    if ! grep -F "$STATE_ROOT/wal" "$CONFIG_SOURCE" >/dev/null 2>&1; then
-      printf 'nest.wal.dir in %s must be %s/wal for service %s\n' "$CONFIG_SOURCE" "$STATE_ROOT" "$SERVICE" >&2
-      exit 2
-    fi
-    ;;
-esac
-
-if ! getent passwd "$RUN_USER" >/dev/null 2>&1; then
+{{STATEFUL_GUARD}}if ! getent passwd "$RUN_USER" >/dev/null 2>&1; then
   useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin "$RUN_USER"
 fi
 install -d -m 0755 "$APP_ROOT/releases" "$RELEASE_ROOT"
@@ -201,8 +192,32 @@ fi
 exit 1
 `, m)
 	value = strings.ReplaceAll(value, "{{SERVICES}}", strings.Join(services, " "))
-	value = strings.ReplaceAll(value, "{{STATEFUL_SERVICES}}", strings.Join(stateful, " "))
+	value = strings.ReplaceAll(value, "{{SERVICE_ALTERNATIVES}}", strings.Join(services, "|"))
+	value = strings.ReplaceAll(value, "{{STATEFUL_GUARD}}", renderStatefulWALGuard(stateful))
 	return value
+}
+
+// renderStatefulWALGuard is the install-time check that a stateful service's
+// production config keeps its WAL under the instance's state root. It is a
+// `case` on the service NAME with the stateful services as alternatives —
+// not a `case` on a constant word list matched against a "*$SERVICE*"
+// pattern, which shellcheck rejects (SC2194) and which would also match a
+// service whose name is a substring of another's. With no stateful service
+// the block is omitted rather than rendered as an empty (invalid) case.
+func renderStatefulWALGuard(stateful []string) string {
+	if len(stateful) == 0 {
+		return ""
+	}
+	return `case "$SERVICE" in
+  ` + strings.Join(stateful, "|") + `)
+    if ! grep -F "$STATE_ROOT/wal" "$CONFIG_SOURCE" >/dev/null 2>&1; then
+      printf 'nest.wal.dir in %s must be %s/wal for service %s\n' "$CONFIG_SOURCE" "$STATE_ROOT" "$SERVICE" >&2
+      exit 2
+    fi
+    ;;
+esac
+
+`
 }
 
 func renderShellHealthcheck() string {
@@ -236,7 +251,7 @@ fi
 SERVICE=$1
 SID=$2
 VERSION=$3
-case " {{SERVICES}} " in *" $SERVICE "*) ;; *) printf 'unknown service: %s\n' "$SERVICE" >&2; exit 2;; esac
+case "$SERVICE" in {{SERVICE_ALTERNATIVES}}) ;; *) printf 'unknown service: %s\n' "$SERVICE" >&2; exit 2;; esac
 case "$SID" in *[!0-9]*|'0'|'') printf 'sid must be a positive integer\n' >&2; exit 2;; esac
 case "$VERSION" in *[!a-zA-Z0-9._-]*|'') printf 'invalid version\n' >&2; exit 2;; esac
 
@@ -253,7 +268,7 @@ ln -s "$TARGET" "$NEXT"
 mv -Tf "$NEXT" "$CURRENT"
 systemctl restart "$INSTANCE.service"
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 HEALTH_URL=${HEALTH_URL:-http://127.0.0.1:9100/readyz}
 HEALTH_ATTEMPTS=${HEALTH_ATTEMPTS:-30}
 attempt=1
@@ -273,7 +288,8 @@ fi
 printf 'rollback target failed readiness; restored previous release\n' >&2
 exit 1
 `, m)
-	return strings.ReplaceAll(value, "{{SERVICES}}", strings.Join(sortedServiceNames(m), " "))
+	value = strings.ReplaceAll(value, "{{SERVICES}}", strings.Join(sortedServiceNames(m), " "))
+	return strings.ReplaceAll(value, "{{SERVICE_ALTERNATIVES}}", strings.Join(sortedServiceNames(m), "|"))
 }
 
 func renderShellReadme(m Manifest) string {
@@ -328,7 +344,7 @@ func renderDockerDeployScript(m Manifest) string {
 	return replaceDeployTokens(`#!/usr/bin/env sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 COMPOSE=$ROOT/deploy/docker/docker-compose.prod.yaml
 STATE_DIR=${ROOST_DEPLOY_STATE_DIR:-$ROOT/.roost-deploy}
 ENV_FILE=${ROOST_ENV_FILE:-$ROOT/deploy/docker/.env.production}
@@ -374,7 +390,7 @@ func renderDockerRollbackScript(m Manifest) string {
 	return replaceDeployTokens(`#!/usr/bin/env sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 COMPOSE=$ROOT/deploy/docker/docker-compose.prod.yaml
 STATE_DIR=${ROOST_DEPLOY_STATE_DIR:-$ROOT/.roost-deploy}
 ENV_FILE=${ROOST_ENV_FILE:-$ROOT/deploy/docker/.env.production}
@@ -408,7 +424,7 @@ func renderKubernetesDeployScript(m Manifest) string {
 	return replaceDeployTokens(`#!/usr/bin/env sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 ENVIRONMENT=${ENVIRONMENT:-staging}
 : "${ROOST_IMAGE:?ROOST_IMAGE must contain an immutable ghcr.io image digest}"
 case "$ENVIRONMENT" in staging|production) ;; *) printf 'ENVIRONMENT must be staging or production\n' >&2; exit 2;; esac
