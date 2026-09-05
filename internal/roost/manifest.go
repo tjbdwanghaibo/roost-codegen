@@ -22,10 +22,16 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // "latest" remains the default update policy; these concrete versions are
 // used only as an offline/bootstrap go.mod baseline and as compatibility
 // guards for users that intentionally pin a release.
+//
+// The four framework modules move together: roost-service v1.5.1 requires
+// core and kit v1.12.0, so a project pinning core below that and hosting a
+// framework service cannot resolve ("roost-service@v1.5.1 requires
+// roost-core@v1.12.0, not roost-core@v1.10.0"). The floors are therefore the
+// oldest set that resolves as a whole, not each module's own oldest tag.
 var minimumVersions = VersionSpec{
-	Core:    "v1.10.0",
-	Kit:     "v1.10.0",
-	Skill:   "v1.9.0",
+	Core:    "v1.12.0",
+	Kit:     "v1.12.0",
+	Skill:   "v1.10.3",
 	Service: "v1.5.1",
 	Codegen: "v1.7.0",
 }

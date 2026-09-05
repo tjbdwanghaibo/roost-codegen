@@ -1136,7 +1136,7 @@ func TestAddSagaRequiresSteps(t *testing.T) {
 func TestFrameworkMinimumVersionGuard(t *testing.T) {
 	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"saga"}, []string{"saga"})
 	m.Versions.Core = "v1.7.9"
-	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "v1.10.0") {
+	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), minimumVersions.Core) {
 		t.Fatalf("expected framework minimum version guard, got %v", err)
 	}
 	m.Versions.Core, m.Versions.Kit = minimumVersions.Core, minimumVersions.Kit

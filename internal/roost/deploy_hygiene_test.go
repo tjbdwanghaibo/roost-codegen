@@ -103,7 +103,7 @@ func TestDeployScriptsCarryNoKnownShellcheckFindings(t *testing.T) {
 
 // The compatibility matrix's "minimum" dependency set must be exactly the
 // floor the generator enforces, or the job fails at `roost project new`
-// ("versions.core requires >= v1.10.0 or latest; got v1.8.0") instead of
+// ("versions.core requires >= <floor> or latest; got v1.8.0") instead of
 // testing anything. Two literals in two files, one fact: pin them together.
 func TestFrameworkCompatMinimumSetMatchesTheGeneratorFloor(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "framework-compat.yml"))
