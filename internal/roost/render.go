@@ -24,7 +24,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	// Keep the file present so Docker's deterministic `COPY go.mod go.sum ./`
 	// works before the first local `go mod tidy`. Sync never overwrites it.
 	add("go.sum", "", false)
-	add(".gitignore", "bin/\ndist/\nlog/\n.roost-deploy/\n.env\ndeploy/docker/.env.*\n*.local.yaml\ndeploy/k8s/secret.*.local.yaml\n.idea/\n.vscode/\n", false)
+	add(".gitignore", "bin/\ndist/\nlog/\n.roost-deploy/\n.env\ndeploy/docker/.env.*\n*.local.yaml\ndeploy/k8s/base/secret.*.local.yaml\n.idea/\n.vscode/\n", false)
 	add("Makefile", renderMakefile(m), true)
 	add("README.md", renderProjectReadme(m), false)
 	add("docs/QUICKSTART.zh-CN.md", renderBeginnerQuickstart(m), true)
@@ -50,7 +50,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	add("deploy/dev/docker-compose.yaml", renderCompose(m), true)
 	add("Dockerfile", renderDockerfile(m), true)
 	for path, body := range renderProductionDeployment(m) {
-		owned := !strings.HasPrefix(path, "deploy/k8s/secret.")
+		owned := !strings.HasPrefix(path, "deploy/k8s/base/secret.")
 		add(path, body, owned)
 	}
 	add("docs/IMPLEMENTATION.zh-CN.md", renderImplementationGuide(m), true)

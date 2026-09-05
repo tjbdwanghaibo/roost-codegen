@@ -33,6 +33,21 @@
 
 ### Changed
 
+- **生成的 Kubernetes base 移到 `deploy/k8s/base/`**，overlay 改引用 `../../base`。kustomize
+  v5.7+（kubectl 1.34+ 内置）拒绝 base 目录是 overlay 祖先的布局：
+  `cycle detected: candidate root deploy/k8s contains visited root deploy/k8s/overlays/staging`
+  ——旧布局（`deploy/k8s/kustomization.yaml` + `overlays/*/../..`）在新 kubectl 上一个对象都渲染
+  不出来，生成工程 CI 的 "kubernetes manifests render" 步骤和 `deploy/k8s/deploy.sh` 一起失效。
+  overlay 同时把已弃用的 `commonLabels` 换成 `labels`（`includeSelectors: true`，选择器语义不变）。
+  **升级现有工程**：`make sync`（或 `roost project sync`）写入 `deploy/k8s/base/*`，并删除旧位置的
+  六类受控清单（`kustomization` / `namespace` / `service-account` / `network-policy` /
+  `<service>.yaml` / `<service>-pdb.yaml`）。旧清单没有生成头，sync 原本认不出它们是 codegen 的产物，
+  第一次试跑 `removed=0`——现在按固定文件名加 `roost` 命名空间识别，并且 base/ 下的新清单都带上了
+  `# Code generated` 头，下次再搬家就走通用规则。你自己手写的 `deploy/k8s/*.yaml` 不动；旧位置的
+  `secret.<service>.example.yaml` 从来不受控，留在原地，自行删除；`secret.<service>.local.yaml`
+  需要手动移到 `deploy/k8s/base/`（`.gitignore` 的忽略项已随之更新）。
+  `TestKubernetesBaseIsNotAnAncestorOfItsOverlays` 在有 kubectl 的机器上真的跑 `kubectl kustomize`
+  两个 overlay 并把弃用告警算作失败；`TestSyncRemovesTheLegacyKubernetesBase` 覆盖迁移。
 - **`ci/framework-release.yaml` 加入 `framework.service`**，roost-service 成为发布链的一层：
   `framework verify` 同样下载它并拒绝 replace / 伪版本，GitHub output 多一个 `service`，
   缺少该字段的清单不再通过校验。清单里的版本同时从 core v1.9.1 / kit v1.9.2 / skill v1.9.1 /

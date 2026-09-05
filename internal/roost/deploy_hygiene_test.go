@@ -162,3 +162,105 @@ func TestReleaseWorkflowShellHasNoBareNegationsOrGlobs(t *testing.T) {
 		}
 	}
 }
+
+// kustomize v5.7+ (kubectl 1.34+) rejects an overlay whose base directory is
+// one of the overlay's own ancestors: "cycle detected: candidate root
+// deploy/k8s contains visited root deploy/k8s/overlays/staging". The base
+// therefore has its own directory, and every overlay must point at it.
+func TestKubernetesBaseIsNotAnAncestorOfItsOverlays(t *testing.T) {
+	m := DefaultManifest("planet", "example.com/planet", []string{"game", "gate"}, nil, nil)
+	files := renderProductionDeployment(m)
+	if _, ok := files["deploy/k8s/base/kustomization.yaml"]; !ok {
+		t.Fatal("base kustomization is not under deploy/k8s/base/")
+	}
+	if _, ok := files["deploy/k8s/kustomization.yaml"]; ok {
+		t.Fatal("a kustomization at deploy/k8s/ makes the base an ancestor of its overlays")
+	}
+	dir := t.TempDir()
+	for _, env := range []string{"staging", "production"} {
+		overlay := files["deploy/k8s/overlays/"+env+"/kustomization.yaml"]
+		if !strings.Contains(overlay, "- ../../base") || strings.Contains(overlay, "- ../..\n") {
+			t.Errorf("%s overlay does not reference ../../base:\n%s", env, overlay)
+		}
+		if strings.Contains(overlay, "commonLabels") {
+			t.Errorf("%s overlay uses deprecated commonLabels", env)
+		}
+	}
+	for path, body := range files {
+		if !strings.HasPrefix(path, "deploy/k8s/") {
+			continue
+		}
+		full := filepath.Join(dir, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := exec.LookPath("kubectl"); err != nil {
+		t.Logf("kubectl not installed; the generated project's CI renders the overlays")
+		return
+	}
+	for _, env := range []string{"staging", "production"} {
+		out, err := exec.Command("kubectl", "kustomize", filepath.Join(dir, "deploy", "k8s", "overlays", env)).CombinedOutput()
+		if err != nil {
+			t.Errorf("kubectl kustomize %s: %v\n%s", env, err, out)
+		}
+		if strings.Contains(string(out), "deprecated") {
+			t.Errorf("kubectl kustomize %s warns about a deprecated field:\n%s", env, out)
+		}
+	}
+}
+
+// A project generated before the base moved keeps its old manifests straight
+// under deploy/k8s/. They carry no generated header, so the generic
+// "obsolete output" rule cannot see them; sync recognises them by the fixed
+// names and the roost namespace instead — and leaves a hand-written file and
+// the never-owned secret example alone.
+func TestSyncRemovesTheLegacyKubernetesBase(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	if _, _, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target,
+		Services: []string{"game"}, Mods: []string{"configdata"}, Features: []string{"config"}}); err != nil {
+		t.Fatal(err)
+	}
+	legacy := map[string]string{
+		"deploy/k8s/kustomization.yaml":   "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nnamespace: roost\nresources:\n  - game.yaml\n",
+		"deploy/k8s/namespace.yaml":       "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: roost\n",
+		"deploy/k8s/game.yaml":            "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: planet-game\n  namespace: roost\n",
+		"deploy/k8s/game-pdb.yaml":        "apiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: planet-game\n  namespace: roost\n",
+		"deploy/k8s/service-account.yaml": "apiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: planet\n  namespace: roost\n",
+		"deploy/k8s/network-policy.yaml":  "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: planet-default-deny-ingress\n  namespace: roost\n",
+	}
+	kept := map[string]string{
+		"deploy/k8s/extra.yaml":               "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: mine\n  namespace: team\n",
+		"deploy/k8s/secret.game.example.yaml": "# Copy to secret.game.local.yaml\napiVersion: v1\nkind: Secret\nmetadata:\n  namespace: roost\n",
+	}
+	for rel, body := range legacy {
+		if err := os.WriteFile(filepath.Join(target, filepath.FromSlash(rel)), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for rel, body := range kept {
+		if err := os.WriteFile(filepath.Join(target, filepath.FromSlash(rel)), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := SyncProject(target)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	for rel := range legacy {
+		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); !os.IsNotExist(err) {
+			t.Errorf("%s survived sync (removed=%v)", rel, result.Removed)
+		}
+	}
+	for rel := range kept {
+		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("%s was removed; it is not codegen's", rel)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(target, "deploy", "k8s", "base", "kustomization.yaml")); err != nil {
+		t.Errorf("base kustomization missing after sync: %v", err)
+	}
+}

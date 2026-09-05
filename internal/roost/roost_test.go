@@ -683,9 +683,9 @@ func TestAddPlayerTCPTransportIsExplicitAndProductionGuarded(t *testing.T) {
 		}
 	}
 	for path, fragments := range map[string][]string{
-		"Dockerfile":                     {"EXPOSE 9100 7000"},
-		"deploy/k8s/game.yaml":           {"name: player-tcp", "containerPort: 7000", "port: 7000"},
-		"deploy/k8s/network-policy.yaml": {"roost.tjbdwanghaibo.io/player-access", "port: 7000"},
+		"Dockerfile":                          {"EXPOSE 9100 7000"},
+		"deploy/k8s/base/game.yaml":           {"name: player-tcp", "containerPort: 7000", "port: 7000"},
+		"deploy/k8s/base/network-policy.yaml": {"roost.tjbdwanghaibo.io/player-access", "port: 7000"},
 	} {
 		raw, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
 		if readErr != nil {
@@ -1229,11 +1229,11 @@ func TestProductionDeploymentRendering(t *testing.T) {
 		"deploy/shell/install.sh",
 		"deploy/shell/healthcheck.sh",
 		"deploy/docker/README.md",
-		"deploy/k8s/kustomization.yaml",
-		"deploy/k8s/network-policy.yaml",
-		"deploy/k8s/game.yaml",
-		"deploy/k8s/gate.yaml",
-		"deploy/k8s/secret.game.example.yaml",
+		"deploy/k8s/base/kustomization.yaml",
+		"deploy/k8s/base/network-policy.yaml",
+		"deploy/k8s/base/game.yaml",
+		"deploy/k8s/base/gate.yaml",
+		"deploy/k8s/base/secret.game.example.yaml",
 		"docs/IMPLEMENTATION.zh-CN.md",
 		"docs/DEPLOYMENT.zh-CN.md",
 	} {
@@ -1242,21 +1242,21 @@ func TestProductionDeploymentRendering(t *testing.T) {
 		}
 	}
 
-	game := string(plan["deploy/k8s/game.yaml"].Body)
+	game := string(plan["deploy/k8s/base/game.yaml"].Body)
 	for _, want := range []string{"kind: StatefulSet", "volumeClaimTemplates:", "readOnlyRootFilesystem: true", "startupProbe:", "readinessProbe:", "livenessProbe:"} {
 		if !strings.Contains(game, want) {
 			t.Errorf("stateful workload missing %q:\n%s", want, game)
 		}
 	}
-	gate := string(plan["deploy/k8s/gate.yaml"].Body)
+	gate := string(plan["deploy/k8s/base/gate.yaml"].Body)
 	if !strings.Contains(gate, "kind: Deployment") || strings.Contains(gate, "volumeClaimTemplates:") {
 		t.Fatalf("stateless workload rendered incorrectly:\n%s", gate)
 	}
-	secret := string(plan["deploy/k8s/secret.game.example.yaml"].Body)
+	secret := string(plan["deploy/k8s/base/secret.game.example.yaml"].Body)
 	if !strings.Contains(secret, "CHANGE_ME") || !strings.Contains(secret, "addr: 0.0.0.0:9100") {
 		t.Fatalf("secret example is not fail-closed or probe-ready:\n%s", secret)
 	}
-	kustomization := string(plan["deploy/k8s/kustomization.yaml"].Body)
+	kustomization := string(plan["deploy/k8s/base/kustomization.yaml"].Body)
 	if strings.Contains(kustomization, "secret.") {
 		t.Fatalf("secret examples must not be applied by kustomize:\n%s", kustomization)
 	}

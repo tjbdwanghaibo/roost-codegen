@@ -161,8 +161,8 @@ func Add(root string, options AddOptions) ([]string, error) {
 			"internal/bootstrap/generated.go",
 			"Dockerfile",
 			"deploy/docker/README.md",
-			"deploy/k8s/network-policy.yaml",
-			"deploy/k8s/" + access.Service + ".yaml",
+			"deploy/k8s/base/network-policy.yaml",
+			"deploy/k8s/base/" + access.Service + ".yaml",
 		}, nil
 	}
 	if options.Kind == "saga" {
