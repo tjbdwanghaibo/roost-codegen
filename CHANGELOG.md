@@ -20,6 +20,12 @@
 
 ### Fixed
 
+- **servicerpc 生成的 ClientMod 在真实进程里装配不起来**（U-0024，C4）。模板里 `ClientMod.DependsOn`
+  返回 `mods.ModBus`——那是总线 **capability** 的名字，而 app 按 Mod **名字**解析依赖，没有任何 Mod
+  叫 `bus`：把 `xxx.NewClientMod()` 与 kit 的 nats Mod 装进同一个进程，启动即
+  `unknown mod dependency "bus"`。roost-service 的八个客户端全部如此，直到 `-template game` 生成的
+  工程第一次真的启动 game 进程。现在依赖发布总线的 `mods.ModNats`；golden 随之更新，
+  `TestTheGeneratedClientDependsOnTheModThatPublishesTheBus` 钉住。roost-service 已用修正后的生成器重生成。
 - **生成的 `deploy/docker/docker-compose.prod.yaml` 在 `docker compose config` 下报
   `service "game" refers to undefined volume configs/service/config.game.yaml`**。配置文件挂载
   用的是短语法 `${ROOST_CONFIG_ROOT}/config.<svc>.yaml:/etc/roost/config.yaml:ro`；compose 把不以
