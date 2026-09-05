@@ -264,3 +264,32 @@ func TestSyncRemovesTheLegacyKubernetesBase(t *testing.T) {
 		t.Errorf("base kustomization missing after sync: %v", err)
 	}
 }
+
+// The generated go.mod, the Dockerfile's builder image and the generator's
+// own toolchain requirement are one fact. When the Dockerfile lagged at 1.25
+// while the framework needed 1.27, every generated project's image build
+// failed at `go mod download` with "go.mod requires go >= 1.27.0".
+func TestGeneratedGoVersionMatchesTheGeneratorsOwn(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`(?m)^go (\d+\.\d+)`).FindStringSubmatch(string(raw))
+	if match == nil {
+		t.Fatal("generator go.mod has no go directive")
+	}
+	if match[1] != generatedGoVersion {
+		t.Fatalf("generatedGoVersion = %s but the generator itself requires go %s", generatedGoVersion, match[1])
+	}
+	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, nil, nil)
+	plan, err := renderProject(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := string(plan["Dockerfile"].Body); !strings.Contains(body, "ARG GO_VERSION="+generatedGoVersion+"\n") {
+		t.Errorf("Dockerfile builder image is not golang:%s:\n%s", generatedGoVersion, body)
+	}
+	if body := string(plan["go.mod"].Body); !strings.Contains(body, "\ngo "+generatedGoVersion+".0\n") {
+		t.Errorf("go.mod directive is not go %s.0:\n%s", generatedGoVersion, body)
+	}
+}

@@ -107,7 +107,7 @@ roost framework verify --github-output "$GITHUB_OUTPUT"`,
 		Example: `schema: 1
 codegen: v1.10.0
 framework: {core: v1.9.1, kit: v1.9.2, skill: v1.9.1}
-consumer_go: [1.25.x, 1.26.x]
+consumer_go: [1.27.x]
 
 roost framework verify --expected-codegen v1.10.0`,
 	},

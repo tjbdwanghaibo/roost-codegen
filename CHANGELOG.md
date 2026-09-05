@@ -15,6 +15,11 @@
   `type: volume`；同时生成的 Makefile 改传 `$(CURDIR)/configs/service`、生成的 CI 改传
   `${{ github.workspace }}/configs/service`——compose 对相对 bind source 是相对 compose **文件**
   所在目录（`deploy/docker/`）解析的，相对路径即使通过校验，`up` 时挂的也是错目录。
+- **生成的 Dockerfile 用 `golang:1.25` 构建一个 `go 1.27.0` 的工程**，镜像构建在 `go mod download` 就停：
+  `go.mod requires go >= 1.27.0 (running go 1.25.14; GOTOOLCHAIN=local)`。生成的 go.mod 写
+  `go 1.25.0`，随后 `go get` 框架时被抬到 1.27.0，Dockerfile 的 `ARG GO_VERSION=1.25` 却没人跟。
+  现在 go.mod 指令、Dockerfile 构建镜像、新手文档三处共用 `generatedGoVersion`（1.27），
+  `TestGeneratedGoVersionMatchesTheGeneratorsOwn` 把它钉在本仓 go.mod 的 go 指令上。
 - **生成的部署脚本过不了 shellcheck**（生成工程 CI 的 "deployment shell syntax" 步骤）：
   六个脚本的 `ROOT=$(CDPATH= cd -- …)` 报 SC1007，改为 `CDPATH=''`；`install.sh` / `rollback.sh`
   用 `case " game gate " in *" $SERVICE "*)` 在一个常量词上做 case 报 SC2194，改为在 `$SERVICE`

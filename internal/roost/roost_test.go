@@ -1529,7 +1529,7 @@ func TestGeneratedBeginnerAndManifestDocumentationIsComplete(t *testing.T) {
 	}
 	quickstart := string(plan["docs/QUICKSTART.zh-CN.md"].Body)
 	for _, want := range []string{
-		"零基础快速开始", "Go 1.25", "Service", "Mod", "Feature", "Generated file",
+		"零基础快速开始", "Go " + generatedGoVersion, "Service", "Mod", "Feature", "Generated file",
 		"make deps-update", "make generate", "make doctor", "make run SERVICE=game",
 		"roost add access player --service game", "roost add protocol", "roost add endpoint", "常见问题", "ROOST_YAML.zh-CN.md",
 	} {

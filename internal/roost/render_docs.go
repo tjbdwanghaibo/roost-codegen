@@ -16,7 +16,7 @@ func renderBeginnerQuickstart(m Manifest) string {
 
 必须安装：
 
-- Go 1.25 或项目 go.mod 指定的更高兼容版本；
+- Go 1.27 或项目 go.mod 指定的更高兼容版本；
 - Git；
 - GNU Make；
 - 能访问 Go module proxy 或 GitHub。
