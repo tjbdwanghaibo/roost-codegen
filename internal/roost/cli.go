@@ -105,7 +105,9 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 		core := fs.String("roost-core-version", "", "roost-core version")
 		kit := fs.String("roost-kit-version", "", "roost-kit version")
 		skill := fs.String("roost-skill-version", "", "roost-skill version")
+		serviceVersion := fs.String("roost-service-version", "", "roost-service version")
 		codegen := fs.String("codegen-version", "", "roost-codegen version")
+		template := fs.String("template", "", "opt-in starting shape: game (hosts account, mail, match, chat and wires the first service to them)")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
@@ -115,7 +117,7 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 		if strings.TrimSpace(*module) == "" {
 			return fmt.Errorf("-module is required so generated imports do not use someone else's repository; example: roost project new %s -module github.com/<your-account>/%s", args[1], toSnake(args[1]))
 		}
-		result, target, err := NewProject(NewOptions{Name: toSnake(args[1]), Module: *module, Out: *out, Services: splitList(*services), Mods: splitList(*mods), Features: splitList(*features), Versions: VersionSpec{Core: *core, Kit: *kit, Skill: *skill, Codegen: *codegen}})
+		result, target, err := NewProject(NewOptions{Name: toSnake(args[1]), Module: *module, Out: *out, Services: splitList(*services), Mods: splitList(*mods), Features: splitList(*features), Versions: VersionSpec{Core: *core, Kit: *kit, Skill: *skill, Service: *serviceVersion, Codegen: *codegen}, Template: *template})
 		if err != nil {
 			return err
 		}
@@ -141,6 +143,7 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 		core := fs.String("core", "", "new core version")
 		kit := fs.String("kit", "", "new kit version")
 		skill := fs.String("skill", "", "new skill version")
+		serviceVersion := fs.String("service", "", "new roost-service version")
 		codegen := fs.String("codegen", "", "new codegen version")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
@@ -151,7 +154,7 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 		allowed := map[string][]string{
 			"sync": {"root"}, "diff": {"root"}, "doctor": {"root", "strict", "json", "workflow"},
 			"next": {"root", "workflow"}, "deps": {"root"},
-			"upgrade": {"root", "dry-run", "core", "kit", "skill", "codegen"},
+			"upgrade": {"root", "dry-run", "core", "kit", "skill", "service", "codegen"},
 		}
 		if err := rejectUnsupportedFlags(fs, allowed[args[0]]...); err != nil {
 			return err
@@ -192,7 +195,7 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 			if err != nil {
 				return err
 			}
-			mergeVersions(&m.Versions, VersionSpec{Core: *core, Kit: *kit, Skill: *skill, Codegen: *codegen})
+			mergeVersions(&m.Versions, VersionSpec{Core: *core, Kit: *kit, Skill: *skill, Service: *serviceVersion, Codegen: *codegen})
 			if err := m.Validate(); err != nil {
 				return fmt.Errorf("validate upgraded manifest: %w", err)
 			}

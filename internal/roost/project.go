@@ -24,6 +24,9 @@ type NewOptions struct {
 	Mods     []string
 	Features []string
 	Versions VersionSpec
+	// Template is an opt-in starting shape. "game" hosts account, mail, match
+	// and chat as their own processes and wires the first service to them.
+	Template string
 }
 
 type SyncResult struct {
@@ -53,6 +56,19 @@ func NewProject(options NewOptions) (SyncResult, string, error) {
 	}
 	manifest := DefaultManifest(options.Name, options.Module, options.Services, options.Mods, options.Features)
 	mergeVersions(&manifest.Versions, options.Versions)
+	switch strings.TrimSpace(options.Template) {
+	case "":
+	case "game":
+		services := options.Services
+		if len(services) == 0 {
+			services = []string{"game"}
+		}
+		if err := applyGameTemplate(&manifest, toSnake(services[0])); err != nil {
+			return SyncResult{}, "", err
+		}
+	default:
+		return SyncResult{}, "", fmt.Errorf("unknown template %q; supported: game", options.Template)
+	}
 	if err := manifest.Validate(); err != nil {
 		return SyncResult{}, "", err
 	}
@@ -614,6 +630,9 @@ func mergeVersions(target *VersionSpec, override VersionSpec) {
 	}
 	if override.Skill != "" {
 		target.Skill = override.Skill
+	}
+	if override.Service != "" {
+		target.Service = override.Service
 	}
 	if override.Codegen != "" {
 		target.Codegen = override.Codegen

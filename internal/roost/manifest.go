@@ -26,6 +26,7 @@ var minimumVersions = VersionSpec{
 	Core:    "v1.10.0",
 	Kit:     "v1.10.0",
 	Skill:   "v1.9.0",
+	Service: "v1.5.1",
 	Codegen: "v1.7.0",
 }
 
@@ -48,10 +49,21 @@ type ProjectSpec struct {
 }
 
 type VersionSpec struct {
-	Core    string `yaml:"core"`
-	Kit     string `yaml:"kit"`
-	Skill   string `yaml:"skill"`
+	Core  string `yaml:"core"`
+	Kit   string `yaml:"kit"`
+	Skill string `yaml:"skill"`
+	// Service is the roost-service release policy. Manifests written before
+	// it existed leave it empty, which reads as latest.
+	Service string `yaml:"service,omitempty"`
 	Codegen string `yaml:"codegen"`
+}
+
+// servicePolicy is versions.service with the pre-field default applied.
+func (v VersionSpec) servicePolicy() string {
+	if strings.TrimSpace(v.Service) == "" {
+		return "latest"
+	}
+	return v.Service
 }
 
 // CICDSpec contains only non-secret delivery policy. Credentials, production
@@ -65,6 +77,15 @@ type CICDSpec struct {
 
 type ServiceSpec struct {
 	Mods []string `yaml:"mods,omitempty"`
+	// Framework names a roost-service service this process hosts — account,
+	// mail, match or chat — instead of business code. The generated
+	// bootstrap registers that service's Server with its owner Mod; the Mod's
+	// collaborators come from internal/service/<name>/collaborators.go.
+	Framework string `yaml:"framework,omitempty"`
+	// Uses lists framework services (declared above) this business service
+	// calls. Each adds the ClientMod to this process and a typed accessor in
+	// internal/service/<name>/framework_clients_gen.go.
+	Uses []string `yaml:"uses,omitempty"`
 }
 
 // AccessSpec declares an application-owned request boundary. Access layers
@@ -107,7 +128,7 @@ func DefaultManifest(name, module string, services, mods, features []string) Man
 	return Manifest{
 		Schema:     1,
 		Project:    ProjectSpec{Name: name, Module: module},
-		Versions:   VersionSpec{Core: "latest", Kit: "latest", Skill: "latest", Codegen: "latest"},
+		Versions:   VersionSpec{Core: "latest", Kit: "latest", Skill: "latest", Service: "latest", Codegen: "latest"},
 		CICD:       defaultCICDSpec(),
 		SharedMods: shared,
 		Services:   svc,
@@ -238,6 +259,9 @@ func (m Manifest) Validate() error {
 			}
 		}
 	}
+	if err := m.validateFrameworkServices(); err != nil {
+		joined = errors.Join(joined, err)
+	}
 	for name, access := range m.Access {
 		if name != "player" {
 			joined = errors.Join(joined, fmt.Errorf("unsupported access layer %q; supported: player", name))
@@ -290,6 +314,7 @@ func (m Manifest) Validate() error {
 		{name: "core", value: m.Versions.Core, minimum: minimumVersions.Core},
 		{name: "kit", value: m.Versions.Kit, minimum: minimumVersions.Kit},
 		{name: "skill", value: m.Versions.Skill, minimum: minimumVersions.Skill},
+		{name: "service", value: m.Versions.servicePolicy(), minimum: minimumVersions.Service},
 		{name: "codegen", value: m.Versions.Codegen, minimum: minimumVersions.Codegen},
 	} {
 		if err := validateVersionPolicy(version.name, version.value, version.minimum); err != nil {

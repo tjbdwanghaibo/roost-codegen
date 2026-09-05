@@ -64,7 +64,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	if err := addGo("internal/bootstrap/generated.go", renderBootstrap(m), true); err != nil {
 		return nil, err
 	}
-	if err := addGo("internal/frameworkdeps/generated.go", renderFrameworkDeps(), true); err != nil {
+	if err := addGo("internal/frameworkdeps/generated.go", renderFrameworkDeps(m), true); err != nil {
 		return nil, err
 	}
 	if _, enabled := m.Access["player"]; enabled {
@@ -93,10 +93,26 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 
 	services := sortedServiceNames(m)
 	for _, name := range services {
+		if m.isFrameworkService(name) {
+			// A hosted framework service has no business Service; its
+			// process is the roost-service Server plus the collaborators the
+			// owner Mod needs, which are the project's to write.
+			if err := addGo("internal/service/"+name+"/collaborators.go", renderFrameworkCollaborators(m, name), false); err != nil {
+				return nil, err
+			}
+			add("configs/service/config."+name+".yaml", renderServiceConfig(m, name, false), false)
+			add("configs/service/config."+name+".prod.example.yaml", renderServiceConfig(m, name, true), false)
+			continue
+		}
 		if err := addGo("internal/service/"+name+"/service.go", renderService(name), false); err != nil {
 			return nil, err
 		}
-		serviceMods, _ := resolveMods(m.Services[name].Mods)
+		if len(m.Services[name].Uses) > 0 {
+			if err := addGo("internal/service/"+name+"/framework_clients_gen.go", renderFrameworkClients(m, name), true); err != nil {
+				return nil, err
+			}
+		}
+		serviceMods, _ := resolveMods(effectiveServiceMods(m, name))
 		if contains(serviceMods, "manager") {
 			if err := addGo("internal/service/"+name+"/managers.go", renderServiceManagers(name), false); err != nil {
 				return nil, err
@@ -202,23 +218,35 @@ go `+generatedGoVersion+`.0
 
 // roost.yaml owns the framework update policy. When it is "latest", this
 // bootstrap file starts at the supported minimum and roost project deps
-// resolves all three direct framework modules together to their latest tags.
+// resolves the direct framework modules together to their latest tags.
 require (
 	github.com/tjbdwanghaibo/roost-core %s
 	github.com/tjbdwanghaibo/roost-kit %s
-	github.com/tjbdwanghaibo/roost-skill %s
+	github.com/tjbdwanghaibo/roost-skill %s%s
 )
 `, m.Project.Module,
 		resolvedModuleVersion(m.Versions.Core, minimumVersions.Core),
 		resolvedModuleVersion(m.Versions.Kit, minimumVersions.Kit),
-		resolvedModuleVersion(m.Versions.Skill, minimumVersions.Skill))
+		resolvedModuleVersion(m.Versions.Skill, minimumVersions.Skill),
+		serviceRequire(m))
+}
+
+// serviceRequire is the roost-service require line, present only when the
+// project hosts or calls a framework service: a project that does not use
+// roost-service does not carry it.
+func serviceRequire(m Manifest) string {
+	if !m.usesFrameworkServices() {
+		return ""
+	}
+	return "\n\t" + frameworkServiceModule + " " + resolvedModuleVersion(m.Versions.servicePolicy(), minimumVersions.Service)
 }
 
 // renderFrameworkDeps keeps optional framework-domain modules in go.mod even
 // before business code imports them. This makes a freshly generated project
 // go-mod-tidy clean while preserving the version baseline from roost.yaml.
-func renderFrameworkDeps() string {
-	return generatedHeader + `
+func renderFrameworkDeps(m Manifest) string {
+	if !m.usesFrameworkServices() {
+		return generatedHeader + `
 package frameworkdeps
 
 import "github.com/tjbdwanghaibo/roost-skill/skill"
@@ -226,6 +254,23 @@ import "github.com/tjbdwanghaibo/roost-skill/skill"
 // SkillProgram retains the skill runtime selected by roost.yaml without adding
 // runtime initialization or requiring business code to import it immediately.
 type SkillProgram = skill.Program
+`
+	}
+	return generatedHeader + `
+package frameworkdeps
+
+import (
+	"github.com/tjbdwanghaibo/roost-service/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-skill/skill"
+)
+
+// SkillProgram retains the skill runtime selected by roost.yaml without adding
+// runtime initialization or requiring business code to import it immediately.
+type SkillProgram = skill.Program
+
+// ServiceMetrics retains roost-service, which the framework services this
+// project hosts or calls are built from.
+type ServiceMetrics = servicemetrics.Reporter
 `
 }
 
@@ -271,6 +316,14 @@ func renderBootstrap(m Manifest) string {
 	services := sortedServiceNames(m)
 	for _, name := range services {
 		imports[m.Project.Module+"/internal/service/"+name] = "service" + safeIdent(name)
+		if spec, ok := frameworkCatalog[m.Services[name].Framework]; ok {
+			imports[frameworkServiceModule+"/"+spec.Package] = "svc" + spec.Package
+		}
+		for _, used := range m.Services[name].Uses {
+			if spec, ok := frameworkCatalog[m.Services[used].Framework]; ok {
+				imports[frameworkServiceModule+"/"+spec.Package] = "svc" + spec.Package
+			}
+		}
 	}
 	if _, enabled := m.Access["player"]; enabled {
 		imports[m.Project.Module+"/internal/access/player"] = "accessplayer"
@@ -316,10 +369,30 @@ func renderBootstrap(m Manifest) string {
 		b.WriteString("\t)\n")
 	}
 	for _, name := range services {
-		mods, _ := resolveMods(m.Services[name].Mods)
+		mods, _ := resolveMods(effectiveServiceMods(m, name))
+		if spec, hosted := frameworkCatalog[m.Services[name].Framework]; hosted {
+			// The roost-service Server is the process's Service; the owner Mod
+			// is built from the project's collaborators file.
+			args := make([]string, 0, len(spec.ModArgs))
+			for _, arg := range spec.ModArgs {
+				args = append(args, "service"+safeIdent(name)+"."+arg)
+			}
+			fmt.Fprintf(&b, "\ta.RegisterServer(app.ServiceName(svc%s.ServiceType), svc%s.NewServer()", spec.Package, spec.Package)
+			for _, mod := range mods {
+				fmt.Fprintf(&b, ",\n\t\t%s", renderModConstructor(m, mod, allMods, name))
+			}
+			fmt.Fprintf(&b, ",\n\t\tsvc%s.NewMod(%s))\n", spec.Package, strings.Join(args, ", "))
+			continue
+		}
 		fmt.Fprintf(&b, "\ta.RegisterServer(app.ServiceName(%q), service%s.New()", name, safeIdent(name))
 		for _, mod := range mods {
 			fmt.Fprintf(&b, ",\n\t\t%s", renderModConstructor(m, mod, allMods, name))
+		}
+		used := append([]string(nil), m.Services[name].Uses...)
+		sort.Strings(used)
+		for _, target := range used {
+			spec := frameworkCatalog[m.Services[target].Framework]
+			fmt.Fprintf(&b, ",\n\t\tsvc%s.NewClientMod()", spec.Package)
 		}
 		if access, enabled := m.Access["player"]; enabled && access.Service == name {
 			b.WriteString(",\n\t\taccessplayer.NewMod()")
@@ -416,7 +489,7 @@ func Managers() []app.IManager {
 }
 
 func renderServiceConfig(m Manifest, service string, production bool) string {
-	mods, _ := resolveMods(append(append([]string{}, m.SharedMods...), m.Services[service].Mods...))
+	mods, _ := resolveMods(append(append([]string{}, m.SharedMods...), effectiveServiceMods(m, service)...))
 	var b strings.Builder
 	b.WriteString("# Generated starter configuration; application-owned after project creation.\n")
 	b.WriteString("sid: 1000\n")
@@ -428,6 +501,9 @@ func renderServiceConfig(m Manifest, service string, production bool) string {
 			b.WriteString(modCatalog[name].Config)
 			seen[name] = true
 		}
+	}
+	if spec, hosted := frameworkCatalog[m.Services[service].Framework]; hosted {
+		b.WriteString(spec.ConfigFunc(m.Project.Name))
 	}
 	if production {
 		value := strings.ReplaceAll(strings.ReplaceAll(b.String(), "127.0.0.1", "CHANGE_ME"), "localhost", "CHANGE_ME")

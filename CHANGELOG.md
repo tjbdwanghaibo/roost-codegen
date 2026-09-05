@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+### Added
+
+- **托管 roost-service 服务与 `-template game`**（方向二第一切片）。roost.yaml 新增
+  `services.<name>.framework`（account / mail / match / chat 之一：该进程就是这个服务的 Server 加 owner
+  Mod，redis、nats 自动补齐）与 `services.<name>.uses`（业务 Service 要调用的托管服务：装配 ClientMod、
+  补 nats、生成 `internal/service/<name>/framework_clients_gen.go` 类型化访问器）；`versions.service`
+  与 `-roost-service-version` / `upgrade -service`（下限 v1.5.1；旧清单没有该字段时按 latest）；go.mod
+  与 `frameworkdeps` 只在用到时才带 roost-service。owner Mod 需要的协作者（身份校验、玩家 id 分配、
+  名字规则、投递、频道策略、系统鉴权……）生成到 `internal/service/<name>/collaborators.go`，只生成一次、
+  默认全部拒绝（fail-closed），项目自己实现。`roost project new … -template game` 一次生成四个托管服务并把
+  第一个业务 Service 接上；生成工程的启动命令因此多出 account / mail / match / chat 四个子命令，部署
+  产物（compose / k8s / shell）随 services 自动覆盖它们。本地验证：模板工程 `go build` / `go vet` /
+  `generate --check` 通过，五个子命令对着真实 Redis + NATS 起得来。World / Player 实体是下一切片。
+
 ### Fixed
 
 - **生成的 `deploy/docker/docker-compose.prod.yaml` 在 `docker compose config` 下报

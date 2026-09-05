@@ -53,15 +53,19 @@ jobs:
         run: |
           version_args=()
           if [ "$SET" = minimum ]; then
-            version_args=(-roost-core-version v1.10.0 -roost-kit-version v1.10.0 -roost-skill-version v1.9.0 -codegen-version v1.7.0)
+            version_args=(-roost-core-version v1.10.0 -roost-kit-version v1.10.0 -roost-skill-version v1.9.0 -roost-service-version v1.5.1 -codegen-version v1.7.0)
           fi
           mods=configdata
           services=game
+          template_args=()
           if [ "$SCENARIO" = full ]; then
             mods=configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest,saga
             services=game,gate
+            # The game template hosts account / mail / match / chat and wires
+            # game to them, so the full scenario compiles roost-service too.
+            template_args=(-template game)
           fi
-          "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -mods "$mods" -services "$services" "${version_args[@]}"
+          "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -mods "$mods" -services "$services" "${version_args[@]}" "${template_args[@]}"
           if [ "$SCENARIO" = full ]; then
             cd "${RUNNER_TEMP}/planet"
             "${RUNNER_TEMP}/roost" add access player --service gate

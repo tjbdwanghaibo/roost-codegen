@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-codegen/internal/genutil"
@@ -382,5 +383,27 @@ func TestNothingIsListedThatIsNotEmitted(t *testing.T) {
 			t.Fatalf("emittedNames lists %q, but the generated file does not declare it; the "+
 				"entry is stale and refuses packages for no reason", name)
 		}
+	}
+}
+
+// A ClientMod's dependency must name a Mod, because app resolves dependencies
+// by Mod name. mods.ModBus is a CAPABILITY name that no Mod is called, so a
+// client depending on it fails assembly with `unknown mod dependency "bus"` in
+// every real process — which every generated client did until a generated
+// game template was started (U-0024). The bus is published by the NATS Mod.
+func TestTheGeneratedClientDependsOnTheModThatPublishesTheBus(t *testing.T) {
+	services, err := ParseDir(writeDir(t, goldenService))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := Generate(services[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "func (m *ClientMod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats} }") {
+		t.Fatalf("ClientMod.DependsOn does not name the NATS mod:\n%s", content)
+	}
+	if strings.Contains(string(content), "DependsOn() []app.ModName { return []app.ModName{mods.ModBus} }") {
+		t.Fatal("ClientMod depends on the bus capability name, which no Mod is called")
 	}
 }

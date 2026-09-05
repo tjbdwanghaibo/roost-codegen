@@ -124,8 +124,8 @@ func resolveMods(requested []string) ([]string, error) {
 
 func allProjectMods(m Manifest) []string {
 	requested := append([]string(nil), m.SharedMods...)
-	for _, svc := range m.Services {
-		requested = append(requested, svc.Mods...)
+	for name := range m.Services {
+		requested = append(requested, effectiveServiceMods(m, name)...)
 	}
 	resolved, err := resolveMods(requested)
 	if err == nil {
