@@ -53,7 +53,7 @@ jobs:
         run: |
           version_args=()
           if [ "$SET" = minimum ]; then
-            version_args=(-roost-core-version v1.12.0 -roost-kit-version v1.12.0 -roost-skill-version v1.10.3 -roost-service-version v1.5.1 -codegen-version v1.7.0)
+            version_args=(-roost-core-version v1.12.0 -roost-kit-version v1.12.0 -roost-skill-version v1.10.3 -roost-service-version v1.5.2 -codegen-version v1.7.0)
           fi
           mods=configdata
           services=game

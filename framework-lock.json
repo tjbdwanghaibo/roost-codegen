@@ -1,11 +1,11 @@
 {
   "schema": 1,
-  "codegen": "v1.13.1",
+  "codegen": "v1.13.3",
   "framework": {
     "core": "v1.12.0",
     "kit": "v1.12.1",
     "skill": "v1.10.3",
-    "service": "v1.5.1"
+    "service": "v1.5.2"
   },
   "consumer_go": [
     "1.27.x"
@@ -31,8 +31,8 @@
     },
     {
       "path": "github.com/tjbdwanghaibo/roost-service",
-      "version": "v1.5.1",
-      "sum": "h1:pI0hCA4Yt/ASIaiSdkUQ7wZMhIW8jzKgoNSi+yWbK8w=",
+      "version": "v1.5.2",
+      "sum": "h1:OCnZnxdfTRru5D4MMuAhOmlqZmbz0gSe4pMGVmagLDc=",
       "go_mod_sum": "h1:lN1NffdIdPo35LDtQBsdU5RnAX5fsnZVh/pmdfopMvM="
     }
   ]
