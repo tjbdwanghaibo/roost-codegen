@@ -87,7 +87,7 @@ jobs:
         run: |
           echo "$GITHUB_REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "release tag must be vMAJOR.MINOR.PATCH"; exit 1; }
           test -z "$(git status --porcelain)"
-          ! grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod
+          if grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod; then echo "go.mod has a replace directive"; exit 1; fi
           go mod download
           go mod verify
           make ci
@@ -126,7 +126,7 @@ jobs:
       - name: checksum release files
         run: |
           cd dist
-          sha256sum *.tar.gz *.spdx.json > SHA256SUMS
+          sha256sum ./*.tar.gz ./*.spdx.json > SHA256SUMS
       - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: "dist/*.tar.gz"

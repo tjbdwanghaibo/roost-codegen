@@ -293,3 +293,35 @@ func TestGeneratedGoVersionMatchesTheGeneratorsOwn(t *testing.T) {
 		t.Errorf("go.mod directive is not go %s.0:\n%s", generatedGoVersion, body)
 	}
 }
+
+// The generated project's own workflows go through actionlint + shellcheck in
+// its CI, and this repository's consumer-acceptance job lints them too. The
+// two findings that failed the v1.13.1 release run — a bare `! cmd` statement
+// (SC2251, skips errexit) and a bare glob (SC2035) — must not come back in
+// any rendered workflow.
+func TestGeneratedWorkflowsHaveNoBareNegationsOrGlobs(t *testing.T) {
+	m := DefaultManifest("planet", "example.com/planet", []string{"game", "gate"}, nil, nil)
+	plan, err := renderProject(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for path, file := range plan {
+		if !strings.HasPrefix(path, ".github/workflows/") {
+			continue
+		}
+		seen++
+		for i, line := range strings.Split(string(file.Body), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "! ") {
+				t.Errorf("%s:%d: bare negation skips errexit: %s", path, i+1, trimmed)
+			}
+			if regexp.MustCompile(`(^|\s)\*\.[a-z]`).MatchString(trimmed) && !strings.HasPrefix(trimmed, "#") {
+				t.Errorf("%s:%d: bare glob: %s", path, i+1, trimmed)
+			}
+		}
+	}
+	if seen < 5 {
+		t.Fatalf("only %d workflows rendered", seen)
+	}
+}
