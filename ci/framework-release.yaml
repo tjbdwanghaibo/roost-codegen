@@ -1,7 +1,7 @@
 schema: 1
-codegen: v1.13.11
+codegen: v1.13.12
 framework:
-  core: v1.12.0
+  core: v1.12.1
   kit: v1.12.6
   skill: v1.10.3
   service: v1.5.4

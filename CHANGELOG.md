@@ -6,6 +6,7 @@
 
 ### Added
 
+- **发布清单对齐 core v1.12.1**（73 个提交的测试基线与 gap map 工具，无 API 变化）。生成工程的 `versions.core` 缺省仍取 latest，下限不变（v1.12.0）。
 - **gap map 工具**（与 roost-core 同一份拷贝）：`scripts/gapmap/revertsample.py`、`scripts/gapmap.sh`、`nightly-gapmap` 工作流。
   五仓至此都有每日的承诺回退采样报告。
 - **发布清单对齐 kit v1.12.6**（Redis 客户端尊重 ctx 截止期、`nats.ignore_discovered_servers`）。生成工程的 `versions.kit` 缺省仍取 latest。
