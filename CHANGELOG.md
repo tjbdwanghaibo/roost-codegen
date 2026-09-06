@@ -6,6 +6,8 @@
 
 ### Added
 
+- **发布清单对齐 kit v1.12.5**（v1.12.4 的 integration 构建红：测试辅助函数重名；另含 NATS 半开故障切片与
+  `nats.ignore_discovered_servers`）。生成工程的 `versions.kit` 缺省仍取 latest，下限不变。
 - **发布清单对齐 kit v1.12.4**（JetStream 结算失败 / outbox 认领失败可见；toxiproxy 故障矩阵）。生成工程的
   `versions.kit` 缺省仍取 latest，下限不变（v1.12.2）。
 - **托管服务的文档与检查**（方向二 ③）。用到框架服务的工程多生成 `docs/SERVICES.zh-CN.md`：子命令、配置文件、必填项、
