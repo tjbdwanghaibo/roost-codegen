@@ -20,6 +20,12 @@
 
 ### Fixed
 
+- **entity 生成器对 `//roost:entity` 标记的三类错误不出声**（U-0039，C5）。① 标记后面两行内没有 `type X struct`（常见于
+  标记与类型之间夹了多行文档注释、或标记放在 interface 上）——标记直接消失：不生成 wire 文件、不报错；② 参数名拼错
+  （`remot=managed`）或裸词（`noPersist` 少了 `=true`）等同于没写，生成出来的是本地 / 持久实体；③ `remote=bogus`、
+  `lifetime=forever`、`sync=ture` 各自回落到默认值。现在三类都在解析期按 `文件:行` 报错并列出合法键 / 合法值；`id=`
+  （`roost add entity` 写入）在合法键内。六条测试：两条未挂接、两类坏键、四种坏值各自拒绝，六种文档过的写法全部放行；
+  三处守卫各自回退对应测试变红。
 - **eventgen 对两类它看得见的问题不出声**（U-0038，C5）。① 扫 `-game` 目录时解析不了的源文件被 `return nil, nil`
   跳过：该文件里的 `DealEventXxx` 从生成的分发里消失，事件永远不投递、没有任何报错；现在按文件报 `parse <file>: <pos>: …`。
   ② `DealEventGhost` 没有对应的 `EventGhost` 声明时照样生成 `case *event.EventGhost:`——编译错误落在用户没写过的生成

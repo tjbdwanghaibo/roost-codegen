@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -129,7 +130,10 @@ func parseDir(dir string) ([]EntityDef, string, error) {
 
 	for _, file := range files {
 		// Find marker comments and their associated structs
-		ents := extractEntities(fset, file.ast, file.content, file.path, file.imports, methods)
+		ents, err := extractEntities(fset, file.ast, file.content, file.path, file.imports, methods)
+		if err != nil {
+			return nil, "", err
+		}
 		entities = append(entities, ents...)
 	}
 
@@ -137,15 +141,16 @@ func parseDir(dir string) ([]EntityDef, string, error) {
 }
 
 // extractEntities finds //roost:entity markers and extracts struct info.
-func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath string, importMap map[string]ImportDef, methods map[string]map[string]bool) []EntityDef {
+func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath string, importMap map[string]ImportDef, methods map[string]map[string]bool) ([]EntityDef, error) {
 	var entities []EntityDef
 
 	// Build line→comment map from marker comments
 	type markerInfo struct {
-		line   int
-		params map[string]string
+		line     int
+		params   map[string]string
+		attached bool
 	}
-	var markers []markerInfo
+	var markers []*markerInfo
 
 	for _, cg := range f.Comments {
 		for _, c := range cg.List {
@@ -153,14 +158,17 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 			if matches == nil {
 				continue
 			}
-			params := parseParams(matches[1])
 			line := fset.Position(c.Pos()).Line
-			markers = append(markers, markerInfo{line: line, params: params})
+			params, err := parseMarkerParams(matches[1])
+			if err != nil {
+				return nil, fmt.Errorf("%s:%d: //roost:entity %w", filePath, line, err)
+			}
+			markers = append(markers, &markerInfo{line: line, params: params})
 		}
 	}
 
 	if len(markers) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// Find struct declarations
@@ -184,6 +192,7 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 			// Check if there's a marker on the line before this struct
 			for _, m := range markers {
 				if m.line == structLine-1 || m.line == structLine-2 {
+					m.attached = true
 					ent := EntityDef{
 						Name:            typeSpec.Name.Name,
 						EntityKind:      m.params["entityKind"],
@@ -192,6 +201,9 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 					}
 					if ent.EntityKind == "" {
 						ent.EntityKind = "EntityKind" + ent.Name
+					}
+					if err := validateMarkerValues(m.params); err != nil {
+						return nil, fmt.Errorf("%s:%d: //roost:entity %w", filePath, m.line, err)
 					}
 					ent.RemotePolicy = parseRemoteParam(m.params["remote"])
 					ent.NoPersist = parseBoolParam(m.params["noPersist"])
@@ -212,7 +224,74 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 		}
 	}
 
-	return entities
+	// A marker nothing claimed used to disappear without a trace: no wire
+	// file, no error. Usually a doc comment pushed the struct more than two
+	// lines away, or the marker sits above an interface or alias.
+	for _, m := range markers {
+		if !m.attached {
+			return nil, fmt.Errorf("%s:%d: //roost:entity marker is not followed by a struct declaration (the `type X struct` line must be within two lines of the marker)", filePath, m.line)
+		}
+	}
+
+	return entities, nil
+}
+
+// markerKeys is every parameter the entity marker understands. `id` is
+// written by `roost add entity` and consumed by the registry generator.
+var markerKeys = []string{"id", "entityKind", "remote", "noPersist", "lifetime", "sync", "syncTopic", "syncPacker", "subjectPacker"}
+
+// parseMarkerParams parses key=value pairs and refuses anything else: a typo
+// in a key (`remot=managed`) or a bare flag (`noPersist`) used to be read as
+// "parameter absent", which silently changes what gets generated.
+func parseMarkerParams(s string) (map[string]string, error) {
+	params := make(map[string]string)
+	for _, p := range strings.Fields(s) {
+		kv := strings.SplitN(p, "=", 2)
+		if len(kv) != 2 || kv[0] == "" {
+			return nil, fmt.Errorf("parameter %q must be key=value (known keys: %s)", p, strings.Join(markerKeys, ", "))
+		}
+		if !slices.Contains(markerKeys, kv[0]) {
+			return nil, fmt.Errorf("unknown parameter %q (known keys: %s)", kv[0], strings.Join(markerKeys, ", "))
+		}
+		if _, dup := params[kv[0]]; dup {
+			return nil, fmt.Errorf("parameter %q given twice", kv[0])
+		}
+		params[kv[0]] = kv[1]
+	}
+	return params, nil
+}
+
+// validateMarkerValues rejects values outside the spellings the parsers
+// accept; each of them used to fall back to a default instead.
+func validateMarkerValues(params map[string]string) error {
+	if v, ok := params["remote"]; ok && parseRemoteParam(v) == "" {
+		return fmt.Errorf(`remote=%q is not one of none|capable|managed|mirror (or a boolean)`, v)
+	}
+	if v, ok := params["lifetime"]; ok && !validLifetimeParam(v) {
+		return fmt.Errorf(`lifetime=%q is not one of ephemeral|runtime_rebuild|persisted_hot_cold|resident|remote_managed|mirror_cache`, v)
+	}
+	for _, key := range []string{"noPersist", "sync"} {
+		if v, ok := params[key]; ok && !validBoolParam(v) {
+			return fmt.Errorf(`%s=%q is not a boolean (true/false, yes/no, on/off, 1/0)`, key, v)
+		}
+	}
+	return nil
+}
+
+func validBoolParam(v string) bool {
+	switch strings.ToLower(v) {
+	case "1", "t", "true", "yes", "y", "on", "0", "f", "false", "no", "n", "off":
+		return true
+	}
+	return false
+}
+
+func validLifetimeParam(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "ephemeral", "runtime_rebuild", "runtime-rebuild", "rebuild", "persisted_hot_cold", "persisted-hot-cold", "hotcold", "hot_cold", "resident", "remote_managed", "remote-managed", "mirror_cache", "mirror-cache":
+		return true
+	}
+	return false
 }
 
 func hasRemoteEntityBase(st *ast.StructType) bool {
@@ -485,19 +564,6 @@ func extractTagValue(tag, key string) string {
 		return ""
 	}
 	return matches[1]
-}
-
-// parseParams parses key=value pairs from marker comment.
-func parseParams(s string) map[string]string {
-	params := make(map[string]string)
-	parts := strings.Fields(s)
-	for _, p := range parts {
-		kv := strings.SplitN(p, "=", 2)
-		if len(kv) == 2 {
-			params[kv[0]] = kv[1]
-		}
-	}
-	return params
 }
 
 func parseBoolParam(v string) bool {
