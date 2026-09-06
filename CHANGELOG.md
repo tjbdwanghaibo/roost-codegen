@@ -14,6 +14,11 @@
 
 ### Fixed
 
+- **`deploy/dev/docker-compose.yaml` 初始化的 Mongo 副本集成员地址是 `mongo:27017`**，而生成的服务配置在宿主机上
+  拨 `127.0.0.1:27017`：驱动发现成员地址后去解析 `mongo`，宿主机解析不了，任何带 dataengine 的进程在开发机上
+  都停在 `ReplicaSetNoPrimary … lookup mongo: server misbehaving`。成员改为 `127.0.0.1:27017`（容器内同样是本机）。
+  已有工程 `make sync` 后需要 `docker compose -f deploy/dev/docker-compose.yaml down -v` 重建卷，旧卷里的副本集配置
+  仍指向 `mongo`。这是启动门禁（framework-compat full 场景真启动 mail / game）首跑抓到的。
 - **`add lifecycle` 对第二个 Entity 生成的文件与第一个重复声明 `FromRegistry`**，同包编译不过（U-0026）。
   入口改为 `<Entity>FromRegistry`（`PlayerFromRegistry`、`WorldFromRegistry`）；已生成的工程文件是业务所有、
   不会被改写。`TestGameTemplateScaffoldsWorldAndPlayer` 用 go/parser 检查 lifecycle 包无重复顶层声明。

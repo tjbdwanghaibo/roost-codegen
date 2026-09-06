@@ -325,3 +325,22 @@ func TestGeneratedWorkflowsHaveNoBareNegationsOrGlobs(t *testing.T) {
 		t.Fatalf("only %d workflows rendered", seen)
 	}
 }
+
+// The dev compose initiates the Mongo replica set with a member address, and
+// the driver DISCOVERS that address and dials it. A generated binary runs on
+// the developer's machine and is configured with 127.0.0.1:27017, so the
+// member must be 127.0.0.1:27017 too: initiating with "mongo:27017" (the
+// compose service name) left every host-run game process at
+// "ReplicaSetNoPrimary … lookup mongo: server misbehaving" — found by the
+// boot gate the first time it ran.
+func TestDevComposeReplicaSetMemberIsTheAddressTheConfigDials(t *testing.T) {
+	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, nil, nil)
+	compose := renderCompose(m)
+	if !strings.Contains(compose, "host:'127.0.0.1:27017'") {
+		t.Fatalf("replica set member is not the host-reachable address:\n%s", compose)
+	}
+	config := renderServiceConfig(m, "game", false)
+	if !strings.Contains(config, "mongodb://127.0.0.1:27017/?replicaSet=rs0") {
+		t.Fatalf("service config does not dial 127.0.0.1:27017 with replicaSet=rs0:\n%s", config)
+	}
+}
