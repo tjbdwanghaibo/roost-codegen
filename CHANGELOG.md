@@ -18,6 +18,13 @@
   进程自己的一份，首次启动创建、之后加载，没有 World 的 game 进程不启动。本地验证：对真实 Mongo 副本集 +
   NATS 集群 + Redis 连续两次启动 game 进程，`Init` 均通过、进程存活。
 
+### Changed（测试质量）
+
+- **dao 生成器层的四条拒绝补上测试**（U-0041，C2）：抽样回退发现 redis DAO 的"未实现的 mode"、"缺 key"、"缺 key 类型"
+  与 Mongo DAO 的"未知 dbscope"四处守卫去掉后全绿（解析层的 tag 陷阱早有 `TestParseRejectsDaoTagTraps` 钉住）。
+  现在四处各自按错误文本与 DAO 名断言，回退任一处对应用例变红。dao 包是 codegen 里测试密度最高的生成器包——
+  这四处是解析器之后、模板之前的那一层，恰好落在两组测试之间。
+
 ### Fixed
 
 - **webroute 对 `//roost:web` 的坏键与缺键指错方向**（U-0040，C2 / C5）。`methd=POST` 这样的拼错键被接受，随后报
