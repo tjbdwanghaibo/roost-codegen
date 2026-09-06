@@ -44,6 +44,9 @@
 
 ### Fixed
 
+- **registry / errcode 生成器的三条承诺补上测试**（U-0030，C2）。对两个包的注释承诺临时回退：无法解析的源文件应报错而非静默跳过
+  （跳过会让聚合少注册）、返回 error 的注册函数在生成的 `RegisterAll` 里必须检查并包装、重复错码必须报错——三处去掉后原有测试
+  全绿；`registry/promises_test.go`、`errcode/promises_test.go` 钉住。未知 phase、方法上的标记两条已有测试红。
 - **servicerpc 生成的 ClientMod 在真实进程里装配不起来**（U-0024，C4）。模板里 `ClientMod.DependsOn`
   返回 `mods.ModBus`——那是总线 **capability** 的名字，而 app 按 Mod **名字**解析依赖，没有任何 Mod
   叫 `bus`：把 `xxx.NewClientMod()` 与 kit 的 nats Mod 装进同一个进程，启动即
