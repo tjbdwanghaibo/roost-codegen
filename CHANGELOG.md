@@ -44,6 +44,9 @@
 
 ### Fixed
 
+- **protocol 生成器的六条结构校验此前没有任何测试**（U-0032，C2）：重复 struct、未导出类型、重复字段号、req/resp id 相等、
+  枚举首值为 0、枚举重复值名——逐条临时去掉校验，四条原有测试全绿。`validation_test.go` 用表驱动逐条破坏合法定义，
+  五条现在红；"req id 必须等于 resp id"是死分支（解析时 `RespID` 直接取 id），记录为观察。
 - **registry / errcode 生成器的三条承诺补上测试**（U-0030，C2）。对两个包的注释承诺临时回退：无法解析的源文件应报错而非静默跳过
   （跳过会让聚合少注册）、返回 error 的注册函数在生成的 `RegisterAll` 里必须检查并包装、重复错码必须报错——三处去掉后原有测试
   全绿；`registry/promises_test.go`、`errcode/promises_test.go` 钉住。未知 phase、方法上的标记两条已有测试红。
