@@ -6,6 +6,9 @@
 
 ### Added
 
+- **cfggen 元数据的字段级规则钉住**（U-0090，C2）：bean 重复字段 / 两字段映射同一 Go 字段（`item_id` 与 `itemID` 都是 `ItemID`）/
+  bean 字段带 ref 或 index、ref 指向未声明的表、table / global 重名、无字段、表字段重复 / 同 Go 字段、`file` 逃出数据目录。
+  `meta_promises_test.go` 一条，逐条按文案断言；回退九处守卫各红。
 - **`roost add` 各 kind 的参数守卫钉住**（U-0089，C2）：非法名、service 重复、mod 指向未知 service、access 名非 player /
   多 service 未指定 / 已存在、transport 非 tcp / 归属 service 不符 / 已存在、saga 多 service 未指定 / 未知 service、protocol
   handler 与 group 非法、handler 缺 nest 特性；每次拒绝后 `roost.yaml` 字节不变。`add_promises_test.go` 两条；回退 14 处守卫 12 处红。
