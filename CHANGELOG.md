@@ -112,7 +112,8 @@
   `framework verify` 同样下载它并拒绝 replace / 伪版本，GitHub output 多一个 `service`，
   缺少该字段的清单不再通过校验。清单里的版本同时从 core v1.9.1 / kit v1.9.2 / skill v1.9.1 /
   codegen v1.10.0 更新到当前正式 tag（core v1.11.3 / kit v1.11.3 / skill v1.10.0 /
-  service v1.4.0 / codegen v1.12.1）——它落后了两个次版本，release 门禁一直在校验旧组合。
+  service v1.4.0 / codegen v1.12.1；此后逐版对齐：service v1.5.2 / codegen v1.13.3，kit v1.12.2 / codegen v1.13.4，
+  codegen v1.13.5，kit v1.12.3 / service v1.5.3 / codegen v1.13.6，service v1.5.4 / codegen v1.13.7）——它落后了两个次版本，release 门禁一直在校验旧组合。
   `release.yml` 先把 `SERVICE` 传到 smoke 步骤；`project new` 的 `-roost-service-version`
   随 game 模板一起来。
 
