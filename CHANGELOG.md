@@ -6,6 +6,10 @@
 
 ### Added
 
+- **`roost add` 各 kind 的参数守卫钉住**（U-0089，C2）：非法名、service 重复、mod 指向未知 service、access 名非 player /
+  多 service 未指定 / 已存在、transport 非 tcp / 归属 service 不符 / 已存在、saga 多 service 未指定 / 未知 service、protocol
+  handler 与 group 非法、handler 缺 nest 特性；每次拒绝后 `roost.yaml` 字节不变。`add_promises_test.go` 两条；回退 14 处守卫 12 处红。
+  `unknown kit mod` 与 `unsupported access layer` 两处是前门冗余：去掉后下游 `Manifest.Validate` / `resolveMods` 以同一文案拒绝并回滚清单。
 - **nest 处理器的接收者与 target 声明规则钉住**（U-0088，C2）：值接收者（会在副本上调用）、`target` 与 `targets` 同时给出、
   target 名为空。`handler_promises_test.go` 一条；回退三处守卫各红。"非 error 返回值跟在 error 之后"那条经 Go 语法不可达
   （先被"error 必须是唯一末位返回值"拦下），记为冗余。
