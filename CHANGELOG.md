@@ -6,6 +6,9 @@
 
 ### Added
 
+- **nest 处理器的接收者与 target 声明规则钉住**（U-0088，C2）：值接收者（会在副本上调用）、`target` 与 `targets` 同时给出、
+  target 名为空。`handler_promises_test.go` 一条；回退三处守卫各红。"非 error 返回值跟在 error 之后"那条经 Go 语法不可达
+  （先被"error 必须是唯一末位返回值"拦下），记为冗余。
 - **protocol 定义的取值与引用规则钉住**（U-0087，C2）。U-0032 钉的是结构规则；这次是枚举值超 int32 / 非整数字面量、字段缺 pb 号、
   oneof 名非标识符、消息的请求 / 响应结构体不存在、同一枚举在目录内两处声明。`definition_promises_test.go` 一条；回退六处守卫各红。
 
