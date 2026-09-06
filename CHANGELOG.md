@@ -6,6 +6,8 @@
 
 ### Added
 
+- **发布清单对齐 kit v1.12.4**（JetStream 结算失败 / outbox 认领失败可见；toxiproxy 故障矩阵）。生成工程的
+  `versions.kit` 缺省仍取 latest，下限不变（v1.12.2）。
 - **托管服务的文档与检查**（方向二 ③）。用到框架服务的工程多生成 `docs/SERVICES.zh-CN.md`：子命令、配置文件、必填项、
   协作者文件、业务侧类型化访问器、本地运行顺序。`roost project doctor` 新增 `collaborators:<服务>` 项：协作者文件
   里还含生成的 fail-closed stub（"is not configured"）时报失败并说明该服务会拒绝一切请求；`roost project next`

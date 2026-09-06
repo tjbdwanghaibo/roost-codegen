@@ -1,8 +1,8 @@
 schema: 1
-codegen: v1.13.7
+codegen: v1.13.8
 framework:
   core: v1.12.0
-  kit: v1.12.3
+  kit: v1.12.4
   skill: v1.10.3
   service: v1.5.4
 consumer_go:
