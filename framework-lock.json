@@ -1,9 +1,9 @@
 {
   "schema": 1,
-  "codegen": "v1.13.3",
+  "codegen": "v1.13.5",
   "framework": {
     "core": "v1.12.0",
-    "kit": "v1.12.1",
+    "kit": "v1.12.2",
     "skill": "v1.10.3",
     "service": "v1.5.2"
   },
@@ -19,8 +19,8 @@
     },
     {
       "path": "github.com/tjbdwanghaibo/roost-kit",
-      "version": "v1.12.1",
-      "sum": "h1:GBTExGK/UGMbvpLNhWs1RHNMPYlVlMk4pJ96nx81CHA=",
+      "version": "v1.12.2",
+      "sum": "h1:NmFRkId1x78nW06BfEWuCzQWV8myjkHM6D3Qvtxk2jc=",
       "go_mod_sum": "h1:OUCQiloVed4m03mKSFiwFWxAoWjaARJtLBF8s04p4PM="
     },
     {
