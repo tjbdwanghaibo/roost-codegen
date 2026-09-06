@@ -20,6 +20,11 @@
 
 ### Fixed
 
+- **webroute 对 `//roost:web` 的坏键与缺键指错方向**（U-0040，C2 / C5）。`methd=POST` 这样的拼错键被接受，随后报
+  `unsupported method ""`；漏写 `method=` / `path=` / `body=` 也是同一条含混报错。现在按键报 `unknown marker option "methd"
+  (known: method, path, body)` / `missing marker option "path"`。同时把解析器十二处拒绝逐条按错误文本钉住（原先只有
+  "signature" 与 "duplicate" 两条测试）：裸词、空值、重复键、PUT、相对路径、xml、GET+json、raw 路由用了类型化请求、
+  三种签名缺陷各自一条、同目录混包不落文件。回退四处守卫（两处新增、两处原有）对应用例各自变红。
 - **entity 生成器对 `//roost:entity` 标记的三类错误不出声**（U-0039，C5）。① 标记后面两行内没有 `type X struct`（常见于
   标记与类型之间夹了多行文档注释、或标记放在 interface 上）——标记直接消失：不生成 wire 文件、不报错；② 参数名拼错
   （`remot=managed`）或裸词（`noPersist` 少了 `=true`）等同于没写，生成出来的是本地 / 持久实体；③ `remote=bogus`、

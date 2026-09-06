@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"go/types"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -57,6 +58,11 @@ func ParseFile(path string, source []byte) ([]Route, string, error) {
 	return routes, file.Name.Name, nil
 }
 
+// markerOptions is every option //roost:web understands; all of them are
+// required, so the same list drives both the unknown-key and the missing-key
+// checks.
+var markerOptions = []string{"method", "path", "body"}
+
 func parseMarker(group *ast.CommentGroup) (map[string]string, bool, error) {
 	if group == nil {
 		return nil, false, nil
@@ -77,7 +83,17 @@ func parseMarker(group *ast.CommentGroup) (map[string]string, bool, error) {
 			if _, exists := options[parts[0]]; exists {
 				return nil, true, fmt.Errorf("duplicate marker option %q", parts[0])
 			}
+			if !slices.Contains(markerOptions, parts[0]) {
+				// A misspelt key used to be accepted here and surface later as
+				// `unsupported method ""`, pointing away from the typo.
+				return nil, true, fmt.Errorf("unknown marker option %q (known: %s)", parts[0], strings.Join(markerOptions, ", "))
+			}
 			options[parts[0]] = parts[1]
+		}
+		for _, required := range markerOptions {
+			if _, ok := options[required]; !ok {
+				return nil, true, fmt.Errorf("missing marker option %q (want //roost:web method=GET|POST path=/… body=json|raw)", required)
+			}
 		}
 		return options, true, nil
 	}
