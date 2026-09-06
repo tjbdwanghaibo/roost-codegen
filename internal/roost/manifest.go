@@ -30,7 +30,7 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // oldest set that resolves as a whole, not each module's own oldest tag.
 var minimumVersions = VersionSpec{
 	Core:    "v1.12.0",
-	Kit:     "v1.12.0",
+	Kit:     "v1.12.2",
 	Skill:   "v1.10.3",
 	Service: "v1.5.2",
 	Codegen: "v1.7.0",
