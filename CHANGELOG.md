@@ -6,6 +6,9 @@
 
 ### Added
 
+- **entity 生成器的两条前门规则钉住**（U-0091，C2）：`remote=managed` 但只嵌 `*entity.EntityBase` 时 `generate` 拒绝且不落 wire 文件；
+  标记参数重复给出（`sync=true sync=false`）拒绝而非后者覆盖。`gen_promises_test.go` 两条；回退两处守卫各红。gap map 里其余五条
+  是模板体内（生成到业务工程里）的守卫，由 roost-core `entity` 的 RemoteCommit 契约测试覆盖，不在本仓单测范围。
 - **cfggen 元数据的字段级规则钉住**（U-0090，C2）：bean 重复字段 / 两字段映射同一 Go 字段（`item_id` 与 `itemID` 都是 `ItemID`）/
   bean 字段带 ref 或 index、ref 指向未声明的表、table / global 重名、无字段、表字段重复 / 同 Go 字段、`file` 逃出数据目录。
   `meta_promises_test.go` 一条，逐条按文案断言；回退九处守卫各红。
