@@ -6,6 +6,13 @@
 
 ### Added
 
+- **protocol 定义的取值与引用规则钉住**（U-0087，C2）。U-0032 钉的是结构规则；这次是枚举值超 int32 / 非整数字面量、字段缺 pb 号、
+  oneof 名非标识符、消息的请求 / 响应结构体不存在、同一枚举在目录内两处声明。`definition_promises_test.go` 一条；回退六处守卫各红。
+
+### Fixed
+
+- **`scripts/gapmap.sh` 收尾不再 `git clean`**：采样后只还原被改动的**已跟踪**文件；未跟踪文件（比如正在写的测试）原样保留并提示。
+  之前的版本把采样期间新建的一个测试文件删掉了。
 - **发布清单对齐 core v1.12.1**（73 个提交的测试基线与 gap map 工具，无 API 变化）。生成工程的 `versions.core` 缺省仍取 latest，下限不变（v1.12.0）。
 - **gap map 工具**（与 roost-core 同一份拷贝）：`scripts/gapmap/revertsample.py`、`scripts/gapmap.sh`、`nightly-gapmap` 工作流。
   五仓至此都有每日的承诺回退采样报告。
