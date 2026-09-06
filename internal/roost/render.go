@@ -38,6 +38,9 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	add("docs/SKILL.zh-CN.md", renderSkillGuide(m), true)
 	add("docs/TROUBLESHOOTING.zh-CN.md", renderTroubleshootingGuide(m), true)
 	add("docs/USAGE.zh-CN.md", renderUsage(m), true)
+	if m.usesFrameworkServices() {
+		add("docs/SERVICES.zh-CN.md", renderFrameworkServicesGuide(m), true)
+	}
 	add(".github/workflows/ci.yml", renderCI(m), true)
 	add(".github/workflows/dependency-update.yml", renderDependencyUpdateCI(m), true)
 	add(".github/workflows/release.yml", renderReleaseCI(m), true)

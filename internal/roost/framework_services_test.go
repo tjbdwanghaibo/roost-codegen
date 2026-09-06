@@ -216,3 +216,54 @@ func TestGameTemplateScaffoldsWorldAndPlayer(t *testing.T) {
 		}
 	}
 }
+
+// doctor reports each hosted service whose collaborators are still the
+// generated fail-closed stubs, and clears the item once they are replaced.
+func TestDoctorReportsUnimplementedCollaborators(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}, Template: "game"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failing := map[string]bool{}
+	for _, item := range checkFrameworkCollaborators(root, m) {
+		if item.Status == StatusFail {
+			failing[item.Name] = true
+		}
+	}
+	for _, name := range []string{"collaborators:account", "collaborators:chat"} {
+		if !failing[name] {
+			t.Errorf("%s is not reported although its stubs are untouched", name)
+		}
+	}
+	// mail's only stub is Broadcast() returning nil, which is a legitimate
+	// configuration (broadcasts refused), so mail carries no marker.
+	if failing["collaborators:mail"] {
+		t.Error("mail is reported although a nil Broadcast is a valid, fail-closed choice")
+	}
+	path := filepath.Join(root, "internal", "service", "chat", "collaborators.go")
+	raw, _ := os.ReadFile(path)
+	if err := os.WriteFile(path, []byte(strings.ReplaceAll(string(raw), "is not configured", "is refused by project policy")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range checkFrameworkCollaborators(root, m) {
+		if item.Name == "collaborators:chat" && item.Status != StatusOK {
+			t.Errorf("chat still reported after its stubs were replaced: %s", item.Detail)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "docs", "SERVICES.zh-CN.md")); err != nil {
+		t.Errorf("template project lacks docs/SERVICES.zh-CN.md: %v", err)
+	}
+	plain := DefaultManifest("planet", "example.com/planet", []string{"game"}, []string{"configdata"}, nil)
+	plan, err := renderProject(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := plan["docs/SERVICES.zh-CN.md"]; ok {
+		t.Error("a project without framework services gets a SERVICES guide")
+	}
+}

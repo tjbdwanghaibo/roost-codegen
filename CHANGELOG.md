@@ -6,6 +6,10 @@
 
 ### Added
 
+- **托管服务的文档与检查**（方向二 ③）。用到框架服务的工程多生成 `docs/SERVICES.zh-CN.md`：子命令、配置文件、必填项、
+  协作者文件、业务侧类型化访问器、本地运行顺序。`roost project doctor` 新增 `collaborators:<服务>` 项：协作者文件
+  里还含生成的 fail-closed stub（"is not configured"）时报失败并说明该服务会拒绝一切请求；`roost project next`
+  在业务链完成后也提示实现它们。
 - **game 模板第二切片：Player 与 World 实体**。`-template game` 现在给业务 Service 补 nest 运行时，生成
   Player、World 两个 Entity 及其 lifecycle，并生成 `game/lifecycle/world_singleton.go`（`WorldUniqueID = 1`、
   `EnsureWorld`）与一个在 `Init` 里确保 World 存在的 game Service：World 是**进程内单例**——每个 game

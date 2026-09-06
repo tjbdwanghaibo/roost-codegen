@@ -89,6 +89,7 @@ func DoctorWithOptions(root string, options DoctorOptions, stdout io.Writer) err
 		report.Items = append(report.Items, CheckItem{Name: "ids", Status: StatusOK, Detail: "no conflicts"})
 	}
 	report.Items = append(report.Items, checkCICDTemplates(root)...)
+	report.Items = append(report.Items, checkFrameworkCollaborators(root, m)...)
 	if workflow := strings.TrimSpace(options.Workflow); workflow != "" {
 		items, workflowErr := checkWorkflow(root, m, workflow)
 		if workflowErr != nil {
@@ -185,6 +186,36 @@ func checkCICDTemplates(root string) []CheckItem {
 	return items
 }
 
+// collaboratorUnconfiguredMarker is the phrase every generated fail-closed
+// collaborator stub carries. Its presence in a hosted service's
+// collaborators.go means that service refuses everything until the project
+// implements the collaborator — worth saying before the first deploy.
+const collaboratorUnconfiguredMarker = "is not configured"
+
+// checkFrameworkCollaborators reports, per hosted framework service, whether
+// the project has replaced the generated fail-closed collaborators.
+func checkFrameworkCollaborators(root string, manifest Manifest) []CheckItem {
+	var items []CheckItem
+	for _, name := range sortedServiceNames(manifest) {
+		if !manifest.isFrameworkService(name) {
+			continue
+		}
+		rel := "internal/service/" + name + "/collaborators.go"
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			items = append(items, CheckItem{Name: "collaborators:" + name, Status: StatusFail, Detail: rel + " is missing; run make sync"})
+			continue
+		}
+		if strings.Contains(string(raw), collaboratorUnconfiguredMarker) {
+			items = append(items, CheckItem{Name: "collaborators:" + name, Status: StatusFail,
+				Detail: fmt.Sprintf("%s still has generated fail-closed stubs (%q); the %s service refuses every request until they are implemented; see docs/SERVICES.zh-CN.md", rel, collaboratorUnconfiguredMarker, name)})
+			continue
+		}
+		items = append(items, CheckItem{Name: "collaborators:" + name, Status: StatusOK, Detail: rel + " has no generated fail-closed stubs left"})
+	}
+	return items
+}
+
 func checkWorkflow(root string, manifest Manifest, workflow string) ([]CheckItem, error) {
 	switch workflow {
 	case "first-business":
@@ -241,6 +272,13 @@ func PrintNextStep(root, requestedWorkflow string, stdout io.Writer) error {
 		return nil
 	}
 	fmt.Fprintln(stdout, "status: complete")
+	for _, item := range checkFrameworkCollaborators(root, manifest) {
+		if item.Status == StatusFail {
+			service := strings.TrimPrefix(item.Name, "collaborators:")
+			fmt.Fprintf(stdout, "next: implement the collaborators of %s in internal/service/%s/collaborators.go\n", service, service)
+			fmt.Fprintf(stdout, "why: %s\n", item.Detail)
+		}
+	}
 	if workflow == "first-business" {
 		fmt.Fprintln(stdout, "next: roost project next --workflow player-tcp")
 		fmt.Fprintln(stdout, "note: player-tcp is optional when another gateway owns the network connection")
