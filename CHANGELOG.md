@@ -6,6 +6,8 @@
 
 ### Added
 
+- **gap map 工具**（与 roost-core 同一份拷贝）：`scripts/gapmap/revertsample.py`、`scripts/gapmap.sh`、`nightly-gapmap` 工作流。
+  五仓至此都有每日的承诺回退采样报告。
 - **发布清单对齐 kit v1.12.6**（Redis 客户端尊重 ctx 截止期、`nats.ignore_discovered_servers`）。生成工程的 `versions.kit` 缺省仍取 latest。
 - **发布清单对齐 kit v1.12.5**（v1.12.4 的 integration 构建红：测试辅助函数重名；另含 NATS 半开故障切片与
   `nats.ignore_discovered_servers`）。生成工程的 `versions.kit` 缺省仍取 latest，下限不变。
