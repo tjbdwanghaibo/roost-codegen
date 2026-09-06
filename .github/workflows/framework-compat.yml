@@ -142,4 +142,58 @@ jobs:
         working-directory: ${{ runner.temp }}/planet
         run: |
           test ! -e go.work
-          ! grep -qE '^[[:space:]]*replace[[:space:](]' go.mod
+          if grep -qE '^[[:space:]]*replace[[:space:](]' go.mod; then echo "consumer go.mod has a replace directive"; exit 1; fi
+      # The assembly gate. Three defects that every unit test and every
+      # hand-wired integration test missed were found only by starting a
+      # generated project for real: a ClientMod depending on the capability
+      # name "bus", kit Mods depending on "health" / "nats.jetstream", and a
+      # lifecycle file redeclaring FromRegistry. This step starts the
+      # generated processes on the project's own dev compose stack and
+      # requires each to reach `service init` and stay up.
+      - name: boot the generated processes on the dev compose stack
+        if: matrix.scenario == 'full'
+        working-directory: ${{ runner.temp }}/planet
+        env:
+          SET: ${{ matrix.dependency-set }}
+        run: |
+          set -euo pipefail
+          if [ "$SET" != source-head ]; then export GOWORK=off; fi
+          docker compose -f deploy/dev/docker-compose.yaml up -d
+          for _ in $(seq 1 45); do
+            if docker compose -f deploy/dev/docker-compose.yaml exec -T mongo mongosh --quiet --eval 'rs.status().ok' 2>/dev/null | grep -q '^1$'; then break; fi
+            sleep 2
+          done
+          docker compose -f deploy/dev/docker-compose.yaml exec -T mongo mongosh --quiet --eval 'rs.status().ok' | grep -q '^1$'
+          go build -o ./planet .
+          boot() {
+            local svc="$1" pid
+            ./planet "$svc" --config "configs/service/config.$svc.yaml" >"$svc.boot.log" 2>&1 &
+            pid=$!
+            for _ in $(seq 1 90); do
+              if grep -q '"msg":"service init"' "$svc.boot.log"; then break; fi
+              if ! kill -0 "$pid" 2>/dev/null; then break; fi
+              sleep 1
+            done
+            sleep 3
+            if ! grep -q '"msg":"service init"' "$svc.boot.log" || ! kill -0 "$pid" 2>/dev/null; then
+              echo "::error::generated $svc process did not reach service init and stay up"
+              tail -n 40 "$svc.boot.log"
+              exit 1
+            fi
+            echo "$svc: service init reached, process alive"
+            kill "$pid"
+            wait "$pid" 2>/dev/null || true
+          }
+          boot mail
+          boot game
+      - name: dev stack state (on failure)
+        if: failure() && matrix.scenario == 'full'
+        working-directory: ${{ runner.temp }}/planet
+        run: |
+          docker compose -f deploy/dev/docker-compose.yaml ps || true
+          docker compose -f deploy/dev/docker-compose.yaml logs --tail=60 || true
+          for log in *.boot.log; do echo "== $log"; tail -n 60 "$log"; done 2>/dev/null || true
+      - name: tear down the dev stack
+        if: always() && matrix.scenario == 'full'
+        working-directory: ${{ runner.temp }}/planet
+        run: docker compose -f deploy/dev/docker-compose.yaml down -v || true
