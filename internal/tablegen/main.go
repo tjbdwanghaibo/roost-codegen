@@ -430,7 +430,68 @@ func readCSVRecords(path string, meta Meta) ([]map[string]any, error) {
 		}
 		out = append(out, row)
 	}
+	if err := validateRows(filepath.Base(path), meta, out); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// validateRows enforces the constraints a table declares in its tags at
+// generation time, where the CSV author can still fix them. Until it existed,
+// `unique="true"` and `min=` were read from the tags and printed into the rule
+// row of the CSV — and enforced by nothing: a duplicate id was written into
+// the JSON and the generated loader silently kept the last row (U-0033).
+// `ref=` names another table and is not checked here; that needs every
+// table loaded and is the generated loader's job.
+func validateRows(file string, meta Meta, rows []map[string]any) error {
+	for _, field := range meta.Fields {
+		unique := field.Unique || (meta.Kind == KindTable && field.Name == meta.Key)
+		if unique {
+			seen := make(map[string]int, len(rows))
+			for index, row := range rows {
+				value, ok := row[field.JSON]
+				if !ok {
+					continue
+				}
+				key := fmt.Sprint(value)
+				if first, dup := seen[key]; dup {
+					what := "unique"
+					if field.Name == meta.Key {
+						what = "key"
+					}
+					return fmt.Errorf("%s %s field %s repeats value %q in data rows %d and %d", file, what, field.Name, key, first, index+1)
+				}
+				seen[key] = index + 1
+			}
+		}
+		if field.Min != "" {
+			minimum, err := strconv.ParseFloat(field.Min, 64)
+			if err != nil {
+				return fmt.Errorf("%s field %s has non-numeric min=%q", file, field.Name, field.Min)
+			}
+			for index, row := range rows {
+				value, ok := row[field.JSON]
+				if !ok {
+					continue
+				}
+				var number float64
+				switch v := value.(type) {
+				case int64:
+					number = float64(v)
+				case uint64:
+					number = float64(v)
+				case float64:
+					number = v
+				default:
+					continue
+				}
+				if number < minimum {
+					return fmt.Errorf("%s field %s value %v in data row %d is below min=%s", file, field.Name, value, index+1, field.Min)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func csvDataStart(records [][]string, meta Meta) int {
