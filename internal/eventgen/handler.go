@@ -28,12 +28,36 @@ type HandlerEvent struct {
 	EventPkg string // import path for event package
 }
 
-// scanGameDir walks gameDir for DealEventXXX methods and generates handler code.
-func scanGameDir(gameDir string, eventPkg string, force bool) error {
-	return scanGameDirTo(gameDir, eventPkg, force, io.Discard)
+// declaredEvents is the set of event suffixes phase 1 found in the def
+// directory ("PlayerOnLine" for EventPlayerOnLine). Handlers are checked
+// against it before anything is generated.
+type declaredEventSet map[string]struct{}
+
+func declaredEvents(suffixes ...string) declaredEventSet {
+	set := make(declaredEventSet, len(suffixes))
+	for _, suffix := range suffixes {
+		set[suffix] = struct{}{}
+	}
+	return set
 }
 
-func scanGameDirTo(gameDir string, eventPkg string, force bool, stdout io.Writer) error {
+func declaredEventsOf(events []EventDef) declaredEventSet {
+	set := make(declaredEventSet, len(events))
+	for _, event := range events {
+		set[strings.TrimPrefix(event.Name, "Event")] = struct{}{}
+	}
+	return set
+}
+
+// scanGameDir walks gameDir for DealEventXXX methods and generates handler code.
+func scanGameDir(gameDir string, eventPkg string, force bool, declared declaredEventSet) error {
+	return scanGameDirTo(gameDir, eventPkg, force, declared, io.Discard)
+}
+
+func scanGameDirTo(gameDir string, eventPkg string, force bool, declared declaredEventSet, stdout io.Writer) error {
+	if stdout == nil {
+		stdout = io.Discard
+	}
 	var allHandlers []HandlerInfo
 
 	err := filepath.Walk(gameDir, func(path string, info os.FileInfo, err error) error {
@@ -66,6 +90,22 @@ func scanGameDirTo(gameDir string, eventPkg string, force bool, stdout io.Writer
 	})
 	if err != nil {
 		return err
+	}
+
+	// A handler for an event nobody declared would compile into
+	// `case *event.EventX:` — a build error inside a generated file. Report
+	// it here, at the method, before writing anything.
+	var undeclared []string
+	for _, h := range allHandlers {
+		for _, event := range h.Events {
+			if _, ok := declared[event.Suffix]; !ok {
+				undeclared = append(undeclared, fmt.Sprintf("%s: (%s).DealEvent%s has no event struct Event%s in the event definitions", h.FilePath, h.Receiver, event.Suffix, event.Suffix))
+			}
+		}
+	}
+	if len(undeclared) > 0 {
+		sort.Strings(undeclared)
+		return fmt.Errorf("eventgen: %d handler(s) reference undeclared events:\n  %s", len(undeclared), strings.Join(undeclared, "\n  "))
 	}
 
 	// Group by directory + receiver
@@ -114,7 +154,9 @@ func scanFile(filePath string, eventPkg string) ([]HandlerInfo, error) {
 
 	f, err := parser.ParseFile(fset, filePath, content, parser.ParseComments)
 	if err != nil {
-		return nil, nil // skip unparseable files
+		// Skipping the file would silently drop every handler it declares;
+		// the event would then never be delivered and nothing would say why.
+		return nil, fmt.Errorf("parse %s: %w", filePath, err)
 	}
 
 	pkg := f.Name.Name

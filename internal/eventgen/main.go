@@ -111,7 +111,7 @@ func run(args []string, stdout io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("resolve game dir: %w", err)
 		}
-		if err := scanGameDirTo(absGameDir, *eventPkg, *force, stdout); err != nil {
+		if err := scanGameDirTo(absGameDir, *eventPkg, *force, declaredEventsOf(events), stdout); err != nil {
 			return fmt.Errorf("scan game dir: %w", err)
 		}
 	}

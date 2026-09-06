@@ -20,6 +20,11 @@
 
 ### Fixed
 
+- **eventgen 对两类它看得见的问题不出声**（U-0038，C5）。① 扫 `-game` 目录时解析不了的源文件被 `return nil, nil`
+  跳过：该文件里的 `DealEventXxx` 从生成的分发里消失，事件永远不投递、没有任何报错；现在按文件报 `parse <file>: <pos>: …`。
+  ② `DealEventGhost` 没有对应的 `EventGhost` 声明时照样生成 `case *event.EventGhost:`——编译错误落在用户没写过的生成
+  文件里；现在第一阶段解析到的声明集传给第二阶段，扫描后、写文件前按"文件: (接收者).DealEventGhost 没有 EventGhost"
+  逐条报出、不写任何分发文件。三条测试钉住两条拒绝与一条放行；回退任一守卫对应测试变红。
 - **`deploy/dev/docker-compose.yaml` 初始化的 Mongo 副本集成员地址是 `mongo:27017`**，而生成的服务配置在宿主机上
   拨 `127.0.0.1:27017`：驱动发现成员地址后去解析 `mongo`，宿主机解析不了，任何带 dataengine 的进程在开发机上
   都停在 `ReplicaSetNoPrimary … lookup mongo: server misbehaving`。成员改为 `127.0.0.1:27017`（容器内同样是本机）。

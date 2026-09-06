@@ -63,7 +63,7 @@ func TestScanGameDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := scanGameDir(outDir, "github.com/tjbdwanghaibo/cube/event", true); err != nil {
+	if err := scanGameDir(outDir, "github.com/tjbdwanghaibo/cube/event", true, declaredEvents("PlayerOnLine", "PlayerOffLine")); err != nil {
 		t.Fatalf("scanGameDir: %v", err)
 	}
 

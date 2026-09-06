@@ -30,7 +30,7 @@ func TestGoldenHandlerOutput(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(playerDir, "player.go"), src, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := scanGameDir(outDir, "github.com/tjbdwanghaibo/cube/event", true); err != nil {
+	if err := scanGameDir(outDir, "github.com/tjbdwanghaibo/cube/event", true, declaredEvents("PlayerOnLine", "PlayerOffLine")); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(filepath.Join(playerDir, "player_event_gen.go"))
