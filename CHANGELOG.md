@@ -6,6 +6,11 @@
 
 ### Added
 
+- **cfggen 导出分组（前后端分开的配置）**：meta 顶层 `groups: {names: [c, s], target: [s]}`，表 / 全局 / 字段可写 `group: c` 或
+  `group: [c, s]`；不在目标组里的字段从 struct 中去掉（连带索引访问器），不在目标组里的表 / 全局不生成、不注册、无访问器；`-groups c,s`
+  覆盖 meta 的 target。语义与 Luban 的 `group` 属性一致：不写 = 属于所有组；没有 `groups` 的旧 meta 生成结果不变。生成期拒绝：未声明的组名
+  （字段 / 条目 / target / 参数）、组重复声明、主键字段被排除、`ref` 指向被排除的表、bean / 全局字段全被排除。生成结束打印省略的条目与字段数。
+  文档：`docs/CFGGEN_META.zh-CN.md`"导出分组"一节。
 - **entity 生成器的两条前门规则钉住**（U-0091，C2）：`remote=managed` 但只嵌 `*entity.EntityBase` 时 `generate` 拒绝且不落 wire 文件；
   标记参数重复给出（`sync=true sync=false`）拒绝而非后者覆盖。`gen_promises_test.go` 两条；回退两处守卫各红。gap map 里其余五条
   是模板体内（生成到业务工程里）的守卫，由 roost-core `entity` 的 RemoteCommit 契约测试覆盖，不在本仓单测范围。

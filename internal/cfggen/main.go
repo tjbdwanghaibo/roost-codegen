@@ -49,9 +49,14 @@ import (
 const generatedFileName = "cfg_gen.go"
 
 type Meta struct {
-	Package string      `yaml:"package"`
-	Beans   []BeanMeta  `yaml:"beans"`
-	Tables  []TableMeta `yaml:"tables"`
+	Package string `yaml:"package"`
+	// Groups declares export groups, Luban-style: every table, global and
+	// field may name the groups it belongs to, and one generation run exports
+	// one target set. A config shared by client and server keeps one meta;
+	// the server binding simply never sees client-only fields.
+	Groups GroupsMeta  `yaml:"groups"`
+	Beans  []BeanMeta  `yaml:"beans"`
+	Tables []TableMeta `yaml:"tables"`
 	// Globals are keyless singleton configs: the data file is one JSON
 	// document, the snapshot holds exactly one value (world size, global
 	// switches, formula constants). "objects" is the deprecated alias.
@@ -62,6 +67,40 @@ type Meta struct {
 // globalEntries merges the globals section with its deprecated objects alias.
 func (m *Meta) globalEntries() []TableMeta {
 	return append(append([]TableMeta(nil), m.Globals...), m.Objects...)
+}
+
+// GroupsMeta is the top-level export-group declaration.
+type GroupsMeta struct {
+	// Names lists every group a `group:` may reference (typo protection).
+	Names []string `yaml:"names"`
+	// Target is the set exported by default; the -groups flag overrides it.
+	// Empty means "export everything", which keeps metas without groups
+	// generating exactly what they did before.
+	Target GroupList `yaml:"target"`
+}
+
+// GroupList accepts `group: s` as well as `group: [c, s]`.
+type GroupList []string
+
+func (g *GroupList) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		var one string
+		if err := value.Decode(&one); err != nil {
+			return err
+		}
+		*g = GroupList{one}
+		return nil
+	case yaml.SequenceNode:
+		var many []string
+		if err := value.Decode(&many); err != nil {
+			return err
+		}
+		*g = GroupList(many)
+		return nil
+	default:
+		return fmt.Errorf("group must be a name or a list of names")
+	}
 }
 
 type BeanMeta struct {
@@ -76,6 +115,8 @@ type TableMeta struct {
 	Key     string      `yaml:"key"`
 	Comment string      `yaml:"comment"`
 	Fields  []FieldMeta `yaml:"fields"`
+	// Group restricts the whole entry to these export groups; absent = all.
+	Group GroupList `yaml:"group"`
 }
 
 type FieldMeta struct {
@@ -89,6 +130,10 @@ type FieldMeta struct {
 	// SkipEmpty (with index): zero values stay out of the index.
 	SkipEmpty bool   `yaml:"skipempty"`
 	Comment   string `yaml:"comment"`
+	// Group restricts the field to these export groups; absent = all. A
+	// client-only field (`group: c`) is left out of the server binding, the
+	// way Luban's group attribute filters a target.
+	Group GroupList `yaml:"group"`
 }
 
 var scalarTypes = map[string]bool{
@@ -106,6 +151,7 @@ func Run(args []string, stdout io.Writer) error {
 	metaPath := flags.String("meta", "./configs/schema/cfg.yaml", "schema meta file")
 	outDir := flags.String("out", "./cfg", "generated Go output directory")
 	outPkg := flags.String("pkg", "", "generated package name (default: meta 'package', else output directory base)")
+	groupsFlag := flags.String("groups", "", "comma-separated export groups to generate for (default: meta groups.target, else everything)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -123,6 +169,11 @@ func Run(args []string, stdout io.Writer) error {
 	if err := validateMeta(&meta); err != nil {
 		return fmt.Errorf("cfggen: %s: %w", *metaPath, err)
 	}
+	exported, omitted, err := exportForGroups(&meta, splitGroups(*groupsFlag))
+	if err != nil {
+		return fmt.Errorf("cfggen: %s: %w", *metaPath, err)
+	}
+	meta = *exported
 
 	pkg := *outPkg
 	if pkg == "" {
@@ -145,7 +196,149 @@ func Run(args []string, stdout io.Writer) error {
 	}
 	_, _ = fmt.Fprintf(stdout, "cfggen: wrote %s (%d tables, %d globals, %d beans)\n",
 		target, len(meta.Tables), len(meta.globalEntries()), len(meta.Beans))
+	if omitted.entries+omitted.fields > 0 {
+		_, _ = fmt.Fprintf(stdout, "cfggen: export groups %v: omitted %d entries and %d fields belonging to other groups\n",
+			omitted.target, omitted.entries, omitted.fields)
+	}
 	return nil
+}
+
+func splitGroups(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+type omittedByGroups struct {
+	target  []string
+	entries int
+	fields  int
+}
+
+// exportForGroups returns the meta restricted to one target group set. Group
+// names are checked against the declaration, a key field can never be
+// excluded (the table would have no identity), and a ref must point at a
+// table that is exported too — otherwise the generated binding would refer
+// to a table the runtime never registers and every load would fail.
+func exportForGroups(meta *Meta, target []string) (*Meta, omittedByGroups, error) {
+	if len(target) == 0 {
+		target = []string(meta.Groups.Target)
+	}
+	declared := make(map[string]bool, len(meta.Groups.Names))
+	for _, name := range meta.Groups.Names {
+		if err := validName("group", name); err != nil {
+			return nil, omittedByGroups{}, err
+		}
+		if declared[name] {
+			return nil, omittedByGroups{}, fmt.Errorf("group %q declared twice", name)
+		}
+		declared[name] = true
+	}
+	check := func(where string, groups GroupList) error {
+		for _, name := range groups {
+			if !declared[name] {
+				return fmt.Errorf("%s: group %q is not declared in groups.names %v", where, name, meta.Groups.Names)
+			}
+		}
+		return nil
+	}
+	if err := check("groups.target", GroupList(target)); err != nil {
+		return nil, omittedByGroups{}, err
+	}
+	targetSet := make(map[string]bool, len(target))
+	for _, name := range target {
+		targetSet[name] = true
+	}
+	// No target means every group is exported; the checks still run so a
+	// typo in a group name fails even before anyone selects a target.
+	exported := func(groups GroupList) bool {
+		if len(targetSet) == 0 || len(groups) == 0 {
+			return true
+		}
+		for _, name := range groups {
+			if targetSet[name] {
+				return true
+			}
+		}
+		return false
+	}
+	omitted := omittedByGroups{target: target}
+	filterFields := func(where string, fields []FieldMeta, key string) ([]FieldMeta, error) {
+		out := make([]FieldMeta, 0, len(fields))
+		for _, field := range fields {
+			if err := check(where+" field "+field.Name, field.Group); err != nil {
+				return nil, err
+			}
+			if !exported(field.Group) {
+				if key != "" && field.Name == key {
+					return nil, fmt.Errorf("%s: key field %s cannot be excluded from target groups %v", where, field.Name, target)
+				}
+				omitted.fields++
+				continue
+			}
+			out = append(out, field)
+		}
+		return out, nil
+	}
+	result := &Meta{Package: meta.Package, Groups: meta.Groups}
+	for _, bean := range meta.Beans {
+		fields, err := filterFields("bean "+bean.Name, bean.Fields, "")
+		if err != nil {
+			return nil, omittedByGroups{}, err
+		}
+		if len(fields) == 0 {
+			return nil, omittedByGroups{}, fmt.Errorf("bean %s: every field is excluded from target groups %v", bean.Name, target)
+		}
+		bean.Fields = fields
+		result.Beans = append(result.Beans, bean)
+	}
+	exportedTables := make(map[string]bool, len(meta.Tables))
+	for _, table := range meta.Tables {
+		if err := check("table "+table.Name, table.Group); err != nil {
+			return nil, omittedByGroups{}, err
+		}
+		if !exported(table.Group) {
+			omitted.entries++
+			continue
+		}
+		fields, err := filterFields("table "+table.Name, table.Fields, table.Key)
+		if err != nil {
+			return nil, omittedByGroups{}, err
+		}
+		table.Fields = fields
+		exportedTables[table.Name] = true
+		result.Tables = append(result.Tables, table)
+	}
+	for _, table := range result.Tables {
+		for _, field := range table.Fields {
+			if field.Ref != "" && !exportedTables[field.Ref] {
+				return nil, omittedByGroups{}, fmt.Errorf("table %s field %s: ref target %q is excluded from target groups %v", table.Name, field.Name, field.Ref, target)
+			}
+		}
+	}
+	for _, global := range meta.globalEntries() {
+		if err := check("global "+global.Name, global.Group); err != nil {
+			return nil, omittedByGroups{}, err
+		}
+		if !exported(global.Group) {
+			omitted.entries++
+			continue
+		}
+		fields, err := filterFields("global "+global.Name, global.Fields, "")
+		if err != nil {
+			return nil, omittedByGroups{}, err
+		}
+		if len(fields) == 0 {
+			return nil, omittedByGroups{}, fmt.Errorf("global %s: every field is excluded from target groups %v", global.Name, target)
+		}
+		global.Fields = fields
+		result.Globals = append(result.Globals, global)
+	}
+	return result, omitted, nil
 }
 
 func validateMeta(meta *Meta) error {

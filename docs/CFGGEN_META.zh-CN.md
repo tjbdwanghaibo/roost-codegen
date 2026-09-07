@@ -4,7 +4,7 @@
 
 ```bash
 go run github.com/tjbdwanghaibo/roost-codegen/cmd/cfggen \
-  -meta ./configs/schema/cfg.yaml -out ./cfg [-pkg cfg]
+  -meta ./configs/schema/cfg.yaml -out ./cfg [-pkg cfg] [-groups s]
 ```
 
 产物固定为 `<out>/cfg_gen.go` 一个文件。可运行的端到端示例：roost-core 仓库 `examples/configgen`。
@@ -58,6 +58,7 @@ world, _ := cfg.WorldFrom(snap)              // 全局单例
 | 键 | 必填 | 说明 |
 | --- | --- | --- |
 | `package` | 否 | 生成包名；`-pkg` 参数优先，两者都缺省时取输出目录名 |
+| `groups` | 否 | 导出分组声明：`names`（允许出现的组名）、`target`（本次生成导出的组，`-groups` 参数优先）。见下方"导出分组" |
 | `beans` | 否 | 嵌套结构定义（表/全局的字段可以用 bean 或 `[]bean`） |
 | `tables` | 否 | 主键表：数据文件是**行数组**，按 `key` 建映射 |
 | `globals` | 否 | **无主键的全局单例配置**：数据文件是**单个 JSON 对象**，整个快照只有一份（世界尺寸、全局开关、公式常数）。`objects` 是兼容别名 |
@@ -71,6 +72,7 @@ world, _ := cfg.WorldFrom(snap)              // 全局单例
 | `file` | 都 | 数据文件名，默认 `<name>.json`；拒绝绝对路径与 `..` |
 | `comment` | 都 | 生成到类型注释；多行会被折叠为一行 |
 | `fields` | 都 | 字段列表（有序，决定 struct 字段顺序） |
+| `group` | 都 | 整个条目只属于这些组（一个名字或列表）；不在目标组里的表 / 全局不生成、不注册、无访问器。省略 = 所有组 |
 
 ### 字段
 
@@ -83,8 +85,39 @@ world, _ := cfg.WorldFrom(snap)              // 全局单例
 | `ref` | 引用另一张表的主键：字段类型必须与目标表 key 类型**完全一致**；目标表必须在本 meta 中声明。运行时每次 load/reload 校验非零值存在于目标表（零值 = 无引用） |
 | `required` | 配合 `ref`：零值也报错——专门抓"数据侧字段改名导致整列静默归零"的事故 |
 | `comment` | 生成到字段行注释；多行折叠 |
+| `group` | 字段只属于这些组（`group: c` 或 `group: [c, s]`）；不在目标组里的字段从 struct 中去掉（连带它的索引访问器）。省略 = 所有组 |
 
 `index`/`ref`（及其修饰）**只允许在 tables 上**；globals 写了直接报错（对象注册路径不会执行这些校验，静默忽略比报错危险得多）。
+
+## 导出分组（前后端分开的配置）
+
+一份 meta 同时描述客户端与服务器要的字段，服务器绑定只生成自己那部分——与 Luban 的 `group` 属性 / target 的 `groups` 一致。
+
+```yaml
+groups:
+  names: [c, s]       # 允许出现的组名（拼错直接报错）
+  target: [s]         # 这份 Go 绑定默认导出的组；-groups c,s 可以覆盖
+tables:
+  - name: monster
+    key: id
+    fields:
+      - { name: id,       type: int32 }                     # 没写 group = 每个组都有
+      - { name: hp,       type: int32,  group: s }          # 只给服务器
+      - { name: model,    type: string, group: c }          # 只给客户端：服务器绑定里没有这个字段
+      - { name: skin_id,  type: int32,  group: c, index: true }  # 连索引访问器一起省掉
+  - name: ui_layout
+    key: id
+    group: c                                                # 整张表不进服务器
+    fields: [ { name: id, type: int32 }, { name: path, type: string } ]
+```
+
+规则：
+
+- `groups.target` 为空且没传 `-groups` = 导出一切，所以没有分组的旧 meta 生成结果一个字节都不变。
+- 组名必须先在 `groups.names` 里声明；条目和字段的 `group`、`target`、`-groups` 里出现未声明的名字都报错。
+- 主键字段不能被排除；`ref` 指向的表必须也在目标组里（否则绑定引用了运行时永不注册的表，每次加载都会失败）；一个 bean / 全局的字段全被排除也报错。
+- 生成结束会打印"omitted N entries and M fields"，让"少了一个字段"是看得见的，不是静默的。
+- **数据文件**：服务器加载的 JSON 里仍然会有客户端字段。默认（非 strict）模式下未知键被忽略，没问题；如果开了 `store.SetStrictJSON(true)`，导出数据的一侧也要按组过滤（Luban 的数据导出天生按 target 过滤；自写导出脚本要照做）。
 
 ## 类型系统
 
@@ -135,7 +168,7 @@ bean 内部只能用标量/数组/其他 bean，**不能带 `index`/`ref`**；be
 
 ## 与 Luban 的关系
 
-cfggen 覆盖"JSON 数据 + 轻量 schema"的场景。需要 Excel 族数据源、bean 继承/多态、path/range 校验时直接用 Luban：Luban 管定义/校验/导出/代码生成，其生成的 `Tables` 聚合经 `configdata.RegisterExternalTables` 装进同一套运行时（热更/回滚/hash 全继承，内容经字节指纹进 hash）。真实接入示例见 roost-core `examples/lubanreal`。
+cfggen 覆盖"JSON 数据 + 轻量 schema"的场景。`groups` / `group` 对应 Luban 的 `groups` 声明与字段 / 表的 `group` 属性，语义一致（不写 = 属于所有组，target 决定导出哪些），迁到 Luban 时可以逐字搬。需要 Excel 族数据源、bean 继承/多态、path/range 校验时直接用 Luban：Luban 管定义/校验/导出/代码生成，其生成的 `Tables` 聚合经 `configdata.RegisterExternalTables` 装进同一套运行时（热更/回滚/hash 全继承，内容经字节指纹进 hash）。真实接入示例见 roost-core `examples/lubanreal`。
 
 ## 易错点速查
 
