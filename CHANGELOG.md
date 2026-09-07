@@ -29,6 +29,8 @@
 
 ### Fixed
 
+- **发布清单对齐 core v1.13.0**（`security.RateLimiter` 改用 x/time/rate，新增依赖 `golang.org/x/time`；API 不变）。生成工程的 `versions.core`
+  缺省仍取 latest，下限不变。
 - **`scripts/gapmap.sh` 收尾不再 `git clean`**：采样后只还原被改动的**已跟踪**文件；未跟踪文件（比如正在写的测试）原样保留并提示。
   之前的版本把采样期间新建的一个测试文件删掉了。
 - **发布清单对齐 core v1.12.1**（73 个提交的测试基线与 gap map 工具，无 API 变化）。生成工程的 `versions.core` 缺省仍取 latest，下限不变（v1.12.0）。
