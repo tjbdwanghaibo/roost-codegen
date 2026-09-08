@@ -142,9 +142,10 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 		dryRun := fs.Bool("dry-run", false, "preview an upgrade without writing files or resolving dependencies")
 		core := fs.String("core", "", "new core version")
 		kit := fs.String("kit", "", "new kit version")
-		skill := fs.String("skill", "", "new skill version")
-		serviceVersion := fs.String("service", "", "new roost-service version")
+		skill := fs.String("skill", "", "removed: skill ships inside roost-core since v1.14.0")
+		serviceVersion := fs.String("service", "", "removed: the services ship inside roost-kit since v1.13.0")
 		codegen := fs.String("codegen", "", "new codegen version")
+		consolidate := fs.Bool("consolidate", false, "rewrite imports from roost-skill / roost-service / roost-kit implementation packages to their consolidated locations (core v1.14.0 / kit v1.13.0)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -154,7 +155,7 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 		allowed := map[string][]string{
 			"sync": {"root"}, "diff": {"root"}, "doctor": {"root", "strict", "json", "workflow"},
 			"next": {"root", "workflow"}, "deps": {"root"},
-			"upgrade": {"root", "dry-run", "core", "kit", "skill", "service", "codegen"},
+			"upgrade": {"root", "dry-run", "core", "kit", "skill", "service", "codegen", "consolidate"},
 		}
 		if err := rejectUnsupportedFlags(fs, allowed[args[0]]...); err != nil {
 			return err
@@ -191,11 +192,26 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 			}
 			return UpdateFrameworkDependencies(root, manifest, stdout, stderr)
 		case "upgrade":
+			if *skill != "" || *serviceVersion != "" {
+				return errors.New("-skill and -service no longer exist: skill ships inside roost-core (v1.14.0+) and the services inside roost-kit (v1.13.0+); run roost project upgrade --consolidate to rewrite the project's imports")
+			}
+			if *consolidate {
+				if _, err := ConsolidateProject(root, *dryRun, stdout); err != nil {
+					return err
+				}
+				if *dryRun {
+					// The manifest diff below would show the pre-consolidation
+					// manifest; the rewrite report above is the preview.
+					return nil
+				}
+			} else if needsConsolidation(root) {
+				return errors.New("this project still requires roost-skill / roost-service; run roost project upgrade --consolidate first (add --dry-run to preview the import rewrite)")
+			}
 			m, err := loadManifestForUpgrade(root)
 			if err != nil {
 				return err
 			}
-			mergeVersions(&m.Versions, VersionSpec{Core: *core, Kit: *kit, Skill: *skill, Service: *serviceVersion, Codegen: *codegen})
+			mergeVersions(&m.Versions, VersionSpec{Core: *core, Kit: *kit, Codegen: *codegen})
 			if err := m.Validate(); err != nil {
 				return fmt.Errorf("validate upgraded manifest: %w", err)
 			}

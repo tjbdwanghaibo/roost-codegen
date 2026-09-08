@@ -207,6 +207,15 @@ func TestManifestVersionPolicies(t *testing.T) {
 	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "module path") {
 		t.Fatalf("incompatible major accepted: %v", err)
 	}
+	// A pre-release of the floor carries the floor's layout and is accepted.
+	m.Versions.Kit = minimumVersions.Kit + "-alpha.1"
+	if err := m.Validate(); err != nil {
+		t.Fatalf("pre-release pin of the floor rejected: %v", err)
+	}
+	m.Versions.Kit = "v1.0.0-alpha.1"
+	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), minimumVersions.Kit) {
+		t.Fatalf("pre-release pin below the floor accepted: %v", err)
+	}
 }
 
 func TestDependencyCommandForcesWorkspaceIsolation(t *testing.T) {

@@ -199,7 +199,7 @@ func TestUpgradeCanReadVersionsBelowCurrentFloor(t *testing.T) {
 		t.Fatal(err)
 	}
 	var preview bytes.Buffer
-	if err := Run([]string{"project", "upgrade", "--root", root, "--dry-run", "-core", "latest", "-kit", "latest", "-skill", "latest", "-codegen", "latest"}, &preview, io.Discard); err != nil {
+	if err := Run([]string{"project", "upgrade", "--root", root, "--dry-run", "-core", "latest", "-kit", "latest", "-codegen", "latest"}, &preview, io.Discard); err != nil {
 		t.Fatalf("preview legacy upgrade: %v", err)
 	}
 	if !strings.Contains(preview.String(), "roost.yaml") || !strings.Contains(preview.String(), "Makefile") {
@@ -1359,7 +1359,7 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 	}
 	for _, want := range []string{
 		"project-upgrade:",
-		"go run $(CODEGEN_MODULE)/cmd/roost@latest project upgrade --root . -core latest -kit latest -skill latest -codegen latest",
+		"go run $(CODEGEN_MODULE)/cmd/roost@latest project upgrade --root . -core latest -kit latest -codegen latest",
 		"roost-up:",
 		"GOWORK=off go get -u ./...",
 		"GOWORK=off go mod tidy",

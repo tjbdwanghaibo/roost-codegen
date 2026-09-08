@@ -110,6 +110,15 @@ func updateFrameworkDependencies(root string, manifest Manifest, stdout, stderr 
 	if _, err := os.Stat(goMod); err != nil {
 		return fmt.Errorf("framework dependencies require go.mod: %w", err)
 	}
+	if needsConsolidation(absRoot) {
+		// Crossing the consolidation boundary (core v1.14.0 / kit v1.13.0)
+		// without rewriting imports would leave the project pointing at
+		// modules that no longer exist. Rewrite first, then resolve.
+		fmt.Fprintln(stdout, "framework dependencies: project predates the consolidation; rewriting imports first")
+		if _, err := ConsolidateProject(absRoot, false, stdout); err != nil {
+			return fmt.Errorf("consolidate project before resolving dependencies: %w", err)
+		}
+	}
 	snapshots, err := snapshotDependencyFiles(goMod, filepath.Join(absRoot, "go.sum"))
 	if err != nil {
 		return err

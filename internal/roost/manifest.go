@@ -449,7 +449,13 @@ func validateVersionPolicy(name, value, minimum string) error {
 	if strings.EqualFold(value, "latest") {
 		return nil
 	}
-	major, _, _, ok := releaseVersion(value)
+	// A pre-release pin (v1.14.0-alpha.4) is judged by its release prefix: it
+	// carries the layout of that release, which is what the floor protects.
+	release := value
+	if i := strings.IndexByte(value, '-'); i > 0 && preReleaseSuffix.MatchString(value[i:]) {
+		release = value[:i]
+	}
+	major, _, _, ok := releaseVersion(release)
 	if !ok {
 		return fmt.Errorf("versions.%s must be latest or a semantic release such as %s; got %q", name, minimum, value)
 	}
@@ -457,11 +463,13 @@ func validateVersionPolicy(name, value, minimum string) error {
 	if major != minimumMajor {
 		return fmt.Errorf("versions.%s major v%d is incompatible with the current module path; use latest or v%d.x", name, major, minimumMajor)
 	}
-	if !versionAtLeast(value, minimumMajor, minimumMinor, minimumPatch) {
+	if !versionAtLeast(release, minimumMajor, minimumMinor, minimumPatch) {
 		return fmt.Errorf("versions.%s requires >= %s or latest; got %q", name, minimum, value)
 	}
 	return nil
 }
+
+var preReleaseSuffix = regexp.MustCompile(`^-[0-9A-Za-z][0-9A-Za-z.-]*$`)
 
 func releaseVersion(version string) (major, minor, patch int, ok bool) {
 	match := releaseVersionPattern.FindStringSubmatch(strings.TrimSpace(version))

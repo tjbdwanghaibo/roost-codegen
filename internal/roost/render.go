@@ -570,7 +570,7 @@ help:
 sync:
 	$(ROOST) project sync
 project-upgrade:
-	go run $(CODEGEN_MODULE)/cmd/roost@latest project upgrade --root . -core latest -kit latest -skill latest -codegen latest
+	go run $(CODEGEN_MODULE)/cmd/roost@latest project upgrade --root . -core latest -kit latest -codegen latest
 deps-update:
 	$(ROOST) project deps
 roost-up:
