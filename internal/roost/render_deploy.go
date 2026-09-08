@@ -662,7 +662,7 @@ func renderImplementationGuide(m Manifest) string {
 
 ## 技能路径
 
-roost-skill 把严格 JSON 编译为不可变 Program，由定点数 Runtime 执行。HostAdapter 把技能效果接入已持锁 Entity/component；技能 checkpoint、StateMutation 和 PresentationEvent 分别服务恢复、权威状态同步与客户端表现。
+技能系统（roost-core/skill）把严格 JSON 编译为不可变 Program，由定点数 Runtime 执行。HostAdapter 把技能效果接入已持锁 Entity/component；技能 checkpoint、StateMutation 和 PresentationEvent 分别服务恢复、权威状态同步与客户端表现。
 
 ## 本项目装配
 

@@ -1506,7 +1506,7 @@ func TestGeneratedBeginnerAndManifestDocumentationIsComplete(t *testing.T) {
 	manifestGuide := string(plan["docs/ROOST_YAML.zh-CN.md"].Body)
 	for _, want := range []string{
 		"schema", "project.name", "project.module", "versions.core", "versions.kit",
-		"versions.skill", "versions.codegen", "shared_mods", "services.<name>.mods",
+		"versions.codegen", "shared_mods", "services.<name>.mods",
 		"cicd.provider", "cicd.registry", "cicd.environments", "cicd.deploy",
 		"access.player.service", "features", "sagas", "ids", "groups", "min", "max", "完整示例",
 		"Feature 和 Mod 必须分别理解", "roost id next protocol -group game",

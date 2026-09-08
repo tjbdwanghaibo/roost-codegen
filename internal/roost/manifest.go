@@ -226,8 +226,8 @@ func (m Manifest) Marshal() ([]byte, error) {
 	}
 	header := fmt.Sprintf(`# Roost project manifest. Run make sync after editing.
 # versions.* defaults to latest; go.mod records the concrete release resolved
-# for one build. Minimums: core %s, kit %s, skill %s, codegen %s.
-`, minimumVersions.Core, minimumVersions.Kit, minimumVersions.Skill, minimumVersions.Codegen)
+# for one build. Minimums: core %s, kit %s, codegen %s.
+`, minimumVersions.Core, minimumVersions.Kit, minimumVersions.Codegen)
 	return append([]byte(header), raw...), nil
 }
 

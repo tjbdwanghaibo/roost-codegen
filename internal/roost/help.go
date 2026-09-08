@@ -87,7 +87,7 @@ make deps-update
 make roost-up
 make codegen-up
 roost project upgrade -core latest -kit latest -skill latest -codegen latest`,
-		Configuration: fmt.Sprintf(`roost.yaml 的 versions.* 默认是 latest。deps-update 在临时项目联合解析 core/kit/skill，只提交最终 go.mod/go.sum；失败或并发变化不会覆盖原文件。roost-up 执行 GOWORK=off go get -u ./... 与 go mod tidy，更新所有被项目引用的依赖；codegen-up 执行 go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest，更新本机 CLI。go.mod 保存具体版本，roost.yaml 保存更新策略。兼容下限：core %s、kit %s、skill %s、codegen %s。明确版本表示 MVS 下限，不是上限。`, minimumVersions.Core, minimumVersions.Kit, minimumVersions.Skill, minimumVersions.Codegen),
+		Configuration: fmt.Sprintf(`roost.yaml 的 versions.* 默认是 latest。deps-update 在临时项目联合解析 core/kit，只提交最终 go.mod/go.sum；失败或并发变化不会覆盖原文件。roost-up 执行 GOWORK=off go get -u ./... 与 go mod tidy，更新所有被项目引用的依赖；codegen-up 执行 go install github.com/tjbdwanghaibo/roost-codegen/cmd/roost@latest，更新本机 CLI。go.mod 保存具体版本，roost.yaml 保存更新策略。兼容下限：core %s、kit %s、codegen %s。明确版本表示 MVS 下限，不是上限。`, minimumVersions.Core, minimumVersions.Kit, minimumVersions.Codegen),
 		Example: `versions:
   core: latest
   kit: latest
@@ -178,7 +178,7 @@ roost add endpoint EquipItem --handler inventory --protocol EquipItem --nest-han
 	},
 	{
 		Name: "skill", Aliases: []string{"skills", "ability"},
-		Summary:       "生成稳定 roost-skill JSON 骨架和启动期编译目录",
+		Summary:       "生成稳定 roost-core/skill JSON 骨架和启动期编译目录",
 		Usage:         `roost add skill <name>`,
 		Configuration: `创建 game/skills/<name>.json；首次创建同时生成 catalog.go。空骨架只 finish，不预设伤害、目标或资源规则。CompileAll 使用稳定 /skill import，对所有嵌入定义严格 Parse/Compile，重复 ID 或 error diagnostic 启动失败。`,
 		Example: `roost add skill Fireball

@@ -132,7 +132,7 @@ PLAYER_ACCESS_TCP.zh-CN.md 实现票据校验后运行 roost config enable playe
 4. ENTITY_COMPONENT.zh-CN.md：业务代码、持久化状态和 Nest 锁边界；
 5. PROTOCOL_TO_NEST.zh-CN.md：网络适配、协议、Sender 和错误边界；
 6. PLAYER_ACCESS_TCP.zh-CN.md：可运行 TCP listener、帧、鉴权和上线检查；
-7. SKILL.zh-CN.md：稳定 roost-skill 接入；
+7. SKILL.zh-CN.md：稳定的技能系统（roost-core/skill）接入；
 8. USAGE.zh-CN.md：当前项目启用的 Service、Mod 和命令；
 9. IMPLEMENTATION.zh-CN.md：Entity、Nest、WAL、Remote Entity、Saga 和同步实现；
 10. DEPLOYMENT.zh-CN.md：Shell、Docker、Kubernetes 生产部署。
@@ -362,10 +362,9 @@ name 是运行与部署身份；module 是 Go import 前缀。仓库目录名可
 | --- | --- | --- | --- |
 | versions.core | roost-core 依赖解析 | %s | latest 或 %s |
 | versions.kit | roost-kit 依赖解析 | %s | latest 或 %s |
-| versions.skill | roost-skill 依赖解析 | %s | latest 或 %s |
 | versions.codegen | Makefile 使用的 roost-codegen | %s | latest 或 %s |
 
-latest 是持续更新策略，不会原样写进 go.mod。project deps 会在同级临时项目联合解析 core、kit、skill，
+latest 是持续更新策略，不会原样写进 go.mod。project deps 会在同级临时项目联合解析 core、kit，
 只把本次选中的具体版本写入 go.mod/go.sum；失败或并发变化不覆盖原文件，这样一次测试和发布仍然
 可复现。明确版本是 Go MVS 下限，不是禁止更高传递版本的上限。
 
@@ -397,13 +396,13 @@ services.<name>.mods 表示该 Service 运行时装配的 Kit Mod。生成器会
 DependsOn 拓扑排序。nest 和 saga 会自动补唯一的 dataengine 持久化引擎及 mongo、nats。
 同一个 Mod 不能同时出现在 shared_mods 和某个 Service 中，未知 Mod 和依赖环会失败。
 
-services.<name>.framework 把该进程声明为一个托管的 roost-service 服务（account、mail、
+services.<name>.framework 把该进程声明为一个托管的框架服务（roost-kit/service：account、mail、
 match、chat 之一）：没有业务 Service，进程就是该服务的 Server 加它的 owner Mod，redis 与
 nats 自动补齐；Mod 需要的协作者写在 internal/service/<name>/collaborators.go（只生成一次，
 默认全部拒绝）。services.<name>.uses 列出业务 Service 要调用的托管服务，生成器给该进程装配
 对应 ClientMod（并补 nats），并在 internal/service/<name>/framework_clients_gen.go 生成类型化
 访问器。roost project new … -template game 一次生成这四个托管服务并把第一个业务 Service
-接上它们。托管服务与 uses 的版本由 versions.service 控制，go.mod 只在用到时才带 roost-service。
+接上它们。托管服务随 roost-kit 发布，版本由 versions.kit 控制。
 
 access.player.service 指定玩家协议接入层安装到哪个 Service。当前仅支持 player；它要求 protocol
 feature，并要求目标 Service 有 nest Mod。access.player.transports 是显式启用的客户端传输列表；当前
@@ -515,6 +514,5 @@ make project-upgrade，更新框架依赖使用 make deps-update，更新完整�
 - saga requires saga mod：使用 roost add saga，不要只手改 sagas/features。
 `, minimumVersions.Core, minimumVersions.Core,
 		minimumVersions.Kit, minimumVersions.Kit,
-		minimumVersions.Skill, minimumVersions.Skill,
 		minimumVersions.Codegen, minimumVersions.Codegen)
 }
