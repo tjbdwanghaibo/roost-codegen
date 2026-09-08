@@ -50,6 +50,7 @@ func TestConsolidateProjectRewritesImportsGoModAndManifest(t *testing.T) {
 
 import (
 	"github.com/tjbdwanghaibo/roost-kit/dataengine"
+	kitnats "github.com/tjbdwanghaibo/roost-kit/nats"
 	kitredis "github.com/tjbdwanghaibo/roost-kit/redis"
 	"github.com/tjbdwanghaibo/roost-kit/syncstream"
 	"github.com/tjbdwanghaibo/roost-service/servicemods"
@@ -60,6 +61,8 @@ var (
 	_ = skill.Program{}
 	_ = kitredis.NewRedisMod
 	_ = kitredis.NewClient
+	_ = kitnats.NewClient
+	_ = kitnats.Permanent
 	_ = dataengine.NewEntityRepository
 	_ = syncstream.HealthOptions{}
 	_ = servicemods.ModMail
@@ -91,13 +94,17 @@ var (
 	for _, want := range []string{
 		`dataengine "github.com/tjbdwanghaibo/roost-core/dataengine/engine"`, // package name changes: keep the identifier
 		`kitredis "github.com/tjbdwanghaibo/roost-kit/redis"`,                // Mod glue stays
-		`coreredis "github.com/tjbdwanghaibo/roost-core/redis"`,              // moved symbols get a second import
+		`coreredis "github.com/tjbdwanghaibo/roost-core/redis/driver"`,       // moved symbols get a second import (driver subpackage)
 		`_ = coreredis.NewClient`,
 		`_ = kitredis.NewRedisMod`,
 		`"github.com/tjbdwanghaibo/roost-core/syncstream"`,
 		`syncstream.PublisherHealthOptions{}`,                   // recorded rename
 		`servicemods "github.com/tjbdwanghaibo/roost-kit/mods"`, // folded package: keep the identifier
 		`"github.com/tjbdwanghaibo/roost-core/skill"`,
+		`kitnats "github.com/tjbdwanghaibo/roost-core/nats/driver"`, // whole import moves to the driver
+		`natscontract "github.com/tjbdwanghaibo/roost-core/nats"`,   // Permanent stayed in the contract package
+		`_ = natscontract.Permanent`,
+		`_ = kitnats.NewClient`,
 	} {
 		if !strings.Contains(string(rewritten), want) {
 			t.Errorf("rewritten file missing %q:\n%s", want, rewritten)

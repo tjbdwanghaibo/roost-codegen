@@ -36,7 +36,10 @@ split:
     package: engine
     kit_keeps: ['Mod', 'ModOption', 'NewMod', 'WithEntityAccess', 'WithRemoteProjection']
   - kit: github.com/tjbdwanghaibo/roost-kit/etcd
-    core: github.com/tjbdwanghaibo/roost-core/etcd
+    # Implementation lives in the driver subpackage (B-26): the contract package
+    # github.com/tjbdwanghaibo/roost-core/etcd stays free of driver dependencies.
+    core: github.com/tjbdwanghaibo/roost-core/etcd/driver
+    package: driver
     kit_keeps: ['EtcdMod', 'NewEtcdMod']
   - kit: github.com/tjbdwanghaibo/roost-kit/gateway
     core: github.com/tjbdwanghaibo/roost-core/gateway
@@ -45,13 +48,22 @@ split:
     core: github.com/tjbdwanghaibo/roost-core/lockstep
     kit_keeps: []
   - kit: github.com/tjbdwanghaibo/roost-kit/mongo
-    core: github.com/tjbdwanghaibo/roost-core/mongo
+    # Implementation lives in the driver subpackage (B-26): the contract package
+    # github.com/tjbdwanghaibo/roost-core/mongo stays free of driver dependencies.
+    core: github.com/tjbdwanghaibo/roost-core/mongo/driver
+    package: driver
     kit_keeps: ['MongoMod', 'NewMongoMod']
   - kit: github.com/tjbdwanghaibo/roost-kit/nats
-    core: github.com/tjbdwanghaibo/roost-core/nats
+    # Implementation lives in the driver subpackage (B-26): the contract package
+    # github.com/tjbdwanghaibo/roost-core/nats stays free of driver dependencies.
+    core: github.com/tjbdwanghaibo/roost-core/nats/driver
+    package: driver
     kit_keeps: ['NatsMod', 'NewNatsMod']
   - kit: github.com/tjbdwanghaibo/roost-kit/redis
-    core: github.com/tjbdwanghaibo/roost-core/redis
+    # Implementation lives in the driver subpackage (B-26): the contract package
+    # github.com/tjbdwanghaibo/roost-core/redis stays free of driver dependencies.
+    core: github.com/tjbdwanghaibo/roost-core/redis/driver
+    package: driver
     kit_keeps: ['NewRedisMod', 'RedisMod']
   - kit: github.com/tjbdwanghaibo/roost-kit/robot
     core: github.com/tjbdwanghaibo/roost-core/robot
@@ -137,7 +149,9 @@ service:
 renames:
   - package: github.com/tjbdwanghaibo/roost-kit/nats
     symbol: Permanent
-    to: core            # core/nats.Permanent (same marker interface)
+    to: core            # contract-level core/nats.Permanent (same marker interface); after the
+                        # rewrite this selector points at nats/driver, which does not export it —
+                        # the rewriter must send Permanent to the contract package
   - package: github.com/tjbdwanghaibo/roost-kit/syncstream
     symbol: HealthOptions
     to: PublisherHealthOptions

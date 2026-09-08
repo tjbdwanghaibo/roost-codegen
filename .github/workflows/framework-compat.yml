@@ -56,7 +56,7 @@ jobs:
             # only published as pre-releases, so pin them for the bootstrap
             # resolution; the workspace below then replaces both with source.
             # Remove once core v1.14.0 / kit v1.13.0 are tagged.
-            version_args=(-roost-core-version v1.14.0-alpha.4 -roost-kit-version v1.13.0-alpha.1 -codegen-version latest)
+            version_args=(-roost-core-version v1.14.0-alpha.5 -roost-kit-version v1.13.0-alpha.2 -codegen-version latest)
           fi
           mods=configdata
           services=game
