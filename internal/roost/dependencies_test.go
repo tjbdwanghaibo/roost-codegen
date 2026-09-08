@@ -80,7 +80,6 @@ func TestUpdateFrameworkDependenciesResolvesAllDirectModulesTogether(t *testing.
 			"get",
 			"github.com/tjbdwanghaibo/roost-core@latest",
 			"github.com/tjbdwanghaibo/roost-kit@latest",
-			"github.com/tjbdwanghaibo/roost-skill@latest",
 		},
 		{"mod", "tidy"},
 	}
@@ -95,9 +94,8 @@ func TestUpdateFrameworkDependenciesUsesExplicitPolicies(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := DefaultManifest("planet", "example.com/planet", nil, nil, nil)
-	manifest.Versions.Core = "v1.12.0"
-	manifest.Versions.Kit = "v1.12.3"
-	manifest.Versions.Skill = "v1.10.3"
+	manifest.Versions.Core = "v1.14.0"
+	manifest.Versions.Kit = "v1.13.1"
 	var get []string
 	runner := func(_ context.Context, _ string, _, _ io.Writer, args ...string) error {
 		if len(args) > 0 && args[0] == "get" {
@@ -109,7 +107,7 @@ func TestUpdateFrameworkDependenciesUsesExplicitPolicies(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(get, " ")
-	for _, want := range []string{"roost-core@v1.12.0", "roost-kit@v1.12.3", "roost-skill@v1.10.3"} {
+	for _, want := range []string{"roost-core@v1.14.0", "roost-kit@v1.13.1"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("go get command missing %q: %v", want, get)
 		}
@@ -197,15 +195,15 @@ func TestManifestVersionPolicies(t *testing.T) {
 	if err := m.Validate(); err != nil {
 		t.Fatalf("latest policy rejected: %v", err)
 	}
-	m.Versions.Skill = "v1.6.9"
-	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), minimumVersions.Skill) {
-		t.Fatalf("unsupported skill version accepted: %v", err)
+	m.Versions.Kit = "v1.6.9"
+	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), minimumVersions.Kit) {
+		t.Fatalf("unsupported kit version accepted: %v", err)
 	}
-	m.Versions.Skill = "main"
+	m.Versions.Kit = "main"
 	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "latest or a semantic release") {
 		t.Fatalf("non-release policy accepted: %v", err)
 	}
-	m.Versions.Skill = "v2.0.0"
+	m.Versions.Kit = "v2.0.0"
 	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "module path") {
 		t.Fatalf("incompatible major accepted: %v", err)
 	}

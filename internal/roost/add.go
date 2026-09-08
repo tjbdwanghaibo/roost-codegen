@@ -420,7 +420,7 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 				return nil, fmt.Errorf("invalid saga step %q", stepName)
 			}
 			fmt.Fprintf(&steps, "\t\t{Name: %q, ForwardTopic: %q, CompensateTopic: %q, Timeout: 5 * time.Second, MaxAttempts: 5, BackoffMin: 100 * time.Millisecond, BackoffMax: 5 * time.Second}, // %s\n", stepSnake, snake+"."+stepSnake, snake+"."+stepSnake+".compensate", stepPascal)
-			fmt.Fprintf(&subscribers, "\nfunc Subscribe%s(ctx context.Context, client fnats.IJetStream, transport *kitsaga.JetStreamPublisher, inbox *kitsaga.MongoCommandInbox, stream, durable string, handler kitsaga.StepHandler) (fnats.IJetStreamSubscription, error) {\n\treturn kitsaga.SubscribeStep(ctx, client, transport, inbox, kitsaga.StepConsumerConfig{Stream: stream, Durable: durable, Topic: %q}, handler)\n}\n\nfunc Subscribe%sCompensation(ctx context.Context, client fnats.IJetStream, transport *kitsaga.JetStreamPublisher, inbox *kitsaga.MongoCommandInbox, stream, durable string, handler kitsaga.StepHandler) (fnats.IJetStreamSubscription, error) {\n\treturn kitsaga.SubscribeStep(ctx, client, transport, inbox, kitsaga.StepConsumerConfig{Stream: stream, Durable: durable, Topic: %q}, handler)\n}\n", stepPascal, snake+"."+stepSnake, stepPascal, snake+"."+stepSnake+".compensate")
+			fmt.Fprintf(&subscribers, "\nfunc Subscribe%s(ctx context.Context, client fnats.IJetStream, transport *saga.JetStreamPublisher, inbox *saga.MongoCommandInbox, stream, durable string, handler saga.StepHandler) (fnats.IJetStreamSubscription, error) {\n\treturn saga.SubscribeStep(ctx, client, transport, inbox, saga.StepConsumerConfig{Stream: stream, Durable: durable, Topic: %q}, handler)\n}\n\nfunc Subscribe%sCompensation(ctx context.Context, client fnats.IJetStream, transport *saga.JetStreamPublisher, inbox *saga.MongoCommandInbox, stream, durable string, handler saga.StepHandler) (fnats.IJetStreamSubscription, error) {\n\treturn saga.SubscribeStep(ctx, client, transport, inbox, saga.StepConsumerConfig{Stream: stream, Durable: durable, Topic: %q}, handler)\n}\n", stepPascal, snake+"."+stepSnake, stepPascal, snake+"."+stepSnake+".compensate")
 		}
 		body = fmt.Sprintf(`package %s
 
@@ -430,7 +430,6 @@ import (
 
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"github.com/tjbdwanghaibo/roost-core/saga"
-	kitsaga "github.com/tjbdwanghaibo/roost-kit/saga"
 )
 
 const (

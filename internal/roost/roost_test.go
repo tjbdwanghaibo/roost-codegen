@@ -476,7 +476,7 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 		"game/protocol_bootstrap/protocol_gen.go":  {"RegisterPlayerPlayerProtocols"},
 		"game/controllers/player/controller.go":    {"app.Lookup[corenest.Client]", "NestClient() corenest.Client"},
 		"game/controllers/player/rename_player.go": {"Sync_RenamePlayer", "context.PlayerID", "NewRenamePlayerSender"},
-		"game/lifecycle/player.go":                 {"GetOrCreate", "FromRegistry", "mods.ModEntityRuntime", "kitdataengine.ErrEntityAggregateNotFound", "entity.BuildEntityID", "EntityKindPlayer"},
+		"game/lifecycle/player.go":                 {"GetOrCreate", "FromRegistry", "mods.ModEntityRuntime", "engine.ErrEntityAggregateNotFound", "entity.BuildEntityID", "EntityKindPlayer"},
 		"protocol/player_bind/bind_gen.go":         {"RegisterRenamePlayer"},
 	}
 	for path, fragments := range checks {
@@ -1039,7 +1039,7 @@ func TestAddSkillUsesStablePackageAndNeutralDefinition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(catalog, []byte("github.com/tjbdwanghaibo/roost-skill/skill")) || bytes.Contains(catalog, []byte("skillv2")) {
+	if !bytes.Contains(catalog, []byte("github.com/tjbdwanghaibo/roost-core/skill")) || bytes.Contains(catalog, []byte("skillv2")) {
 		t.Fatalf("Skill catalog must use the stable package:\n%s", catalog)
 	}
 }
@@ -1334,7 +1334,6 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 	for _, want := range []string{
 		"github.com/tjbdwanghaibo/roost-core " + minimumVersions.Core,
 		"github.com/tjbdwanghaibo/roost-kit " + minimumVersions.Kit,
-		"github.com/tjbdwanghaibo/roost-skill " + minimumVersions.Skill,
 	} {
 		if !strings.Contains(goMod, want) {
 			t.Errorf("go.mod missing %q:\n%s", want, goMod)
@@ -1343,7 +1342,7 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 	if strings.Contains(goMod, "replace ") {
 		t.Fatalf("generated release go.mod contains replace directive:\n%s", goMod)
 	}
-	if strings.Contains(goMod, "roost-core latest") || strings.Contains(goMod, "roost-kit latest") || strings.Contains(goMod, "roost-skill latest") {
+	if strings.Contains(goMod, "roost-core latest") || strings.Contains(goMod, "roost-kit latest") {
 		t.Fatalf("go.mod must contain resolved semantic versions, not module queries:\n%s", goMod)
 	}
 	plan, err := renderProject(m)
@@ -1351,7 +1350,7 @@ func TestRenderGoModUsesPublishedModulesWithoutReplace(t *testing.T) {
 		t.Fatal(err)
 	}
 	deps, ok := plan["internal/frameworkdeps/generated.go"]
-	if !ok || !strings.Contains(string(deps.Body), "github.com/tjbdwanghaibo/roost-skill/skill") || strings.Contains(string(deps.Body), "/skillv2") {
+	if !ok || !strings.Contains(string(deps.Body), "github.com/tjbdwanghaibo/roost-core/skill") || strings.Contains(string(deps.Body), "roost-skill") {
 		t.Fatalf("generated project does not pin the skill module: %q", deps.Body)
 	}
 	makefile := string(plan["Makefile"].Body)
@@ -1590,7 +1589,7 @@ func TestSyncUpgradesLegacyGeneratedMakefile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(upgradedFrameworkDeps, []byte("github.com/tjbdwanghaibo/roost-skill/skill")) || bytes.Contains(upgradedFrameworkDeps, []byte("skillv2")) {
+	if !bytes.Contains(upgradedFrameworkDeps, []byte("github.com/tjbdwanghaibo/roost-core/skill")) || bytes.Contains(upgradedFrameworkDeps, []byte("skillv2")) {
 		t.Fatalf("legacy skillv2 dependency was not migrated:\n%s", upgradedFrameworkDeps)
 	}
 }

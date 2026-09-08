@@ -23,17 +23,15 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // used only as an offline/bootstrap go.mod baseline and as compatibility
 // guards for users that intentionally pin a release.
 //
-// The four framework modules move together: roost-service v1.5.x requires
-// core and kit v1.12.0, so a project pinning core below that and hosting a
-// framework service cannot resolve ("roost-service@v1.5.1 requires
-// roost-core@v1.12.0, not roost-core@v1.10.0"). The floors are therefore the
-// oldest set that resolves as a whole, not each module's own oldest tag.
+// Since the consolidation (core v1.14.0 / kit v1.13.0) the framework is two
+// modules: roost-skill lives in roost-core/skill and roost-service in
+// roost-kit/service. The floors are the first versions with that layout; a
+// project pinning core below v1.14.0 must be upgraded with
+// `roost project upgrade --consolidate`, which rewrites its imports.
 var minimumVersions = VersionSpec{
-	Core:    "v1.12.0",
-	Kit:     "v1.12.2",
-	Skill:   "v1.10.3",
-	Service: "v1.5.2",
-	Codegen: "v1.7.0",
+	Core:    "v1.14.0",
+	Kit:     "v1.13.0",
+	Codegen: "v1.15.0",
 }
 
 type Manifest struct {
@@ -55,21 +53,21 @@ type ProjectSpec struct {
 }
 
 type VersionSpec struct {
-	Core  string `yaml:"core"`
-	Kit   string `yaml:"kit"`
-	Skill string `yaml:"skill"`
-	// Service is the roost-service release policy. Manifests written before
-	// it existed leave it empty, which reads as latest.
+	Core string `yaml:"core"`
+	Kit  string `yaml:"kit"`
+	// Skill and Service are the pre-consolidation module policies. They are
+	// still read so an old roost.yaml loads, but the modules no longer exist:
+	// skill ships inside roost-core and the services inside roost-kit. Sync
+	// drops the fields; the upgrader rewrites the project's imports.
+	Skill   string `yaml:"skill,omitempty"`
 	Service string `yaml:"service,omitempty"`
 	Codegen string `yaml:"codegen"`
 }
 
-// servicePolicy is versions.service with the pre-field default applied.
-func (v VersionSpec) servicePolicy() string {
-	if strings.TrimSpace(v.Service) == "" {
-		return "latest"
-	}
-	return v.Service
+// consolidated reports whether the manifest still carries pre-consolidation
+// module policies that sync must drop.
+func (v VersionSpec) legacyModulePolicies() bool {
+	return strings.TrimSpace(v.Skill) != "" || strings.TrimSpace(v.Service) != ""
 }
 
 // CICDSpec contains only non-secret delivery policy. Credentials, production
@@ -319,8 +317,6 @@ func (m Manifest) Validate() error {
 	}{
 		{name: "core", value: m.Versions.Core, minimum: minimumVersions.Core},
 		{name: "kit", value: m.Versions.Kit, minimum: minimumVersions.Kit},
-		{name: "skill", value: m.Versions.Skill, minimum: minimumVersions.Skill},
-		{name: "service", value: m.Versions.servicePolicy(), minimum: minimumVersions.Service},
 		{name: "codegen", value: m.Versions.Codegen, minimum: minimumVersions.Codegen},
 	} {
 		if err := validateVersionPolicy(version.name, version.value, version.minimum); err != nil {

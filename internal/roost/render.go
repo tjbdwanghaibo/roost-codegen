@@ -187,8 +187,8 @@ func renderReplication(m Manifest) string {
 	}
 	b.WriteString("\tcoreentitysync \"github.com/tjbdwanghaibo/roost-core/entitysync\"\n")
 	b.WriteString("\tcorerep \"github.com/tjbdwanghaibo/roost-core/statesync\"\n")
-	b.WriteString("\tkitrep \"github.com/tjbdwanghaibo/roost-kit/nettransport\"\n")
-	b.WriteString("\tkitsync \"github.com/tjbdwanghaibo/roost-kit/room\"\n)\n\n")
+	b.WriteString("\tkitrep \"github.com/tjbdwanghaibo/roost-core/nettransport\"\n")
+	b.WriteString("\tkitsync \"github.com/tjbdwanghaibo/roost-core/room\"\n)\n\n")
 	b.WriteString("func AsyncConfig() kitnet.AsyncTransportConfig { return kitnet.DefaultAsyncTransportConfig() }\n\n")
 	b.WriteString("type SessionResolver func(coreentitysync.SubscriberRef) (corestate.SessionID, error)\n\n")
 	b.WriteString("func NewRoomSink(async *kitnet.AsyncTransport, resolve SessionResolver) (*kitroom.RoomTransportSink, error) {\n")
@@ -225,23 +225,10 @@ go `+generatedGoVersion+`.0
 require (
 	github.com/tjbdwanghaibo/roost-core %s
 	github.com/tjbdwanghaibo/roost-kit %s
-	github.com/tjbdwanghaibo/roost-skill %s%s
 )
 `, m.Project.Module,
 		resolvedModuleVersion(m.Versions.Core, minimumVersions.Core),
-		resolvedModuleVersion(m.Versions.Kit, minimumVersions.Kit),
-		resolvedModuleVersion(m.Versions.Skill, minimumVersions.Skill),
-		serviceRequire(m))
-}
-
-// serviceRequire is the roost-service require line, present only when the
-// project hosts or calls a framework service: a project that does not use
-// roost-service does not carry it.
-func serviceRequire(m Manifest) string {
-	if !m.usesFrameworkServices() {
-		return ""
-	}
-	return "\n\t" + frameworkServiceModule + " " + resolvedModuleVersion(m.Versions.servicePolicy(), minimumVersions.Service)
+		resolvedModuleVersion(m.Versions.Kit, minimumVersions.Kit))
 }
 
 // renderFrameworkDeps keeps optional framework-domain modules in go.mod even
@@ -252,7 +239,7 @@ func renderFrameworkDeps(m Manifest) string {
 		return generatedHeader + `
 package frameworkdeps
 
-import "github.com/tjbdwanghaibo/roost-skill/skill"
+import "github.com/tjbdwanghaibo/roost-core/skill"
 
 // SkillProgram retains the skill runtime selected by roost.yaml without adding
 // runtime initialization or requiring business code to import it immediately.
@@ -263,15 +250,15 @@ type SkillProgram = skill.Program
 package frameworkdeps
 
 import (
-	"github.com/tjbdwanghaibo/roost-service/servicemetrics"
-	"github.com/tjbdwanghaibo/roost-skill/skill"
+	"github.com/tjbdwanghaibo/roost-core/skill"
+	"github.com/tjbdwanghaibo/roost-kit/service/servicemetrics"
 )
 
 // SkillProgram retains the skill runtime selected by roost.yaml without adding
 // runtime initialization or requiring business code to import it immediately.
 type SkillProgram = skill.Program
 
-// ServiceMetrics retains roost-service, which the framework services this
+// ServiceMetrics retains roost-kit/service, which the framework services this
 // project hosts or calls are built from.
 type ServiceMetrics = servicemetrics.Reporter
 `
@@ -998,7 +985,7 @@ core、kit、skill、codegen 默认都是 latest。roost project new/sync/deps �
 - MongoDB 必须使用副本集；启动会拒绝 standalone，并固定 majority write concern 与 snapshot transaction read concern。
 - /var/lib/roost/wal 必须挂载单写持久卷，同一个 SID 不得由两个实例同时挂载。
 - JetStream effect 必须先由 Data Engine 在业务 Mongo transaction 中持久化到 outbox；发布和消费不能只依赖 MsgID 去重窗口。
-- 发布顺序为 roost-core、roost-kit、roost-skill、roost-codegen；部署前必须执行 make ci 并完成容器重启恢复演练。
+- 发布顺序为 roost-codegen、roost-core、roost-kit；部署前必须执行 make ci 并完成容器重启恢复演练。
 
 ## 继续阅读
 
@@ -1008,7 +995,7 @@ core、kit、skill、codegen 默认都是 latest。roost project new/sync/deps �
 - Entity/Component/DAO 实战：ENTITY_COMPONENT.zh-CN.md
 - Entity 生命周期：ENTITY_LIFECYCLE.zh-CN.md
 - Protocol 到 Nest：PROTOCOL_TO_NEST.zh-CN.md
-- roost-skill：SKILL.zh-CN.md
+- 技能系统（roost-core/skill）：SKILL.zh-CN.md
 - 常见错误：TROUBLESHOOTING.zh-CN.md
 - roost.yaml 所有字段：ROOST_YAML.zh-CN.md
 - 实现原理：IMPLEMENTATION.zh-CN.md

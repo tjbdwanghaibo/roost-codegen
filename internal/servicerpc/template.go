@@ -36,7 +36,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/bus"
 	"github.com/tjbdwanghaibo/roost-kit/mods"
-	"github.com/tjbdwanghaibo/roost-kit/servicerpc"
+	"github.com/tjbdwanghaibo/roost-core/servicerpc"
 )
 
 // ServiceType is the bus service type {{.Iface}} answers on. The client and

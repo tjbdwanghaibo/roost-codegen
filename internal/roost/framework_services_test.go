@@ -63,15 +63,10 @@ func TestFrameworkServiceManifestValidation(t *testing.T) {
 	if err := hostedUses.Validate(); err == nil || !strings.Contains(err.Error(), "cannot also declare uses") {
 		t.Fatalf("a hosted service with uses accepted: %v", err)
 	}
-	oldService := base()
-	oldService.Versions.Service = "v1.4.0"
-	if err := oldService.Validate(); err == nil || !strings.Contains(err.Error(), minimumVersions.Service) {
-		t.Fatalf("a roost-service below the floor accepted: %v", err)
-	}
 	legacy := base()
-	legacy.Versions.Service = "" // written by a generator that predates the field
+	legacy.Versions.Service = "v1.5.4" // written by a generator that predates the consolidation
 	if err := legacy.Validate(); err != nil {
-		t.Fatalf("an empty versions.service must read as latest: %v", err)
+		t.Fatalf("a pre-consolidation versions.service must still load (the module is folded into kit): %v", err)
 	}
 }
 
@@ -122,11 +117,11 @@ func TestGameTemplateRendersHostingAndClientWiring(t *testing.T) {
 			t.Errorf("accessors missing %q", want)
 		}
 	}
-	if gomod := string(plan["go.mod"].Body); !strings.Contains(gomod, "github.com/tjbdwanghaibo/roost-service "+minimumVersions.Service) {
-		t.Errorf("go.mod does not require roost-service:\n%s", gomod)
+	if gomod := string(plan["go.mod"].Body); strings.Contains(gomod, "roost-service") {
+		t.Errorf("go.mod must not require the folded-in roost-service module:\n%s", gomod)
 	}
-	if deps := string(plan["internal/frameworkdeps/generated.go"].Body); !strings.Contains(deps, "roost-service/servicemetrics") {
-		t.Errorf("frameworkdeps does not retain roost-service:\n%s", deps)
+	if deps := string(plan["internal/frameworkdeps/generated.go"].Body); !strings.Contains(deps, "roost-kit/service/servicemetrics") {
+		t.Errorf("frameworkdeps does not retain the kit services:\n%s", deps)
 	}
 	mailConfig := string(plan["configs/service/config.mail.yaml"].Body)
 	for _, want := range []string{"mail:\n  key_prefix: roost:planet:mail", "send_ttl: 720h", "redis:\n", "nats:\n"} {

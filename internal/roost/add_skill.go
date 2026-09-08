@@ -61,7 +61,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/tjbdwanghaibo/roost-skill/skill"
+	"github.com/tjbdwanghaibo/roost-core/skill"
 )
 
 // definitions are application-owned Skill wire documents. They are parsed and

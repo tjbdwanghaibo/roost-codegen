@@ -29,7 +29,9 @@ type frameworkServiceSpec struct {
 	ConfigFunc func(project string) string
 }
 
-const frameworkServiceModule = "github.com/tjbdwanghaibo/roost-service"
+// frameworkServiceModule is the import root of the hosted services; since the
+// consolidation they live in roost-kit/service/<name>.
+const frameworkServiceModule = "github.com/tjbdwanghaibo/roost-kit/service"
 
 var frameworkCatalog = map[string]frameworkServiceSpec{
 	"account": {
@@ -223,7 +225,7 @@ func renderFrameworkCollaborators(m Manifest, name string) string {
 	if needsStrings {
 		imports = append(imports, `"strings"`)
 	}
-	imports = append(imports, "", `"github.com/tjbdwanghaibo/roost-service/servicemetrics"`, fmt.Sprintf("%q", frameworkServiceModule+"/"+spec.Package))
+	imports = append(imports, "", `"github.com/tjbdwanghaibo/roost-kit/service/servicemetrics"`, fmt.Sprintf("%q", frameworkServiceModule+"/"+spec.Package))
 	var b strings.Builder
 	fmt.Fprintf(&b, "// Package %s supplies the collaborators the %s service needs from this\n// project. roost-codegen created this file once and will not overwrite it.\n", safeIdent(name), spec.Package)
 	fmt.Fprintf(&b, "package %s\n\nimport (\n", safeIdent(name))

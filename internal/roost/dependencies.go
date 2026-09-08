@@ -120,10 +120,6 @@ func updateFrameworkDependencies(root string, manifest Manifest, stdout, stderr 
 	queries := []string{
 		"github.com/tjbdwanghaibo/roost-core@" + normalizedVersionPolicy(manifest.Versions.Core),
 		"github.com/tjbdwanghaibo/roost-kit@" + normalizedVersionPolicy(manifest.Versions.Kit),
-		"github.com/tjbdwanghaibo/roost-skill@" + normalizedVersionPolicy(manifest.Versions.Skill),
-	}
-	if manifest.usesFrameworkServices() {
-		queries = append(queries, frameworkServiceModule+"@"+normalizedVersionPolicy(manifest.Versions.servicePolicy()))
 	}
 	if err := run(ctx, absRoot, stdout, stderr, append([]string{"get"}, queries...)...); err != nil {
 		return rollbackDependencyUpdate(snapshots, fmt.Errorf("resolve framework dependencies: %w", err))

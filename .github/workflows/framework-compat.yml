@@ -14,10 +14,6 @@ on:
         description: roost-kit ref for the source-head candidate set
         required: false
         default: main
-      skill_ref:
-        description: roost-skill ref for the source-head candidate set
-        required: false
-        default: main
   schedule:
     - cron: "17 3 * * *"
 
@@ -53,7 +49,7 @@ jobs:
         run: |
           version_args=()
           if [ "$SET" = minimum ]; then
-            version_args=(-roost-core-version v1.12.0 -roost-kit-version v1.12.2 -roost-skill-version v1.10.3 -roost-service-version v1.5.2 -codegen-version v1.7.0)
+            version_args=(-roost-core-version v1.14.0 -roost-kit-version v1.13.0 -codegen-version v1.15.0)
           fi
           mods=configdata
           services=game
@@ -62,7 +58,7 @@ jobs:
             mods=configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest,saga
             services=game,gate
             # The game template hosts account / mail / match / chat and wires
-            # game to them, so the full scenario compiles roost-service too.
+            # game to them, so the full scenario compiles roost-kit/service too.
             template_args=(-template game)
           fi
           "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -mods "$mods" -services "$services" "${version_args[@]}" "${template_args[@]}"
@@ -90,21 +86,17 @@ jobs:
         if: matrix.dependency-set == 'source-head'
         working-directory: ${{ runner.temp }}/planet
         env:
-          CORE_REF: ${{ inputs.core_ref || 'main' }}
-          KIT_REF: ${{ inputs.kit_ref || 'main' }}
-          SKILL_REF: ${{ inputs.skill_ref || 'main' }}
+          CORE_REF: ${{ inputs.core_ref || (github.ref_name == 'consolidation' && 'consolidation' || 'main') }}
+          KIT_REF: ${{ inputs.kit_ref || (github.ref_name == 'consolidation' && 'consolidation' || 'main') }}
         run: |
           git clone --depth=1 https://github.com/tjbdwanghaibo/roost-core.git "${RUNNER_TEMP}/roost-core"
           git clone --depth=1 https://github.com/tjbdwanghaibo/roost-kit.git "${RUNNER_TEMP}/roost-kit"
-          git clone --depth=1 https://github.com/tjbdwanghaibo/roost-skill.git "${RUNNER_TEMP}/roost-skill"
           git -C "${RUNNER_TEMP}/roost-core" fetch --depth=1 origin "$CORE_REF"
           git -C "${RUNNER_TEMP}/roost-core" checkout --detach FETCH_HEAD
           git -C "${RUNNER_TEMP}/roost-kit" fetch --depth=1 origin "$KIT_REF"
           git -C "${RUNNER_TEMP}/roost-kit" checkout --detach FETCH_HEAD
-          git -C "${RUNNER_TEMP}/roost-skill" fetch --depth=1 origin "$SKILL_REF"
-          git -C "${RUNNER_TEMP}/roost-skill" checkout --detach FETCH_HEAD
           cd "${RUNNER_TEMP}"
-          go work init ./planet ./roost-core ./roost-kit ./roost-skill
+          go work init ./planet ./roost-core ./roost-kit
           # The workspace go directive must be at least every member's own.
           # It used to be pinned DOWN to 1.25.0, because the framework runtime
           # modules supported a lower consumer lane than codegen did. They no
