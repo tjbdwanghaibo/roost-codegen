@@ -117,9 +117,12 @@ var (
 			t.Errorf("go.mod still requires %s:\n%s", bad, goMod)
 		}
 	}
-	for _, want := range []string{"roost-core v1.14.0", "roost-kit v1.13.0"} {
+	// Versions are left to the dependency resolution step: writing an
+	// unpublished boundary release here would break the very go get that
+	// follows (upgrade-compat caught exactly that).
+	for _, want := range []string{"roost-core v1.12.0", "roost-kit v1.12.6"} {
 		if !strings.Contains(string(goMod), want) {
-			t.Errorf("go.mod not raised to the boundary (%q):\n%s", want, goMod)
+			t.Errorf("go.mod versions must be untouched (%q):\n%s", want, goMod)
 		}
 	}
 	manifest, err := LoadManifest(root)

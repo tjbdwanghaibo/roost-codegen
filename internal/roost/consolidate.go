@@ -319,10 +319,13 @@ func consolidateFile(p string, table map[string]relocation, removed []string, dr
 
 var consolidateRequireLine = regexp.MustCompile(`(?m)^\s*github\.com/tjbdwanghaibo/(roost-skill|roost-service)\s+\S+[^\n]*\n`)
 
-// consolidateGoMod drops the folded-in modules and raises core / kit to the
-// boundary versions when they are below it. Everything else is left to
-// `go mod tidy`, which the caller runs.
-func consolidateGoMod(goMod string, m consolidationMap, dryRun bool) (bool, error) {
+// consolidateGoMod drops the folded-in modules from go.mod. It deliberately
+// leaves the core / kit versions alone: the caller's dependency resolution
+// (`go get` with the manifest's policy) moves them, and writing a boundary
+// release that is not published yet would make that very `go get` fail
+// ("unknown revision"). A project whose imports were rewritten but whose
+// versions stay below the boundary simply fails to build until it resolves.
+func consolidateGoMod(goMod string, _ consolidationMap, dryRun bool) (bool, error) {
 	raw, err := os.ReadFile(goMod)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -330,19 +333,8 @@ func consolidateGoMod(goMod string, m consolidationMap, dryRun bool) (bool, erro
 		}
 		return false, err
 	}
-	text := string(raw)
-	text = consolidateRequireLine.ReplaceAllString(text, "")
+	text := consolidateRequireLine.ReplaceAllString(string(raw), "")
 	text = regexp.MustCompile(`(?m)^require github\.com/tjbdwanghaibo/(roost-skill|roost-service)\s+\S+[^\n]*\n`).ReplaceAllString(text, "")
-	for _, mod := range []struct{ path, floor string }{{"github.com/tjbdwanghaibo/roost-core", m.Boundary.Core}, {"github.com/tjbdwanghaibo/roost-kit", m.Boundary.Kit}} {
-		re := regexp.MustCompile(`(?m)^(\s*(?:require )?` + regexp.QuoteMeta(mod.path) + `\s+)(v[0-9][^\s]*)`)
-		text = re.ReplaceAllStringFunc(text, func(line string) string {
-			sub := re.FindStringSubmatch(line)
-			if versionBelow(sub[2], mod.floor) {
-				return sub[1] + mod.floor
-			}
-			return line
-		})
-	}
 	if text == string(raw) {
 		return false, nil
 	}
@@ -350,23 +342,6 @@ func consolidateGoMod(goMod string, m consolidationMap, dryRun bool) (bool, erro
 		return true, nil
 	}
 	return true, os.WriteFile(goMod, []byte(text), 0o644)
-}
-
-// versionBelow reports whether version is an exact release below floor.
-// Pre-release and pseudo versions compare by their release prefix.
-func versionBelow(version, floor string) bool {
-	vMajor, vMinor, vPatch, okV := releaseVersion(strings.SplitN(version, "-", 2)[0])
-	fMajor, fMinor, fPatch, okF := releaseVersion(floor)
-	if !okV || !okF {
-		return false
-	}
-	if vMajor != fMajor {
-		return vMajor < fMajor
-	}
-	if vMinor != fMinor {
-		return vMinor < fMinor
-	}
-	return vPatch < fPatch
 }
 
 // consolidateManifest drops versions.skill / versions.service from roost.yaml.
