@@ -431,7 +431,7 @@ func versionAtLeast(version string, major, minor, patch int) bool {
 	if strings.EqualFold(strings.TrimSpace(version), "latest") {
 		return true
 	}
-	gotMajor, gotMinor, gotPatch, ok := releaseVersion(version)
+	gotMajor, gotMinor, gotPatch, ok := releaseVersion(releasePrefix(version))
 	if !ok {
 		return false
 	}
@@ -451,10 +451,7 @@ func validateVersionPolicy(name, value, minimum string) error {
 	}
 	// A pre-release pin (v1.14.0-alpha.4) is judged by its release prefix: it
 	// carries the layout of that release, which is what the floor protects.
-	release := value
-	if i := strings.IndexByte(value, '-'); i > 0 && preReleaseSuffix.MatchString(value[i:]) {
-		release = value[:i]
-	}
+	release := releasePrefix(value)
 	major, _, _, ok := releaseVersion(release)
 	if !ok {
 		return fmt.Errorf("versions.%s must be latest or a semantic release such as %s; got %q", name, minimum, value)
@@ -470,6 +467,16 @@ func validateVersionPolicy(name, value, minimum string) error {
 }
 
 var preReleaseSuffix = regexp.MustCompile(`^-[0-9A-Za-z][0-9A-Za-z.-]*$`)
+
+// releasePrefix strips a pre-release suffix: v1.14.0-alpha.4 carries the
+// layout and API of v1.14.0, which is what every floor here protects.
+func releasePrefix(version string) string {
+	version = strings.TrimSpace(version)
+	if i := strings.IndexByte(version, '-'); i > 0 && preReleaseSuffix.MatchString(version[i:]) {
+		return version[:i]
+	}
+	return version
+}
 
 func releaseVersion(version string) (major, minor, patch int, ok bool) {
 	match := releaseVersionPattern.FindStringSubmatch(strings.TrimSpace(version))
