@@ -54,6 +54,6 @@ fi
 echo "source-head-check: compiling planet against working trees $core_dir and $kit_dir"
 (cd "$work" && go work init ./planet "$core_dir" "$kit_dir" && go work edit -go=1.27.0)
 export GOWORK="$work/go.work"
-(cd "$work/planet" && go build ./... && go vet ./... && go test -count=1 ./... 2>&1 | grep -v "no test files")
+(cd "$work/planet" && go build ./... && go vet ./... && go test -count=1 ./... 2>&1 | { grep -v "no test files" || true; })
 (cd "$work/planet" && go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet ./...)
 echo "source-head-check: $scenario OK"
