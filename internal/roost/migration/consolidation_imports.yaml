@@ -28,9 +28,6 @@ split:
   - kit: github.com/tjbdwanghaibo/roost-kit/ai
     core: github.com/tjbdwanghaibo/roost-core/ai
     kit_keeps: []
-  - kit: github.com/tjbdwanghaibo/roost-kit/configdata
-    core: github.com/tjbdwanghaibo/roost-core/configdata
-    kit_keeps: ['Mod', 'NewConfigDataMod']
   - kit: github.com/tjbdwanghaibo/roost-kit/dataengine
     # The contract package core/dataengine is imported by core/nest and core/nestwal,
     # which the implementation itself imports: merging would cycle. The implementation
@@ -83,9 +80,6 @@ move:
     to: github.com/tjbdwanghaibo/roost-core/versionstore
   - from: github.com/tjbdwanghaibo/roost-kit/servicerpc
     to: github.com/tjbdwanghaibo/roost-core/servicerpc
-  - from: github.com/tjbdwanghaibo/roost-kit/statslog
-    to: github.com/tjbdwanghaibo/roost-core/statslog
-    kit_keeps: ['EntityStats', 'NestQueueStats', 'NestStats', 'NewStatsLogMod', 'ProviderFunc', 'RuntimeStats', 'StatsLogMod', 'StatsRecord']
   - from: github.com/tjbdwanghaibo/roost-kit/mongo/mongotest
     to: github.com/tjbdwanghaibo/roost-core/mongo/mongotest
 # Packages that stay in roost-kit unchanged.
@@ -93,6 +87,10 @@ keep:
   # nest and lock in kit are Mod glue only (nest_mod.go / lock_mod.go + tests); nothing to sink.
   - github.com/tjbdwanghaibo/roost-kit/nest
   - github.com/tjbdwanghaibo/roost-kit/lock
+  # configdata and statslog are one file each: the Mod plus project-config translation
+  # (configdata) / stats providers wired to the Mod (statslog). Assembly-layer by definition.
+  - github.com/tjbdwanghaibo/roost-kit/configdata
+  - github.com/tjbdwanghaibo/roost-kit/statslog
   - github.com/tjbdwanghaibo/roost-kit/manager
   - github.com/tjbdwanghaibo/roost-kit/mods
   - github.com/tjbdwanghaibo/roost-kit/ops
@@ -134,6 +132,27 @@ service:
     to: github.com/tjbdwanghaibo/roost-kit/service/rank
   - from: github.com/tjbdwanghaibo/roost-service/session
     to: github.com/tjbdwanghaibo/roost-kit/service/session
+# Symbol renames / de-duplications applied while merging (the rewriter must apply
+# these after the path rewrite; `to: core` means "use the identical core symbol").
+renames:
+  - package: github.com/tjbdwanghaibo/roost-kit/nats
+    symbol: Permanent
+    to: core            # core/nats.Permanent (same marker interface)
+  - package: github.com/tjbdwanghaibo/roost-kit/syncstream
+    symbol: HealthOptions
+    to: PublisherHealthOptions
+  - package: github.com/tjbdwanghaibo/roost-kit/syncstream
+    symbol: HealthStatus
+    to: PublisherHealthStatus
+  - package: github.com/tjbdwanghaibo/roost-kit/syncstream
+    symbol: MetricSink
+    to: core            # identical interface
+  - package: github.com/tjbdwanghaibo/roost-kit/syncstream
+    symbol: ErrPayloadTooLarge
+    to: core            # message text now "syncstream: payload exceeds configured limit"
+  - package: github.com/tjbdwanghaibo/roost-kit/dataengine
+    symbol: dataEngineHealthMessage
+    to: HealthMessage   # exported from core/dataengine/engine
 # Known template anomalies to resolve in P4 (recorded here so they are not lost).
 notes:
   - "codegen templates reference github.com/tjbdwanghaibo/roost-kit/checkpoint, which is not a kit package today; verify at P4."
