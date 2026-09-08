@@ -51,13 +51,6 @@ jobs:
           if [ "$SET" = minimum ]; then
             version_args=(-roost-core-version v1.14.0 -roost-kit-version v1.13.0 -codegen-version v1.15.0)
           fi
-          if [ "$SET" = source-head ]; then
-            # Transitional (consolidation branch): the consolidated layout is
-            # only published as pre-releases, so pin them for the bootstrap
-            # resolution; the workspace below then replaces both with source.
-            # Remove once core v1.14.0 / kit v1.13.0 are tagged.
-            version_args=(-roost-core-version v1.14.0-alpha.5 -roost-kit-version v1.13.0-alpha.2 -codegen-version latest)
-          fi
           mods=configdata
           services=game
           template_args=()

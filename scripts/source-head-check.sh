@@ -7,8 +7,8 @@
 #   scripts/source-head-check.sh [minimal|full] [core-dir] [kit-dir]
 #
 # Bootstrap resolution inside `project new` runs with GOWORK=off against the
-# module proxy, so it needs published (pre-)release versions of the consolidated
-# layout; override with ROOST_CORE_PIN / ROOST_KIT_PIN. Set ROOST_KEEP=1 to
+# module proxy; it pins the released consolidated layout by default, override
+# with ROOST_CORE_PIN / ROOST_KIT_PIN (pre-releases work too). Set ROOST_KEEP=1 to
 # keep the temporary directory for inspection.
 set -euo pipefail
 
@@ -16,8 +16,8 @@ scenario="${1:-minimal}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 core_dir="$(cd "${2:-$repo_root/../roost-core}" && pwd)"
 kit_dir="$(cd "${3:-$repo_root/../roost-kit}" && pwd)"
-core_pin="${ROOST_CORE_PIN:-v1.14.0-alpha.5}"
-kit_pin="${ROOST_KIT_PIN:-v1.13.0-alpha.2}"
+core_pin="${ROOST_CORE_PIN:-v1.14.0}"
+kit_pin="${ROOST_KIT_PIN:-v1.13.0}"
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/roost-source-head.XXXXXX")"
 cleanup() { if [[ "${ROOST_KEEP:-0}" != 1 ]]; then rm -rf "$work"; else echo "kept: $work"; fi; }

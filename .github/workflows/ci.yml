@@ -55,14 +55,7 @@ jobs:
       - name: build current CLI and generate project
         run: |
           go build -o "${RUNNER_TEMP}/roost" ./cmd/roost
-          # Transitional (consolidation branch): the consolidated layout exists
-          # only as pre-releases until core v1.14.0 / kit v1.13.0 are tagged,
-          # so pin them for the bootstrap resolution there. Remove at release.
-          pins=()
-          if [ "${GITHUB_REF_NAME}" = consolidation ]; then
-            pins=(-roost-core-version v1.14.0-alpha.5 -roost-kit-version v1.13.0-alpha.2 -codegen-version latest)
-          fi
-          "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -mods configdata "${pins[@]}"
+          "${RUNNER_TEMP}/roost" project new planet -module example.com/planet -out "${RUNNER_TEMP}/planet" -mods configdata
       - name: generate explicit first business workflow
         working-directory: ${{ runner.temp }}/planet
         run: |
