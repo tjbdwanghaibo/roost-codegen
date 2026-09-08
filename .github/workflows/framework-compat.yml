@@ -3,7 +3,7 @@ name: framework-compat
 on:
   pull_request:
   push:
-    branches: [main, master]
+    branches: [main, master, consolidation]
   workflow_dispatch:
     inputs:
       core_ref:
