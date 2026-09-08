@@ -39,12 +39,20 @@ jobs:
         working-directory: ${{ runner.temp }}/planet
         run: |
           sha256sum internal/service/game/service.go > "${RUNNER_TEMP}/business.before"
-          "${RUNNER_TEMP}/roost-current" project upgrade --root . -core latest -kit latest -skill latest -codegen latest
+          # Historical projects predate the consolidation: the first upgrade
+          # must rewrite their imports (--consolidate) before the version bump.
+          # Transitional (consolidation branch): pin the pre-releases until
+          # core v1.14.0 / kit v1.13.0 are tagged; then go back to latest.
+          core=latest; kit=latest
+          if [ "${GITHUB_REF_NAME}" = consolidation ]; then core=v1.14.0-alpha.4; kit=v1.13.0-alpha.1; fi
+          "${RUNNER_TEMP}/roost-current" project upgrade --root . --consolidate --dry-run -core "$core" -kit "$kit" -codegen latest
+          "${RUNNER_TEMP}/roost-current" project upgrade --root . --consolidate -core "$core" -kit "$kit" -codegen latest
           sha256sum -c "${RUNNER_TEMP}/business.before"
+          if grep -qE 'roost-skill|roost-service' go.mod; then echo "go.mod still requires a folded-in module"; exit 1; fi
           "${RUNNER_TEMP}/roost-current" project diff
           GOWORK=off go mod tidy
           GOWORK=off go test ./...
           GOWORK=off go run github.com/tjbdwanghaibo/roost-core/cmd/glsvet ./...
           cp roost.yaml "${RUNNER_TEMP}/roost.before"
-          "${RUNNER_TEMP}/roost-current" project upgrade --root . -core latest -kit latest -skill latest -codegen latest
+          "${RUNNER_TEMP}/roost-current" project upgrade --root . -core "$core" -kit "$kit" -codegen latest
           cmp roost.yaml "${RUNNER_TEMP}/roost.before"
