@@ -3,7 +3,7 @@ name: framework-compat
 on:
   pull_request:
   push:
-    branches: [main, master, consolidation]
+    branches: [main, master]
   workflow_dispatch:
     inputs:
       core_ref:
@@ -86,8 +86,8 @@ jobs:
         if: matrix.dependency-set == 'source-head'
         working-directory: ${{ runner.temp }}/planet
         env:
-          CORE_REF: ${{ inputs.core_ref || (github.ref_name == 'consolidation' && 'consolidation' || 'main') }}
-          KIT_REF: ${{ inputs.kit_ref || (github.ref_name == 'consolidation' && 'consolidation' || 'main') }}
+          CORE_REF: ${{ inputs.core_ref || 'main' }}
+          KIT_REF: ${{ inputs.kit_ref || 'main' }}
         run: |
           git clone --depth=1 https://github.com/tjbdwanghaibo/roost-core.git "${RUNNER_TEMP}/roost-core"
           git clone --depth=1 https://github.com/tjbdwanghaibo/roost-kit.git "${RUNNER_TEMP}/roost-kit"

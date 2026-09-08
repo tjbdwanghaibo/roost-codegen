@@ -3,7 +3,7 @@ name: upgrade-compat
 on:
   pull_request:
   push:
-    branches: [main, master, consolidation]
+    branches: [main, master]
   workflow_dispatch:
   schedule:
     - cron: "41 3 * * 2"
