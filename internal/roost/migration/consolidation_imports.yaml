@@ -32,7 +32,11 @@ split:
     core: github.com/tjbdwanghaibo/roost-core/configdata
     kit_keeps: ['Mod', 'NewConfigDataMod']
   - kit: github.com/tjbdwanghaibo/roost-kit/dataengine
-    core: github.com/tjbdwanghaibo/roost-core/dataengine
+    # The contract package core/dataengine is imported by core/nest and core/nestwal,
+    # which the implementation itself imports: merging would cycle. The implementation
+    # therefore lives in the subpackage `engine` (package name engine). P2-④.
+    core: github.com/tjbdwanghaibo/roost-core/dataengine/engine
+    package: engine
     kit_keeps: ['Mod', 'ModOption', 'NewMod', 'WithEntityAccess', 'WithRemoteProjection']
   - kit: github.com/tjbdwanghaibo/roost-kit/etcd
     core: github.com/tjbdwanghaibo/roost-core/etcd
@@ -40,9 +44,6 @@ split:
   - kit: github.com/tjbdwanghaibo/roost-kit/gateway
     core: github.com/tjbdwanghaibo/roost-core/gateway
     kit_keeps: []
-  - kit: github.com/tjbdwanghaibo/roost-kit/lock
-    core: github.com/tjbdwanghaibo/roost-core/lock
-    kit_keeps: ['LockMod', 'NewLockMod']
   - kit: github.com/tjbdwanghaibo/roost-kit/lockstep
     core: github.com/tjbdwanghaibo/roost-core/lockstep
     kit_keeps: []
@@ -52,9 +53,6 @@ split:
   - kit: github.com/tjbdwanghaibo/roost-kit/nats
     core: github.com/tjbdwanghaibo/roost-core/nats
     kit_keeps: ['NatsMod', 'NewNatsMod']
-  - kit: github.com/tjbdwanghaibo/roost-kit/nest
-    core: github.com/tjbdwanghaibo/roost-core/nest
-    kit_keeps: ['Mod', 'NewMod']
   - kit: github.com/tjbdwanghaibo/roost-kit/redis
     core: github.com/tjbdwanghaibo/roost-core/redis
     kit_keeps: ['NewRedisMod', 'RedisMod']
@@ -92,6 +90,9 @@ move:
     to: github.com/tjbdwanghaibo/roost-core/mongo/mongotest
 # Packages that stay in roost-kit unchanged.
 keep:
+  # nest and lock in kit are Mod glue only (nest_mod.go / lock_mod.go + tests); nothing to sink.
+  - github.com/tjbdwanghaibo/roost-kit/nest
+  - github.com/tjbdwanghaibo/roost-kit/lock
   - github.com/tjbdwanghaibo/roost-kit/manager
   - github.com/tjbdwanghaibo/roost-kit/mods
   - github.com/tjbdwanghaibo/roost-kit/ops
