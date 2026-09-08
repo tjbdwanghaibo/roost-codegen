@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **发布清单与本地 source-head 默认 pin 升到 core v1.15.0 / kit v1.14.0**（P3b 装配下沉 + B-14 修复随 core v1.15.0 发布）。收敛边界（`minimumVersions` core v1.14.0 / kit v1.13.0）不变，`--consolidate` 与 minimum lane 不受影响。
+
 ### Added
 
 - **gap map 采样器跳过 `*_gen.go`**（B-25）：生成文件是同一模板在每个包的实例，其守卫在模板所在处钉一次即可；采样器现在只统计不采样，并在包级与总计里报告跳过的守卫数。
