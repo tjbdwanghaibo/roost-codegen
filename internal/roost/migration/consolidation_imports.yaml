@@ -5,7 +5,10 @@
 #   * `roost upgrade --consolidate` (import rewriting in business projects),
 #   * the ledger's "new location" column.
 # Draft written at P0 from docs/ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md §2;
-# `kit_keeps` lists are refreshed at P3 from the Mod glue that actually stays.
+# `kit_keeps` = exported symbols of the Mod glue file that stays in kit. The glue
+# file is identified by CONTENT (a type with Provide/Init methods), not by name:
+# it is `*_mod.go` in most packages but `mod.go` in dataengine/saga and
+# `configdata.go` / `statslog.go` there. Refreshed again at P3 from what actually stays.
 schema: 1
 boundary:
   # First versions that ship the consolidated layout. Crossing them requires
@@ -27,10 +30,10 @@ split:
     kit_keeps: []
   - kit: github.com/tjbdwanghaibo/roost-kit/configdata
     core: github.com/tjbdwanghaibo/roost-core/configdata
-    kit_keeps: []
+    kit_keeps: ['Mod', 'NewConfigDataMod']
   - kit: github.com/tjbdwanghaibo/roost-kit/dataengine
     core: github.com/tjbdwanghaibo/roost-core/dataengine
-    kit_keeps: []
+    kit_keeps: ['Mod', 'ModOption', 'NewMod', 'WithEntityAccess', 'WithRemoteProjection']
   - kit: github.com/tjbdwanghaibo/roost-kit/etcd
     core: github.com/tjbdwanghaibo/roost-core/etcd
     kit_keeps: ['EtcdMod', 'NewEtcdMod']
@@ -60,7 +63,7 @@ split:
     kit_keeps: []
   - kit: github.com/tjbdwanghaibo/roost-kit/saga
     core: github.com/tjbdwanghaibo/roost-core/saga
-    kit_keeps: []
+    kit_keeps: ['CombineDefinitions', 'Mod', 'NewMod']
   - kit: github.com/tjbdwanghaibo/roost-kit/syncstream
     core: github.com/tjbdwanghaibo/roost-core/syncstream
     kit_keeps: []
@@ -84,6 +87,7 @@ move:
     to: github.com/tjbdwanghaibo/roost-core/servicerpc
   - from: github.com/tjbdwanghaibo/roost-kit/statslog
     to: github.com/tjbdwanghaibo/roost-core/statslog
+    kit_keeps: ['EntityStats', 'NestQueueStats', 'NestStats', 'NewStatsLogMod', 'ProviderFunc', 'RuntimeStats', 'StatsLogMod', 'StatsRecord']
   - from: github.com/tjbdwanghaibo/roost-kit/mongo/mongotest
     to: github.com/tjbdwanghaibo/roost-core/mongo/mongotest
 # Packages that stay in roost-kit unchanged.
