@@ -6,6 +6,7 @@
 
 ### Changed
 
+- **发布清单与本地 source-head 默认 pin 升到 core v1.15.1 / kit v1.14.2**（core：流水线提交落盘即唤醒投影 T-49；kit：mail 单读 / 批读同判 T-48）；codegen v1.15.3。
 - **发布清单与本地 source-head 默认 pin 升到 kit v1.14.1**（activity sweep 组来源与后台循环失败计数随 kit v1.14.1 发布）；codegen v1.15.2。
 - **生成器默认路径改为导出常量，`roost generate` 与工程模板引用常量而不再各写一份字面量**（U-0118，C4，classscan 观察 O-1）。
   `dao.DefaultDefDir / DefaultOutDir`、`eventgen.DefaultDefDir / DefaultOutDir`、`errcode.DefaultOutFile`、`protocol.DefaultDefDir / DefaultBindDir / DefaultHandlerDir / PlayerAgentImportSuffix / PBImportSuffix`、`tablegen.DefaultMetaDir`；
