@@ -82,14 +82,21 @@ func run(args []string, stdout io.Writer) error {
 			continue
 		}
 
-		// Generate for each entity
+		// Generate for each entity. The package-level RegisterEntity goes into
+		// the first entity's file (by name) and calls every sibling's own
+		// registration, so several entities in one package compile together.
+		siblings := make([]string, 0, len(entities))
+		for _, ent := range entities {
+			siblings = append(siblings, ent.Name)
+		}
+		sort.Strings(siblings)
 		for _, ent := range entities {
 			outFile := *output
 			if outFile == "" {
 				outFile = filepath.Join(dir, fmt.Sprintf("%s_gen_wire.go", toSnake(ent.Name)))
 			}
 
-			changed, err := generate(ent, pkg, outFile, *force)
+			changed, err := generateInPackage(ent, siblings, pkg, outFile, *force)
 			if err != nil {
 				return fmt.Errorf("generate %s: %w", ent.Name, err)
 			}

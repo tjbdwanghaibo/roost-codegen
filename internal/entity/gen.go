@@ -14,9 +14,23 @@ import (
 
 const generatorVersion = "v2"
 
-// generate produces the wiring file for an entity.
-// Returns true if the file was written (changed).
+// generate produces the wiring file for an entity that is alone in its
+// package. Returns true if the file was written (changed).
 func generate(ent EntityDef, pkg string, outFile string, force bool) (bool, error) {
+	return generateInPackage(ent, []string{ent.Name}, pkg, outFile, force)
+}
+
+// generateInPackage produces the wiring file for one entity of a package that
+// holds siblings (sorted entity names, ent.Name among them). Every file declares
+// its own register<Name>Entity and once-guard; the package-level RegisterEntity
+// that carries the //roost:register marker is emitted once, into the file of
+// the first sibling, and calls each of them. Two entities in one package used
+// to get two RegisterEntity / registerEntityOnce declarations — generation
+// succeeded and the consumer failed to compile (RR-20260909-04).
+func generateInPackage(ent EntityDef, siblings []string, pkg string, outFile string, force bool) (bool, error) {
+	if len(siblings) == 0 {
+		siblings = []string{ent.Name}
+	}
 	remoteV2 := ent.RemotePolicy == "entity.RemotePolicyManaged"
 	if remoteV2 && !ent.RemoteBase {
 		return false, fmt.Errorf("entity %s: remote=managed requires embedding *entity.RemoteEntityBase", ent.Name)
@@ -26,6 +40,8 @@ func generate(ent EntityDef, pkg string, outFile string, force bool) (bool, erro
 	data := templateData{
 		Package:  pkg,
 		Entity:   ent,
+		Siblings: siblings,
+		Primary:  ent.Name == siblings[0],
 		HasDaos:  len(ent.Daos) > 0,
 		HasComps: len(ent.Components) > 0,
 		HasDirty: hasDirtyDao(ent),
@@ -41,6 +57,7 @@ func generate(ent EntityDef, pkg string, outFile string, force bool) (bool, erro
 		"syncTopic":          syncTopicExpr,
 		"daoCollectionConst": daoCollectionConstExpr,
 		"hasMethod":          hasMethod,
+		"join":               strings.Join,
 	}).Parse(wireTemplate)
 	if err != nil {
 		return false, fmt.Errorf("template parse: %w", err)
@@ -281,6 +298,8 @@ func buildImportBlock(ent EntityDef, needsFmt, needsDataEngine, needsNest bool) 
 type templateData struct {
 	Package     string
 	Entity      EntityDef
+	Siblings    []string // every entity of the package, sorted by name
+	Primary     bool     // this file carries the package-level RegisterEntity
 	ImportBlock string
 	HasDaos     bool
 	HasComps    bool
@@ -296,13 +315,22 @@ import (
 {{.ImportBlock -}}
 )
 
-var registerEntityOnce sync.Once
-
-// RegisterEntity registers the {{.Entity.Name}} entity builder.
+var register{{.Entity.Name}}EntityOnce sync.Once
+{{if .Primary}}
+// RegisterEntity registers every entity generated in this package
+// ({{join .Siblings ", "}}). It is the package's single registry entry point;
+// each entity keeps its own once-guarded registration below.
 //
 //roost:register phase=entity
 func RegisterEntity() {
-	registerEntityOnce.Do(func() {
+{{- range .Siblings}}
+	register{{.}}Entity()
+{{- end}}
+}
+{{end}}
+// register{{.Entity.Name}}Entity registers the {{.Entity.Name}} entity builder.
+func register{{.Entity.Name}}Entity() {
+	register{{.Entity.Name}}EntityOnce.Do(func() {
 		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
 			Category: entity.MustEntityCategoryOfKind({{.Entity.EntityKind}}),
 			Kind: {{.Entity.EntityKind}},

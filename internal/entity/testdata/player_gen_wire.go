@@ -10,11 +10,20 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/nest"
 )
 
-var registerEntityOnce sync.Once
+var registerPlayerEntityOnce sync.Once
 
-// RegisterEntity registers the Player entity builder.
+// RegisterEntity registers every entity generated in this package
+// (Player). It is the package's single registry entry point;
+// each entity keeps its own once-guarded registration below.
+//
+//roost:register phase=entity
 func RegisterEntity() {
-	registerEntityOnce.Do(func() {
+	registerPlayerEntity()
+}
+
+// registerPlayerEntity registers the Player entity builder.
+func registerPlayerEntity() {
+	registerPlayerEntityOnce.Do(func() {
 		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
 			Category: entity.MustEntityCategoryOfKind(EntityKindPlayer),
 			Kind:     EntityKindPlayer,

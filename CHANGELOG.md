@@ -56,6 +56,7 @@
 
 ### Fixed
 
+- **`roost entity` 对同包多个实体不再生成重名的注册符号**（U-0160，C2；RR-20260909-04，T-55）。每个生成文件此前都声明包级 `registerEntityOnce` / `RegisterEntity`，两个实体同包时生成成功、消费者 `redeclared in this block`。现在每实体生成 `register<Name>EntityOnce` 与 `register<Name>Entity()`，带 `//roost:register phase=entity` 的包级 `RegisterEntity` 只进按名排序的第一个实体文件、逐个调用兄弟；registry 收集器与 `pkg.RegisterEntity()` 调用方式不变，已有消费者重新生成即可。`multi_entity_package_promises_test.go` 修前红。修复记录见 roost-core `docs/bugfix/RR-20260909-04.md`。
 - **`roost project upgrade --consolidate` 对单行 import 的混合分流不再生成非法 Go**（U-0156，C2；RR-20260908-03，T-52）。旧业务文件只有一条不带括号的 `import "…/roost-kit/redis"` 又同时用到留在 kit 的 Mod 胶水与搬到 core 的符号时，新 ImportSpec 的文本此前被无条件塞在第一个 spec 之后，得到一条顶层裸露的 `coreredis "…"`，`format.Source` 报 `expected declaration`，该文件升级失败。
   现在先找到第一个 import 所在的声明：有括号块照旧插在块内；没有括号就在该声明之后另起一个 `import ( … )` 声明。`consolidate_single_import_promises_test.go` 修前红。修复记录见 roost-core `docs/bugfix/RR-20260908-03.md`。
 - **发布清单对齐 core v1.13.0**（`security.RateLimiter` 改用 x/time/rate，新增依赖 `golang.org/x/time`；API 不变）。生成工程的 `versions.core`
