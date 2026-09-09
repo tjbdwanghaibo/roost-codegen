@@ -66,13 +66,17 @@ type Field struct {
 	Parser   string
 }
 
+// DefaultMetaDir is where a business project keeps its table meta files;
+// `roost generate` refers to it (U-0118).
+const DefaultMetaDir = "./configs/schema"
+
 func Run(args []string, stdout io.Writer) error {
 	if stdout == nil {
 		stdout = io.Discard
 	}
 	flags := flag.NewFlagSet("tablegen", flag.ContinueOnError)
 	flags.SetOutput(stdout)
-	metaDir := flags.String("meta", "./configs/schema", "table meta root")
+	metaDir := flags.String("meta", DefaultMetaDir, "table meta root")
 	outDir := flags.String("out", "", "generated Go output directory")
 	outPkg := flags.String("pkg", "", "generated Go package name (default: detect from output directory)")
 	csvTemplateDir := flags.String("csv-template", "", "CSV template output directory")

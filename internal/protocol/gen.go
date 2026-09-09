@@ -122,9 +122,9 @@ func generateBindGo(defs *Definitions) ([]byte, error) {
 		return formatGo(b.Bytes())
 	}
 	fmt.Fprintf(&b, "import (\n")
-	fmt.Fprintf(&b, "\t%q\n", defs.ModulePath+"/game/player_agent")
+	fmt.Fprintf(&b, "\t%q\n", defs.ModulePath+PlayerAgentImportSuffix)
 	fmt.Fprintf(&b, "\t%q\n", defs.ModulePath+"/protocol/msgid")
-	fmt.Fprintf(&b, "\t%q\n", defs.ModulePath+"/protocol/pb")
+	fmt.Fprintf(&b, "\t%q\n", defs.ModulePath+PBImportSuffix)
 	fmt.Fprintf(&b, ")\n\n")
 	for _, msg := range defs.Messages {
 		name := msgName(msg)
@@ -153,7 +153,7 @@ func generateRobotProtocolGo(defs *Definitions) ([]byte, error) {
 	fmt.Fprintf(&b, "package protocol\n\n")
 	fmt.Fprintf(&b, "import (\n")
 	fmt.Fprintf(&b, "\t%q\n", defs.ModulePath+"/protocol/msgid")
-	fmt.Fprintf(&b, "\t%q\n", defs.ModulePath+"/protocol/pb")
+	fmt.Fprintf(&b, "\t%q\n", defs.ModulePath+PBImportSuffix)
 	fmt.Fprintf(&b, ")\n\n")
 	fmt.Fprintf(&b, "func RegisterDefaults(r *Registry) {\n")
 	fmt.Fprintf(&b, "\tif r == nil {\n")
@@ -224,8 +224,8 @@ func generateProtocolHandlerGo(modulePath string, domain string, messages []MsgD
 	fmt.Fprintf(&b, "import (\n")
 	fmt.Fprintf(&b, "\t\"github.com/tjbdwanghaibo/roost-core/app\"\n")
 	fmt.Fprintf(&b, "\t%s %q\n", controllerAlias, modulePath+"/game/controllers/"+domain)
-	fmt.Fprintf(&b, "\t%q\n", modulePath+"/game/player_agent")
-	fmt.Fprintf(&b, "\t%q\n", modulePath+"/protocol/pb")
+	fmt.Fprintf(&b, "\t%q\n", modulePath+PlayerAgentImportSuffix)
+	fmt.Fprintf(&b, "\t%q\n", modulePath+PBImportSuffix)
 	fmt.Fprintf(&b, "\tplayerbind %q\n", modulePath+"/protocol/player_bind")
 	fmt.Fprintf(&b, ")\n\n")
 
@@ -287,7 +287,7 @@ func generateProtocolBootstrap(defs *Definitions, handlerImportBase string) ([]b
 	fmt.Fprintln(&b, "import (")
 	fmt.Fprintln(&b, "\t\"fmt\"")
 	fmt.Fprintln(&b, "\t\"github.com/tjbdwanghaibo/roost-core/app\"")
-	fmt.Fprintf(&b, "\t%q\n", defs.ModulePath+"/game/player_agent")
+	fmt.Fprintf(&b, "\t%q\n", defs.ModulePath+PlayerAgentImportSuffix)
 	if len(defs.Pushes) > 0 {
 		fmt.Fprintf(&b, "\tplayerbind %q\n", defs.ModulePath+"/protocol/player_bind")
 	}

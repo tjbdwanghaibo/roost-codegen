@@ -6,6 +6,9 @@
 
 ### Changed
 
+- **生成器默认路径改为导出常量，`roost generate` 与工程模板引用常量而不再各写一份字面量**（U-0118，C4，classscan 观察 O-1）。
+  `dao.DefaultDefDir / DefaultOutDir`、`eventgen.DefaultDefDir / DefaultOutDir`、`errcode.DefaultOutFile`、`protocol.DefaultDefDir / DefaultBindDir / DefaultHandlerDir / PlayerAgentImportSuffix / PBImportSuffix`、`tablegen.DefaultMetaDir`；
+  值不变，生成物不变。`internal/roost/literal_coupling_test.go` 用 AST 扫描编排层的字面量，与任一常量相等即红（修前 16 处红）。
 - **升级器不再带符号改名表**：`consolidation_imports.yaml` 只映射包路径，删掉 `renames` 段与改写器里的符号级重定向（`nats.Permanent` 回指契约包、`syncstream.HealthOptions` → `PublisherHealthOptions` 等）。
   `--consolidate` 之后这几个符号由编译器指出，改法见 roost-core TROUBLESHOOTING T-45；映射表不再需要随每次拆包维护符号条目。
 - **发布清单与本地 source-head 默认 pin 升到 core v1.15.0 / kit v1.14.0**（P3b 装配下沉 + B-14 修复随 core v1.15.0 发布）。收敛边界（`minimumVersions` core v1.14.0 / kit v1.13.0）不变，`--consolidate` 与 minimum lane 不受影响。

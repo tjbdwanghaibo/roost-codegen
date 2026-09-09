@@ -1,6 +1,10 @@
 package roost
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-codegen/internal/protocol"
+)
 
 func renderPlayerAccessRuntime() string {
 	return generatedHeader + `
@@ -389,5 +393,5 @@ func (*Mod) Start() error { return nil }
 func (mod *Mod) Stop() { mod.runtime = nil }
 
 var _ app.Mod = (*Mod)(nil)
-`, generatedHeader, manifest.Project.Module+"/game/player_agent", manifest.Project.Module+"/game/protocol_bootstrap")
+`, generatedHeader, manifest.Project.Module+protocol.PlayerAgentImportSuffix, manifest.Project.Module+"/game/protocol_bootstrap")
 }

@@ -66,24 +66,24 @@ func forceArg(args []string, force bool) []string {
 func generatorsFor(m Manifest, force bool) []generator {
 	return []generator{
 		{Feature: "dao", Name: "dao", Prefixes: []string{"db/def/"}, Run: func(w io.Writer) error {
-			return dao.Run(forceArg([]string{"-def", "./db/def", "-out", "./db"}, force), w)
+			return dao.Run(forceArg([]string{"-def", dao.DefaultDefDir, "-out", dao.DefaultOutDir}, force), w)
 		}},
 		{Feature: "event", Name: "event", Prefixes: []string{"event/def/"}, Run: func(w io.Writer) error {
-			args := forceArg([]string{"-def", "./event/def", "-out", "./event"}, force)
+			args := forceArg([]string{"-def", eventgen.DefaultDefDir, "-out", eventgen.DefaultOutDir}, force)
 			if info, err := os.Stat("./game"); err == nil && info.IsDir() {
 				args = append(args, "-game", "./game")
 			}
 			return eventgen.Run(args, w)
 		}},
 		{Feature: "errcode", Name: "errcode", Prefixes: []string{"game/", "internal/", "service/"}, Run: func(w io.Writer) error {
-			return codeerr.Run([]string{"-root", ".", "-out", "docs/generated/errcode.csv"}, w)
+			return codeerr.Run([]string{"-root", ".", "-out", codeerr.DefaultOutFile}, w)
 		}},
 		{Feature: "protocol", Name: "protocol", Prefixes: []string{"protocol/def/"}, Run: func(w io.Writer) error {
-			args := []string{"-def", "./protocol/def", "-robot-protocol", ""}
+			args := []string{"-def", protocol.DefaultDefDir, "-robot-protocol", ""}
 			if _, enabled := m.Access["player"]; enabled {
 				args = append(args,
-					"-bind", "./protocol/player_bind",
-					"-handlers", "./game/protocol_handlers",
+					"-bind", protocol.DefaultBindDir,
+					"-handlers", protocol.DefaultHandlerDir,
 					"-handler-bootstrap", "./game/protocol_bootstrap/protocol_gen.go",
 				)
 			} else {
@@ -100,7 +100,7 @@ func generatorsFor(m Manifest, force bool) []generator {
 		// exists-refuses-overwrite semantics rather than content hashing, so
 		// dropping force would fail every regeneration after a schema change.
 		{Feature: "config", Name: "config-template", Prefixes: []string{"configs/schema/"}, Run: func(w io.Writer) error {
-			return tablegen.Run([]string{"-meta", "./configs/schema", "-csv-template", "./configs/table_template", "-force"}, w)
+			return tablegen.Run([]string{"-meta", tablegen.DefaultMetaDir, "-csv-template", "./configs/table_template", "-force"}, w)
 		}},
 		{Feature: "config", Name: "config-data", Prefixes: []string{"configs/schema/", "configs/table/"}, Run: func(w io.Writer) error {
 			if empty, err := dirHasNoDataFiles("./configs/table"); err != nil {
@@ -108,10 +108,10 @@ func generatorsFor(m Manifest, force bool) []generator {
 			} else if empty {
 				return nil
 			}
-			return tablegen.Run([]string{"-meta", "./configs/schema", "-csv", "./configs/table", "-json", "./configs/data", "-force"}, w)
+			return tablegen.Run([]string{"-meta", tablegen.DefaultMetaDir, "-csv", "./configs/table", "-json", "./configs/data", "-force"}, w)
 		}},
 		{Feature: "config", Name: "config-go", Prefixes: []string{"configs/schema/"}, Run: func(w io.Writer) error {
-			return tablegen.Run([]string{"-meta", "./configs/schema", "-out", "./configs/generated", "-force"}, w)
+			return tablegen.Run([]string{"-meta", tablegen.DefaultMetaDir, "-out", "./configs/generated", "-force"}, w)
 		}},
 		{Feature: "webroute", Name: "webroute", Prefixes: []string{"service/"}, Run: func(w io.Writer) error { return webroute.Run(forceArg([]string{"-dir", "./service"}, force), w) }},
 		// Last, and unconditional: the aggregate collects //roost:register

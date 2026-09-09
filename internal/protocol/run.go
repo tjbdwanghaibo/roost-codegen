@@ -12,15 +12,26 @@ import (
 	"github.com/tjbdwanghaibo/roost-codegen/internal/project"
 )
 
+// Default project layout the protocol generator reads and writes, and the two
+// import-path suffixes its generated code refers to. `roost generate` and the
+// project templates refer to these instead of repeating the literals (U-0118).
+const (
+	DefaultDefDir           = "./protocol/def"
+	DefaultBindDir          = "./protocol/player_bind"
+	DefaultHandlerDir       = "./game/protocol_handlers"
+	PlayerAgentImportSuffix = "/game/player_agent"
+	PBImportSuffix          = "/protocol/pb"
+)
+
 func Run(args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("protocol", flag.ContinueOnError)
 	flags.SetOutput(stdout)
-	defDir := flags.String("def", "./protocol/def", "protocol definition directory")
+	defDir := flags.String("def", DefaultDefDir, "protocol definition directory")
 	protoDir := flags.String("proto", "./protocol/proto", "generated proto directory")
 	pbDir := flags.String("pb", "./protocol/pb", "generated pb go directory")
 	msgIDDir := flags.String("msgid", "./protocol/msgid", "generated msg id directory")
-	bindDir := flags.String("bind", "./protocol/player_bind", "generated player_agent binding directory")
-	handlerDir := flags.String("handlers", "./game/protocol_handlers", "generated player protocol handler directory")
+	bindDir := flags.String("bind", DefaultBindDir, "generated player_agent binding directory")
+	handlerDir := flags.String("handlers", DefaultHandlerDir, "generated player protocol handler directory")
 	handlerBootstrap := flags.String("handler-bootstrap", "", "generated aggregate player protocol registration file")
 	robotProtocolFile := flags.String("robot-protocol", "./service/robot/protocol/registry_gen.go", "generated robot protocol registry path")
 	manifestFile := flags.String("manifest", "./protocol/protocol_manifest.json", "generated protocol manifest path")

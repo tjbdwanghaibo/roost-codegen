@@ -23,11 +23,15 @@ type Definition struct {
 
 var defineRE = regexp.MustCompile(`errcode\.Define\(\s*([0-9]+)\s*,\s*("(?:[^"\\]|\\.)*")\s*,\s*("(?:[^"\\]|\\.)*")\s*\)`)
 
+// DefaultOutFile is where the error-code table is written inside a business
+// project; `roost generate` refers to it (U-0118).
+const DefaultOutFile = "docs/generated/errcode.csv"
+
 func Run(args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("errcode", flag.ContinueOnError)
 	flags.SetOutput(stdout)
 	root := flags.String("root", ".", "repository root")
-	out := flags.String("out", "docs/generated/errcode.csv", "output csv path")
+	out := flags.String("out", DefaultOutFile, "output csv path")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}

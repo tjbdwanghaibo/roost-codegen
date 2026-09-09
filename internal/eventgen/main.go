@@ -23,11 +23,18 @@ import (
 	"github.com/tjbdwanghaibo/roost-codegen/internal/project"
 )
 
+// Default locations of the event definitions and the generated package inside a
+// business project; `roost generate` refers to these (U-0118).
+const (
+	DefaultDefDir = "./event/def"
+	DefaultOutDir = "./event"
+)
+
 func run(args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("eventgen", flag.ContinueOnError)
 	flags.SetOutput(stdout)
-	defDir := flags.String("def", "./event/def", "directory containing event definitions")
-	outDir := flags.String("out", "./event", "output directory for generated event code")
+	defDir := flags.String("def", DefaultDefDir, "directory containing event definitions")
+	outDir := flags.String("out", DefaultOutDir, "output directory for generated event code")
 	pkg := flags.String("pkg", "event", "generated package name")
 	gameDir := flags.String("game", "", "game directory to scan for DealEventXXX handlers")
 	eventPkg := flags.String("eventpkg", "", "import path for event package (default: derive from -out)")

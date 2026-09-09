@@ -100,11 +100,11 @@ var (
 		`_ = coreredis.NewClient`,
 		`_ = kitredis.NewRedisMod`,
 		`"github.com/tjbdwanghaibo/roost-core/syncstream"`,
-		`syncstream.HealthOptions{}`, // no symbol table: the compiler reports the new name
+		`syncstream.HealthOptions{}`,                            // no symbol table: the compiler reports the new name
 		`servicemods "github.com/tjbdwanghaibo/roost-kit/mods"`, // folded package: keep the identifier
 		`"github.com/tjbdwanghaibo/roost-core/skill"`,
 		`kitnats "github.com/tjbdwanghaibo/roost-core/nats/driver"`, // whole import moves to the driver
-		`_ = kitnats.Permanent`, // contract symbol: left for the compiler, no second import is invented
+		`_ = kitnats.Permanent`,                                     // contract symbol: left for the compiler, no second import is invented
 		`_ = kitnats.NewClient`,
 	} {
 		if !strings.Contains(string(rewritten), want) {

@@ -21,11 +21,19 @@ import (
 	"github.com/tjbdwanghaibo/roost-codegen/internal/project"
 )
 
+// Default locations of the DAO definitions and the generated package inside a
+// business project. Exported so `roost generate` refers to the same values
+// instead of repeating them (U-0118).
+const (
+	DefaultDefDir = "./db/def"
+	DefaultOutDir = "./db"
+)
+
 func Run(args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("dao", flag.ContinueOnError)
 	flags.SetOutput(stdout)
-	defDir := flags.String("def", "./db/def", "directory containing DB definitions")
-	outDir := flags.String("out", "./db", "output directory for generated code")
+	defDir := flags.String("def", DefaultDefDir, "directory containing DB definitions")
+	outDir := flags.String("out", DefaultOutDir, "output directory for generated code")
 	pkg := flags.String("pkg", "", "generated package name (default: detect from output directory)")
 	force := flags.Bool("force", false, "force regeneration")
 	if err := flags.Parse(args); err != nil {

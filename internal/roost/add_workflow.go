@@ -3,6 +3,7 @@ package roost
 import (
 	"bytes"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-codegen/internal/protocol"
 	"go/ast"
 	"go/format"
 	"go/parser"
@@ -273,7 +274,7 @@ func (controller *Controller) Handle%s(context *player_agent.Context, request *p
 	}
 	return &pb.%sResponse{}, nil
 }
-`, domain, manifest.Project.Module+"/game/player_agent", nestSnake, manifest.Project.Module+"/game/handler/syncsender", manifest.Project.Module+"/protocol/pb",
+`, domain, manifest.Project.Module+protocol.PlayerAgentImportSuffix, nestSnake, manifest.Project.Module+"/game/handler/syncsender", manifest.Project.Module+protocol.PBImportSuffix,
 		protocolType, protocolType, protocolType, protocolType, protocolSnake, nestSnake, nestType, nestType, callArgs, protocolType)
 	formatted, err := format.Source([]byte(body))
 	if err != nil {
