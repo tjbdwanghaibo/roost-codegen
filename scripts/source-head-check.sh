@@ -16,8 +16,8 @@ scenario="${1:-minimal}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 core_dir="$(cd "${2:-$repo_root/../roost-core}" && pwd)"
 kit_dir="$(cd "${3:-$repo_root/../roost-kit}" && pwd)"
-core_pin="${ROOST_CORE_PIN:-v1.15.1}"
-kit_pin="${ROOST_KIT_PIN:-v1.14.2}"
+core_pin="${ROOST_CORE_PIN:-v1.15.2}"
+kit_pin="${ROOST_KIT_PIN:-v1.14.3}"
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/roost-source-head.XXXXXX")"
 cleanup() { if [[ "${ROOST_KEEP:-0}" != 1 ]]; then rm -rf "$work"; else echo "kept: $work"; fi; }

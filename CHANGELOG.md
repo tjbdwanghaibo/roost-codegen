@@ -6,6 +6,7 @@
 
 ### Changed
 
+- **发版清单升到 core v1.15.2 / kit v1.14.3**（codegen v1.15.4）；`source-head-check.sh` 默认 pin 同步。
 - **`rollbackSync` 的"回滚前文件不可检查"分支钉住**（U-0152，C2）。路径成了目录时报 "inspect ... before rollback" 而不是当作不存在去重建。`add.go:299`（同步失败且回滚也失败）只在 SyncProject 执行期间清单被并发改写或 I/O 故障时可达，外部无法构造，记为 rollbackSync 错误的防御性包装。
 - **nil / 参数守卫收尾（codegen 八个包）：internal/dao、servicerpc、eventgen、tablegen、attribute、webroute、project、cfggen**（U-0151，C2）。各一条 `*_promises_test.go`，共 13 条守卫回退全红：redisdao 标记的四种畸形与 dao 标签 sync / nosync 冲突、接口重复方法与派生亲和键形式、位置参数点名拒绝、正整数解析、处理函数第二返回值必须是 error、目录多包拒绝、bean 字段全被目标组排除拒绝。
   `internal/roost/add.go:57 / 73` 由 `add_promises_test.go` 按文本覆盖、守卫失效后同步阶段报同一文本（冗余）；`add.go:299`（同步失败且回滚也失败）留待。
