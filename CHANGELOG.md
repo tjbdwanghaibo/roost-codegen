@@ -15,6 +15,10 @@
 
 ### Added
 
+- **生成物自带守卫测试**（U-0124）。远端托管实体的 `*_gen_wire.go` 旁生成 `*_gen_wire_test.go`，在业务工程里钉住生成代码内的三条远端提交守卫
+  （无事务内持久化变更、DAO 级删除、别的实体的确认）；nest sender 包旁生成 `*_nest_gen_test.go`，钉住 nil 客户端 → `nest.ErrNestStopped`。
+  这些守卫在模板字符串里，生成器自己的单测触不到（gap map 反复标 GREEN），只能在编译它们的工程里跑。未改动的一次普通 `roost generate` 也会补出配套测试；
+  实体不再是远端托管或 DAO 全为 cold 时删除过期的配套文件。带 `Code generated` 头，`generate --check` 与工程清理按生成物处理。
 - **`scripts/gapmap/classscan.py`**（与 roost-core 同一份拷贝）：C3 / C4 / C5 / C6 / C7 / C8 的启发式候选扫描；internal 十六包首轮扫过，无真洞，记两条观察（生成器默认路径与 `internal/roost` 重复字面量；`render.go` 依赖 `LoadManifest` 已校验）。
 - **internal/protocol 与 internal/nest 的解析守卫钉住**（U-0115 / U-0116，C2）。nightly gap map 各 20 条采样 8 条无覆盖。
   protocol：`roost:msg` 的非数字 id、非命名结果类型、非 snake_case handler、通知引用不存在的结构体；`validateDefinitions` 的 req / resp id 不等、枚举重名、枚举无值；

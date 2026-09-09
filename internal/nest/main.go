@@ -121,6 +121,14 @@ func run(args []string, stdout io.Writer) error {
 				fmt.Fprintf(stdout, "generated: %s\n", senderFile)
 				totalGenerated++
 			}
+			testChanged, err := generateSenderGuardTest(pkg+"_sender", senderFile, *force)
+			if err != nil {
+				return fmt.Errorf("generate sender guard test %s: %w", senderFile, err)
+			}
+			if testChanged {
+				fmt.Fprintf(stdout, "generated: %s\n", guardTestFileFor(senderFile))
+				totalGenerated++
+			}
 			syncSenderDir := filepath.Join(outDir, "syncsender")
 			if err := os.MkdirAll(syncSenderDir, 0755); err != nil {
 				return fmt.Errorf("mkdir syncsender: %w", err)
