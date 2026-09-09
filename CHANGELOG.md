@@ -6,6 +6,7 @@
 
 ### Changed
 
+- **发布清单与本地 source-head 默认 pin 升到 kit v1.14.1**（activity sweep 组来源与后台循环失败计数随 kit v1.14.1 发布）；codegen v1.15.2。
 - **生成器默认路径改为导出常量，`roost generate` 与工程模板引用常量而不再各写一份字面量**（U-0118，C4，classscan 观察 O-1）。
   `dao.DefaultDefDir / DefaultOutDir`、`eventgen.DefaultDefDir / DefaultOutDir`、`errcode.DefaultOutFile`、`protocol.DefaultDefDir / DefaultBindDir / DefaultHandlerDir / PlayerAgentImportSuffix / PBImportSuffix`、`tablegen.DefaultMetaDir`；
   值不变，生成物不变。`internal/roost/literal_coupling_test.go` 用 AST 扫描编排层的字面量，与任一常量相等即红（修前 16 处红）。
