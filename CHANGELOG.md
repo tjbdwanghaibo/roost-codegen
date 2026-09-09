@@ -12,6 +12,7 @@
 
 ### Added
 
+- **`scripts/gapmap/classscan.py`**（与 roost-core 同一份拷贝）：C3 / C4 / C5 / C6 / C7 / C8 的启发式候选扫描；internal 十六包首轮扫过，无真洞，记两条观察（生成器默认路径与 `internal/roost` 重复字面量；`render.go` 依赖 `LoadManifest` 已校验）。
 - **internal/protocol 与 internal/nest 的解析守卫钉住**（U-0115 / U-0116，C2）。nightly gap map 各 20 条采样 8 条无覆盖。
   protocol：`roost:msg` 的非数字 id、非命名结果类型、非 snake_case handler、通知引用不存在的结构体；`validateDefinitions` 的 req / resp id 不等、枚举重名、枚举无值；
   有控制器域而无 handler import base 时 bootstrap 拒绝。`guards_promises_test.go` 三条；回退 8 处守卫各红。
