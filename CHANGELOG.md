@@ -6,6 +6,8 @@
 
 ### Changed
 
+- **nil / 参数守卫收尾（codegen 八个包）：internal/dao、servicerpc、eventgen、tablegen、attribute、webroute、project、cfggen**（U-0151，C2）。各一条 `*_promises_test.go`，共 13 条守卫回退全红：redisdao 标记的四种畸形与 dao 标签 sync / nosync 冲突、接口重复方法与派生亲和键形式、位置参数点名拒绝、正整数解析、处理函数第二返回值必须是 error、目录多包拒绝、bean 字段全被目标组排除拒绝。
+  `internal/roost/add.go:57 / 73` 由 `add_promises_test.go` 按文本覆盖、守卫失效后同步阶段报同一文本（冗余）；`add.go:299`（同步失败且回滚也失败）留待。
 - **发布清单与本地 source-head 默认 pin 升到 core v1.15.1 / kit v1.14.2**（core：流水线提交落盘即唤醒投影 T-49；kit：mail 单读 / 批读同判 T-48）；codegen v1.15.3。
 - **发布清单与本地 source-head 默认 pin 升到 kit v1.14.1**（activity sweep 组来源与后台循环失败计数随 kit v1.14.1 发布）；codegen v1.15.2。
 - **生成器默认路径改为导出常量，`roost generate` 与工程模板引用常量而不再各写一份字面量**（U-0118，C4，classscan 观察 O-1）。
