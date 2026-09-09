@@ -269,10 +269,31 @@ func consolidateFile(p string, table map[string]relocation, removed []string, dr
 		return false, unresolved, nil
 	}
 	if len(extraImports) > 0 {
-		// Insert after the first import spec's line, inside the import block.
 		first := file.Imports[0]
-		end := fset.Position(first.End()).Offset
-		edits = append(edits, edit{end, end, "\n\t" + strings.Join(extraImports, "\n\t")})
+		var decl *ast.GenDecl
+		for _, d := range file.Decls {
+			gen, ok := d.(*ast.GenDecl)
+			if !ok || gen.Tok != token.IMPORT {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				if spec == first {
+					decl = gen
+				}
+			}
+		}
+		if decl != nil && !decl.Lparen.IsValid() {
+			// A single-line `import "x"` has no block to extend: add a second,
+			// parenthesized import declaration right after it (RR-20260908-03 —
+			// splicing a bare spec after the first one produced `coreredis "…"`
+			// at top level, which does not parse).
+			end := fset.Position(decl.End()).Offset
+			edits = append(edits, edit{end, end, "\nimport (\n\t" + strings.Join(extraImports, "\n\t") + "\n)"})
+		} else {
+			// Insert after the first import spec's line, inside the import block.
+			end := fset.Position(first.End()).Offset
+			edits = append(edits, edit{end, end, "\n\t" + strings.Join(extraImports, "\n\t")})
+		}
 	}
 	sort.Slice(edits, func(i, j int) bool {
 		if edits[i].start != edits[j].start {

@@ -55,6 +55,8 @@
 
 ### Fixed
 
+- **`roost project upgrade --consolidate` 对单行 import 的混合分流不再生成非法 Go**（U-0156，C2；RR-20260908-03，T-52）。旧业务文件只有一条不带括号的 `import "…/roost-kit/redis"` 又同时用到留在 kit 的 Mod 胶水与搬到 core 的符号时，新 ImportSpec 的文本此前被无条件塞在第一个 spec 之后，得到一条顶层裸露的 `coreredis "…"`，`format.Source` 报 `expected declaration`，该文件升级失败。
+  现在先找到第一个 import 所在的声明：有括号块照旧插在块内；没有括号就在该声明之后另起一个 `import ( … )` 声明。`consolidate_single_import_promises_test.go` 修前红。修复记录见 roost-core `docs/bugfix/RR-20260908-03.md`。
 - **发布清单对齐 core v1.13.0**（`security.RateLimiter` 改用 x/time/rate，新增依赖 `golang.org/x/time`；API 不变）。生成工程的 `versions.core`
   缺省仍取 latest，下限不变。
 - **`scripts/gapmap.sh` 收尾不再 `git clean`**：采样后只还原被改动的**已跟踪**文件；未跟踪文件（比如正在写的测试）原样保留并提示。
