@@ -12,6 +12,12 @@
 
 ### Added
 
+- **internal/protocol 与 internal/nest 的解析守卫钉住**（U-0115 / U-0116，C2）。nightly gap map 各 20 条采样 8 条无覆盖。
+  protocol：`roost:msg` 的非数字 id、非命名结果类型、非 snake_case handler、通知引用不存在的结构体；`validateDefinitions` 的 req / resp id 不等、枚举重名、枚举无值；
+  有控制器域而无 handler import base 时 bootstrap 拒绝。`guards_promises_test.go` 三条；回退 8 处守卫各红。
+  nest：同一类型上的重复远端别名（同结构体两字段、包内两文件各一处）、向上找不到 go.mod、目录在模块根之外。`guards_promises_test.go` 两条；
+  回退 8 处 3 红、5 处不红：`empty module path`（整行 TrimSpace 后 `module ` 前缀不可能剩空路径）、方法多接收者（Go 语法不允许）、"non-error return after error" 被前一条
+  "error must be the single final return value" 前置、结构体级别名检查被文件级聚合检查前置，均不可达 / 冗余；模板字符串内的 `nestClient` 守卫是生成物，属"生成 + 编译 + 运行"那套基建。
 - **gap map 采样器跳过 `*_gen.go`**（B-25）：生成文件是同一模板在每个包的实例，其守卫在模板所在处钉一次即可；采样器现在只统计不采样，并在包级与总计里报告跳过的守卫数。
 - **cfggen 导出分组（前后端分开的配置）**：meta 顶层 `groups: {names: [c, s], target: [s]}`，表 / 全局 / 字段可写 `group: c` 或
   `group: [c, s]`；不在目标组里的字段从 struct 中去掉（连带索引访问器），不在目标组里的表 / 全局不生成、不注册、无访问器；`-groups c,s`
