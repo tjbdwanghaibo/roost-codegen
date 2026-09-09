@@ -47,21 +47,13 @@ type consolidationMap struct {
 	Keep    []string                    `yaml:"keep"`
 	Skill   []struct{ From, To string } `yaml:"skill"`
 	Service []struct{ From, To string } `yaml:"service"`
-	Renames []struct {
-		Package string `yaml:"package"`
-		Symbol  string `yaml:"symbol"`
-		To      string `yaml:"to"`
-	} `yaml:"renames"`
 }
 
 // relocation is what the map says about one old import path.
 type relocation struct {
-	to         string          // new import path for symbols that moved
-	pkgName    string          // package name at the new path when it differs from the base name
-	kitKeeps   map[string]bool // symbols that stay at the old path (split packages)
-	renames    map[string]string
-	contract   string          // contract package path when `to` is a driver subpackage of it
-	toContract map[string]bool // symbols that live in the contract package, not the driver
+	to       string          // new import path for symbols that moved
+	pkgName  string          // package name at the new path when it differs from the base name
+	kitKeeps map[string]bool // symbols that stay at the old path (split packages)
 }
 
 func loadConsolidationMap() (map[string]relocation, consolidationMap, error) {
@@ -71,13 +63,9 @@ func loadConsolidationMap() (map[string]relocation, consolidationMap, error) {
 	}
 	table := make(map[string]relocation)
 	add := func(from, to, pkgName string, keeps []string) {
-		r := relocation{to: to, pkgName: pkgName, kitKeeps: make(map[string]bool), renames: make(map[string]string), toContract: make(map[string]bool)}
+		r := relocation{to: to, pkgName: pkgName, kitKeeps: make(map[string]bool)}
 		for _, k := range keeps {
 			r.kitKeeps[k] = true
-		}
-		// roost-kit/<x> -> roost-core/<x>/driver: the contract package is the parent.
-		if strings.HasSuffix(to, "/driver") {
-			r.contract = strings.TrimSuffix(to, "/driver")
 		}
 		table[from] = r
 	}
@@ -92,19 +80,6 @@ func loadConsolidationMap() (map[string]relocation, consolidationMap, error) {
 	}
 	for _, s := range m.Service {
 		add(s.From, s.To, "", nil)
-	}
-	for _, r := range m.Renames {
-		rel, ok := table[r.Package]
-		if !ok {
-			return nil, m, fmt.Errorf("consolidation map: rename for unmapped package %s", r.Package)
-		}
-		if r.To != "core" {
-			rel.renames[r.Symbol] = r.To
-		} else if rel.contract != "" {
-			// "same symbol in core" — and core here means the contract package,
-			// not the driver the rest of the old package moved to.
-			rel.toContract[r.Symbol] = true
-		}
 	}
 	return table, m, nil
 }
@@ -249,7 +224,7 @@ func consolidateFile(p string, table map[string]relocation, removed []string, dr
 			alias = imp.Name.Name
 		}
 		// Collect selector uses alias.Sym.
-		var kitUses, coreUses, contractUses []*ast.SelectorExpr
+		var kitUses, coreUses []*ast.SelectorExpr
 		ast.Inspect(file, func(n ast.Node) bool {
 			sel, ok := n.(*ast.SelectorExpr)
 			if !ok {
@@ -259,44 +234,18 @@ func consolidateFile(p string, table map[string]relocation, removed []string, dr
 			if !ok || id.Name != alias || id.Obj != nil {
 				return true
 			}
-			switch {
-			case rel.kitKeeps[sel.Sel.Name]:
+			if rel.kitKeeps[sel.Sel.Name] {
 				kitUses = append(kitUses, sel)
-			case rel.toContract[sel.Sel.Name]:
-				contractUses = append(contractUses, sel)
-			default:
+			} else {
 				coreUses = append(coreUses, sel)
 			}
 			return true
 		})
-		if len(contractUses) > 0 {
-			// Symbols that stayed at contract level (nats.Permanent): reuse the
-			// file's existing contract import or add one.
-			contractAlias := ""
-			for _, other := range file.Imports {
-				if p, err := strconv.Unquote(other.Path.Value); err == nil && p == rel.contract {
-					contractAlias = path.Base(p)
-					if other.Name != nil {
-						contractAlias = other.Name.Name
-					}
-				}
-			}
-			if contractAlias == "" {
-				contractAlias = fresh(path.Base(rel.contract) + "contract")
-				extraImports = append(extraImports, contractAlias+" "+strconv.Quote(rel.contract))
-			}
-			for _, sel := range contractUses {
-				edits = append(edits, edit{fset.Position(sel.X.Pos()).Offset, fset.Position(sel.X.End()).Offset, contractAlias})
-			}
-		}
 		newBase := path.Base(rel.to)
 		if rel.pkgName != "" {
 			newBase = rel.pkgName
 		}
 		switch {
-		case len(kitUses) == 0 && len(coreUses) == 0 && len(contractUses) > 0:
-			// Only contract symbols were used: drop the old import entirely.
-			edits = append(edits, edit{fset.Position(imp.Pos()).Offset, fset.Position(imp.End()).Offset, ""})
 		case len(kitUses) == 0:
 			// Everything moves: repoint the import in place.
 			edits = append(edits, edit{fset.Position(imp.Path.Pos()).Offset, fset.Position(imp.Path.End()).Offset, strconv.Quote(rel.to)})
@@ -304,11 +253,6 @@ func consolidateFile(p string, table map[string]relocation, removed []string, dr
 			// new package name differs from it.
 			if imp.Name == nil && newBase != alias {
 				edits = append(edits, edit{fset.Position(imp.Path.Pos()).Offset, fset.Position(imp.Path.Pos()).Offset, alias + " "})
-			}
-			for _, sel := range coreUses {
-				if to, ok := rel.renames[sel.Sel.Name]; ok {
-					edits = append(edits, edit{fset.Position(sel.Sel.Pos()).Offset, fset.Position(sel.Sel.End()).Offset, to})
-				}
 			}
 		case len(coreUses) == 0:
 			// Only Mod glue used: the kit import stays as it is.
@@ -318,9 +262,6 @@ func consolidateFile(p string, table map[string]relocation, removed []string, dr
 			extraImports = append(extraImports, coreAlias+" "+strconv.Quote(rel.to))
 			for _, sel := range coreUses {
 				edits = append(edits, edit{fset.Position(sel.X.Pos()).Offset, fset.Position(sel.X.End()).Offset, coreAlias})
-				if to, ok := rel.renames[sel.Sel.Name]; ok {
-					edits = append(edits, edit{fset.Position(sel.Sel.Pos()).Offset, fset.Position(sel.Sel.End()).Offset, to})
-				}
 			}
 		}
 	}

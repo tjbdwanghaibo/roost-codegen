@@ -4,6 +4,11 @@
 #   * the migration batches (what moves where),
 #   * `roost upgrade --consolidate` (import rewriting in business projects),
 #   * the ledger's "new location" column.
+# It maps PACKAGE PATHS only. There is deliberately no per-symbol rename table:
+# the few symbols whose home or name changed in the merge (core/nats.Permanent
+# stays in the contract package; kit/syncstream.HealthOptions / HealthStatus are
+# core/syncstream.PublisherHealthOptions / PublisherHealthStatus) are left for
+# the compiler to point out after the rewrite — see roost-core TROUBLESHOOTING T-45.
 # Draft written at P0 from docs/ARCHITECTURE_V2_CONSOLIDATION_PLAN.zh-CN.md §2;
 # `kit_keeps` = exported symbols of the Mod glue file that stays in kit. The glue
 # file is identified by CONTENT (a type with Provide/Init methods), not by name:
@@ -144,29 +149,3 @@ service:
     to: github.com/tjbdwanghaibo/roost-kit/service/rank
   - from: github.com/tjbdwanghaibo/roost-service/session
     to: github.com/tjbdwanghaibo/roost-kit/service/session
-# Symbol renames / de-duplications applied while merging (the rewriter must apply
-# these after the path rewrite; `to: core` means "use the identical core symbol").
-renames:
-  - package: github.com/tjbdwanghaibo/roost-kit/nats
-    symbol: Permanent
-    to: core            # contract-level core/nats.Permanent (same marker interface); after the
-                        # rewrite this selector points at nats/driver, which does not export it —
-                        # the rewriter must send Permanent to the contract package
-  - package: github.com/tjbdwanghaibo/roost-kit/syncstream
-    symbol: HealthOptions
-    to: PublisherHealthOptions
-  - package: github.com/tjbdwanghaibo/roost-kit/syncstream
-    symbol: HealthStatus
-    to: PublisherHealthStatus
-  - package: github.com/tjbdwanghaibo/roost-kit/syncstream
-    symbol: MetricSink
-    to: core            # identical interface
-  - package: github.com/tjbdwanghaibo/roost-kit/syncstream
-    symbol: ErrPayloadTooLarge
-    to: core            # message text now "syncstream: payload exceeds configured limit"
-  - package: github.com/tjbdwanghaibo/roost-kit/dataengine
-    symbol: dataEngineHealthMessage
-    to: HealthMessage   # exported from core/dataengine/engine
-# Known template anomalies to resolve in P4 (recorded here so they are not lost).
-notes:
-  - "codegen templates reference github.com/tjbdwanghaibo/roost-kit/checkpoint, which is not a kit package today; verify at P4."

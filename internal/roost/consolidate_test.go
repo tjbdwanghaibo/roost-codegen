@@ -34,8 +34,10 @@ require (
 
 // The upgrader must move every relocated import, decide split packages per
 // symbol, keep the identifier a file already uses when the package name
-// changes, apply the recorded renames, and leave files on the new layout
-// alone.
+// changes, and leave files on the new layout alone. It maps package paths
+// only: a symbol that changed home or name inside the merge (nats.Permanent,
+// syncstream.HealthOptions) is left for the compiler to report — there is no
+// per-symbol table to maintain (TROUBLESHOOTING T-45).
 func TestConsolidateProjectRewritesImportsGoModAndManifest(t *testing.T) {
 	root := t.TempDir()
 	writeProjectFile(t, root, "go.mod", legacyGoMod)
@@ -98,20 +100,19 @@ var (
 		`_ = coreredis.NewClient`,
 		`_ = kitredis.NewRedisMod`,
 		`"github.com/tjbdwanghaibo/roost-core/syncstream"`,
-		`syncstream.PublisherHealthOptions{}`,                   // recorded rename
+		`syncstream.HealthOptions{}`, // no symbol table: the compiler reports the new name
 		`servicemods "github.com/tjbdwanghaibo/roost-kit/mods"`, // folded package: keep the identifier
 		`"github.com/tjbdwanghaibo/roost-core/skill"`,
 		`kitnats "github.com/tjbdwanghaibo/roost-core/nats/driver"`, // whole import moves to the driver
-		`natscontract "github.com/tjbdwanghaibo/roost-core/nats"`,   // Permanent stayed in the contract package
-		`_ = natscontract.Permanent`,
+		`_ = kitnats.Permanent`, // contract symbol: left for the compiler, no second import is invented
 		`_ = kitnats.NewClient`,
 	} {
 		if !strings.Contains(string(rewritten), want) {
 			t.Errorf("rewritten file missing %q:\n%s", want, rewritten)
 		}
 	}
-	for _, bad := range []string{"roost-skill", "roost-service", "roost-kit/dataengine", "roost-kit/syncstream", "HealthOptions{}\n"} {
-		if strings.Contains(string(rewritten), bad) && bad != "HealthOptions{}\n" {
+	for _, bad := range []string{"roost-skill", "roost-service", "roost-kit/dataengine", "roost-kit/syncstream", "natscontract", "PublisherHealthOptions"} {
+		if strings.Contains(string(rewritten), bad) {
 			t.Errorf("rewritten file still mentions %q:\n%s", bad, rewritten)
 		}
 	}
