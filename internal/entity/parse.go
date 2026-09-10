@@ -376,6 +376,11 @@ func collectEntityImports(ent EntityDef, importMap map[string]ImportDef) []Impor
 	}
 
 	add(ent.EntityKind)
+	// The category constant may live in a business package that nothing else
+	// in the generated file references. Go's import scope is per file, so the
+	// source file importing it does not help; omitting it here generated a
+	// file that used the package without importing it (RR-20260910-05).
+	add(ent.Category)
 	add(ent.SyncTopic)
 	add(ent.SyncPacker)
 	add(ent.SubjectPacker)

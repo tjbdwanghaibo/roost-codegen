@@ -208,8 +208,10 @@ func importAliases(registrations []Registration) map[string]string {
 	}
 	sort.Strings(paths)
 
-	// Reserved: the generated file's own package name and its stdlib imports.
-	used := map[string]bool{"registry": true, "sync": true, "fmt": true, "err": true}
+	used := make(map[string]bool, len(aggregateReservedNames))
+	for _, name := range aggregateReservedNames {
+		used[name] = true
+	}
 	aliases := make(map[string]string, len(paths))
 	for _, path := range paths {
 		aliases[path] = uniqueAlias(path, used)
@@ -217,6 +219,16 @@ func importAliases(registrations []Registration) map[string]string {
 	}
 	return aliases
 }
+
+// aggregateReservedNames are the identifiers the generated file already uses:
+// its own package name, its imports, and the local it binds in the error
+// checks. A dynamic alias that lands on one of these produces a file with two
+// imports under one name, or shadows the local — either way the consumer does
+// not compile. "entity" is on the list because the template calls
+// entity.ValidateEntityRegistry at the end, and a business registration
+// package whose path ends in /entity used to be given exactly that alias
+// (RR-20260910-06). Keep this in step with the template's import block.
+var aggregateReservedNames = []string{"registry", "sync", "fmt", "err", "entity"}
 
 func uniqueAlias(path string, used map[string]bool) string {
 	segments := strings.Split(path, "/")
