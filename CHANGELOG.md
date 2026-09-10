@@ -60,6 +60,7 @@
 
 ### Fixed
 
+- **多实体的包配合显式 `-output` 现在被拒绝而不是静默覆盖**(U-0162,C2;RR-20260909-06,T-56)。生成循环对每个实体都用同一个 `-output` 路径,后写的覆盖先写的连同伴随的守卫测试文件;工具 exit 0 并两次报告"生成同一路径",而消费者编译报 `undefined: RegisterEntity` —— 活下来的那个文件不是按名排序的第一个,包级 `RegisterEntity` 随被覆盖的文件一起消失。`-output` 是给 `go:generate` 单文件模式用的,和"一个包多个实体各占一个文件"在语义上冲突。现在在写任何文件之前拒绝,报错点出目录、实体个数与实体名并说明拿掉 `-output` 就能并排生成,失败的一次运行不留半成品;单实体配 `-output` 照旧工作。`output_multi_entity_promises_test.go` 修前红。修复记录见 roost-core `docs/bugfix/RR-20260909-06.md`。
 - **`roost entity` 对同包多个实体不再生成重名的注册符号**（U-0160，C2；RR-20260909-04，T-55）。每个生成文件此前都声明包级 `registerEntityOnce` / `RegisterEntity`，两个实体同包时生成成功、消费者 `redeclared in this block`。现在每实体生成 `register<Name>EntityOnce` 与 `register<Name>Entity()`，带 `//roost:register phase=entity` 的包级 `RegisterEntity` 只进按名排序的第一个实体文件、逐个调用兄弟；registry 收集器与 `pkg.RegisterEntity()` 调用方式不变，已有消费者重新生成即可。`multi_entity_package_promises_test.go` 修前红。修复记录见 roost-core `docs/bugfix/RR-20260909-04.md`。
 - **`roost project upgrade --consolidate` 对单行 import 的混合分流不再生成非法 Go**（U-0156，C2；RR-20260908-03，T-52）。旧业务文件只有一条不带括号的 `import "…/roost-kit/redis"` 又同时用到留在 kit 的 Mod 胶水与搬到 core 的符号时，新 ImportSpec 的文本此前被无条件塞在第一个 spec 之后，得到一条顶层裸露的 `coreredis "…"`，`format.Source` 报 `expected declaration`，该文件升级失败。
   现在先找到第一个 import 所在的声明：有括号块照旧插在块内；没有括号就在该声明之后另起一个 `import ( … )` 声明。`consolidate_single_import_promises_test.go` 修前红。修复记录见 roost-core `docs/bugfix/RR-20260908-03.md`。

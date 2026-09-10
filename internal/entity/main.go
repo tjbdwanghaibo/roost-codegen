@@ -82,6 +82,23 @@ func run(args []string, stdout io.Writer) error {
 			continue
 		}
 
+		// -output names ONE file, which only makes sense for the go:generate
+		// single-entity mode. Each entity generates its own <name>_gen_wire.go
+		// plus a companion guard test, so pointing every entity of a package at
+		// one path silently overwrote all but the last, taking the package-level
+		// RegisterEntity down with whichever file lost. The tool exited 0 and
+		// the consumer failed to compile (RR-20260909-06). Refused here, before
+		// anything is written, so a failed run leaves no partial output.
+		if *output != "" && len(entities) > 1 {
+			names := make([]string, 0, len(entities))
+			for _, ent := range entities {
+				names = append(names, ent.Name)
+			}
+			sort.Strings(names)
+			return fmt.Errorf("-output names one file but %s declares %d entities (%s): each entity generates its own file, so one path would overwrite all but the last; drop -output to generate them side by side",
+				dir, len(entities), strings.Join(names, ", "))
+		}
+
 		// Generate for each entity. The package-level RegisterEntity goes into
 		// the first entity's file (by name) and calls every sibling's own
 		// registration, so several entities in one package compile together.
