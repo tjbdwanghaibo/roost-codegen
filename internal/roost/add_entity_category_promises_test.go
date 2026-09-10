@@ -16,7 +16,7 @@ func TestAddEntityScaffoldsTheOtherCategoryInsteadOfMintingOne(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{
 		Name: "planet", Module: "example.com/planet", Out: target,
-		Mods: []string{"configdata"}, Features: []string{"entity"},
+		Mods: []string{"configdata"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -27,6 +27,25 @@ func TestAddEntityScaffoldsTheOtherCategoryInsteadOfMintingOne(t *testing.T) {
 	if _, err := Add(root, AddOptions{Kind: "entity", Name: "Guild"}); err != nil {
 		t.Fatal(err)
 	}
+	// The lifecycle scaffold used to reference the per-entity category
+	// constant the entity scaffold minted. That constant is gone, so anything
+	// still naming it would leave the project unbuildable.
+	if _, err := Add(root, AddOptions{Kind: "access", Name: "player", Service: "game"}); err != nil {
+		t.Fatal(err)
+	}
+	lifecyclePaths, err := Add(root, AddOptions{Kind: "lifecycle", Name: "Player", Entity: "Player", Service: "game"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range lifecyclePaths {
+		raw, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(raw), "EntityCategoryPlayer") {
+			t.Errorf("%s still names the removed per-entity category constant:\n%s", path, raw)
+		}
+	}
 
 	for _, name := range []string{"player", "guild"} {
 		raw, err := os.ReadFile(filepath.Join(root, "game", "entities", name, "entity.go"))
@@ -34,8 +53,11 @@ func TestAddEntityScaffoldsTheOtherCategoryInsteadOfMintingOne(t *testing.T) {
 			t.Fatal(err)
 		}
 		body := string(raw)
-		if !strings.Contains(body, "entity.EntityCategoryOther") {
-			t.Errorf("%s is not registered in entity.EntityCategoryOther:\n%s", name, body)
+		if !strings.Contains(body, "category=entity.EntityCategoryOther") {
+			t.Errorf("%s does not declare its category on the marker:\n%s", name, body)
+		}
+		if strings.Contains(body, "MustRegisterEntityKindCategory") {
+			t.Errorf("%s still hand-registers its category, which reintroduces the ordering trap:\n%s", name, body)
 		}
 		if strings.Contains(body, "entity.EntityCategory = 1") {
 			t.Errorf("%s still mints its own category constant, which claims the remote lock rank:\n%s", name, body)

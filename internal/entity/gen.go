@@ -332,7 +332,11 @@ func RegisterEntity() {
 func register{{.Entity.Name}}Entity() {
 	register{{.Entity.Name}}EntityOnce.Do(func() {
 		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
+{{- if .Entity.Category}}
+			Category: {{.Entity.Category}},
+{{- else}}
 			Category: entity.MustEntityCategoryOfKind({{.Entity.EntityKind}}),
+{{- end}}
 			Kind: {{.Entity.EntityKind}},
 			Builder: func(param *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
 				return New{{.Entity.Name}}(param)

@@ -90,7 +90,7 @@ func (lifecycle *%s) Get(ctx context.Context, uniqueID int64) (*%s.%s, error) {
 	if err != nil {
 		return nil, err
 	}
-	value, err := lifecycle.access.Get(ctx, fullID, %s.EntityCategory%s)
+	value, err := lifecycle.access.Get(ctx, fullID, entity.MustEntityCategoryOfKind(%s.EntityKind%s))
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func (lifecycle *%s) Create(ctx context.Context, uniqueID int64) (*%s.%s, error)
 		IsCreate: true,
 		UniqueID: uniqueID,
 		Kind:     %s.EntityKind%s,
-		Category: %s.EntityCategory%s,
+		Category: entity.MustEntityCategoryOfKind(%s.EntityKind%s),
 	})
 	if err != nil {
 		return nil, err

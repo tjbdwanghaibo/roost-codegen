@@ -152,22 +152,23 @@ func TestScanIgnoresTestdataVendorAndTestFiles(t *testing.T) {
 
 // The generated file must compile. This is the assertion that catches the
 // class of bug where the template emits a call to fmt without importing it.
+//
+// fmt and the entity package are now unconditional: the aggregate always ends
+// with an entity.ValidateEntityRegistry() call whose error it wraps, so there
+// is no longer a shape of project that needs neither (M-05).
 func TestGeneratedAggregateParsesAndImportsWhatItUses(t *testing.T) {
 	for _, testCase := range []struct {
 		label         string
 		registrations []Registration
-		wantFmt       bool
 	}{
-		{"empty project", nil, false},
+		{"empty project", nil},
 		{
 			"no error returns",
 			[]Registration{{ImportPath: "example.com/p/game/a", Func: "RegisterComponent", Phase: "component"}},
-			false,
 		},
 		{
-			"one error return needs fmt",
+			"one error return",
 			[]Registration{{ImportPath: "example.com/p/configs/generated", Func: "RegisterTables", Phase: "config", ReturnsError: true}},
-			true,
 		},
 	} {
 		content, err := render("example.com/p", testCase.registrations)
@@ -183,11 +184,10 @@ func TestGeneratedAggregateParsesAndImportsWhatItUses(t *testing.T) {
 		for _, spec := range file.Imports {
 			imported[strings.Trim(spec.Path.Value, `"`)] = true
 		}
-		if imported["fmt"] != testCase.wantFmt {
-			t.Fatalf("%s: fmt imported=%v want %v\n%s", testCase.label, imported["fmt"], testCase.wantFmt, content)
-		}
-		if !imported["sync"] {
-			t.Fatalf("%s: sync is always used by RegisterAll but was not imported\n%s", testCase.label, content)
+		for _, always := range []string{"fmt", "sync", "github.com/tjbdwanghaibo/roost-core/entity"} {
+			if !imported[always] {
+				t.Fatalf("%s: %s is always used by RegisterAll but was not imported\n%s", testCase.label, always, content)
+			}
 		}
 		for _, registration := range testCase.registrations {
 			if !imported[registration.ImportPath] {

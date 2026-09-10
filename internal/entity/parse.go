@@ -21,6 +21,7 @@ var markerRe = marker.Regexp("entity", `\s+(.+)`)
 type EntityDef struct {
 	Name            string // struct name, e.g. "Player"
 	EntityKind      string // concrete entity kind constant, e.g. "EntityKindPlayer"
+	Category        string // optional category constant expression from the marker
 	RemotePolicy    string // entity.RemotePolicy constant expression
 	Lifetime        string // entity.EntityLifetime constant expression
 	NoPersist       bool   // EntityBase AutoPersist returns false
@@ -196,6 +197,7 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 					ent := EntityDef{
 						Name:            typeSpec.Name.Name,
 						EntityKind:      m.params["entityKind"],
+						Category:        strings.TrimSpace(m.params["category"]),
 						SourceFile:      filePath,
 						ExistingMethods: methods[typeSpec.Name.Name],
 					}
@@ -238,7 +240,7 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 
 // markerKeys is every parameter the entity marker understands. `id` is
 // written by `roost add entity` and consumed by the registry generator.
-var markerKeys = []string{"id", "entityKind", "remote", "noPersist", "lifetime", "sync", "syncTopic", "syncPacker", "subjectPacker"}
+var markerKeys = []string{"id", "entityKind", "category", "remote", "noPersist", "lifetime", "sync", "syncTopic", "syncPacker", "subjectPacker"}
 
 // parseMarkerParams parses key=value pairs and refuses anything else: a typo
 // in a key (`remot=managed`) or a bare flag (`noPersist`) used to be read as
@@ -269,6 +271,9 @@ func validateMarkerValues(params map[string]string) error {
 			return fmt.Errorf(`remote=%q is no longer supported: lock order comes from the entity's category, so register the kind in a category (entity.EntityCategoryWorld / entity.EntityCategoryOther / ...) and use remote=none|managed|mirror`, v)
 		}
 		return fmt.Errorf(`remote=%q is not one of none|managed|mirror`, v)
+	}
+	if v, ok := params["category"]; ok && !validCategoryParam(v) {
+		return fmt.Errorf(`category=%q is not a category constant expression (e.g. entity.EntityCategoryOther, view.EntityCategoryPlayer, EntityCategoryWorld)`, v)
 	}
 	if v, ok := params["lifetime"]; ok && !validLifetimeParam(v) {
 		return fmt.Errorf(`lifetime=%q is not one of ephemeral|runtime_rebuild|persisted_hot_cold|resident|remote_managed|mirror_cache`, v)
@@ -595,6 +600,49 @@ func parseRemoteParam(v string) string {
 		// none would change an existing entity's lock rank.
 		return ""
 	}
+}
+
+// validCategoryParam accepts an exported identifier, optionally package
+// qualified. The value is pasted into generated Go, so a literal, a quoted
+// string or a stray space has to fail here rather than in the consumer's
+// compiler — which is the whole point of moving the category into the marker.
+func validCategoryParam(v string) bool {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return false
+	}
+	name := v
+	if idx := strings.Index(v, "."); idx >= 0 {
+		qualifier := v[:idx]
+		name = v[idx+1:]
+		if !isGoIdent(qualifier) {
+			return false
+		}
+	}
+	if !isGoIdent(name) {
+		return false
+	}
+	first := name[0]
+	return first >= 'A' && first <= 'Z'
+}
+
+func isGoIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c == '_':
+		case c >= '0' && c <= '9':
+			if i == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func parseLifetimeParam(v string, noPersist bool, remotePolicy string) string {

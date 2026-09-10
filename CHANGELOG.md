@@ -6,6 +6,8 @@
 
 ### Changed
 
+- **`category=` 进实体标记并直接进生成物;生成的聚合注册末尾校验 entity 注册表**(M-05;前置 M-01～M-04)。生成的接线原来写 `entity.MustEntityCategoryOfKind(kind)`,一次运行期查表、查不到就 panic,于是"业务文件里手写的 `MustRegisterEntityKindCategory` 必须先跑"成了隐式前置,而这个顺序只由手写聚合文件的第一行保证。category 是 kind 的静态事实,标记里写清楚就能直接生成,前置随之消失。取值要求是导出标识符可带包限定,`category=1` / `category="player"` 这类写法在生成器就报错。没写 `category=` 时仍生成运行期查表,未迁移的工程不受影响。
+  `roost add entity` 的实体文件不再手写注册,category 写在标记上;`roost add lifecycle` 生成的两处 `<pkg>.EntityCategory<Name>` 引用(M-04 删掉了那个常量,会让工程编译不过)改为 `entity.MustEntityCategoryOfKind(<pkg>.EntityKind<Name>)`。`registry.RegisterAll()` 是工程里唯一知道"注册结束了"的时点,聚合末尾因此调 `entity.ValidateEntityRegistry()` 并包装其错误,一次列出所有不一致;模板的 `fmt` 与 `roost-core/entity` 两个 import 变成无条件。实施记录见 roost-core `docs/bugfix/M-05-marker-owns-the-category.md`。
 - **`remote=capable` 与 `remote=true` 系列拼写改为报错;`roost add entity` 脚手架归 `entity.EntityCategoryOther`**(M-04,**破坏性**,须与 roost-core 同版本升级)。core 删除了 `entity.RemotePolicyCapable`:它的全部作用是把 kind 放进第一个锁档,而锁档现在就是 kind 的 category。标记不再静默降级成 `none` —— 降级会改变一个已有实体的锁档 —— 而是报错并给出替代方案(把 kind 注册进某个 category,`remote=` 用 none / managed / mirror);`remote=bogus` 这类拼写错误仍得到原来的"不是这几个之一"信息。
   脚手架不再自铸 per-entity 的 `EntityCategory<Name> = 1`:那是留给远程托管实体的档,每个实体各铸一个会让它们全部排在所有东西之前且彼此同档、互相不能叠锁。生成的实体注册进 `entity.EntityCategoryOther`(安全默认:持有它之后什么都锁不了),文件里提示等顺序明确后再挪到 World / PlayerScoped / Player。`remote_capable_removed_promises_test.go` 与 `add_entity_category_promises_test.go` 修前红。消费方升级须知见 roost-core `docs/bugfix/M-04-drop-capable-and-the-group-hook.md`。
 - **发版清单升到 core v1.15.2 / kit v1.14.3**（codegen v1.15.4）；`source-head-check.sh` 默认 pin 同步。
