@@ -265,7 +265,10 @@ func parseMarkerParams(s string) (map[string]string, error) {
 // accept; each of them used to fall back to a default instead.
 func validateMarkerValues(params map[string]string) error {
 	if v, ok := params["remote"]; ok && parseRemoteParam(v) == "" {
-		return fmt.Errorf(`remote=%q is not one of none|capable|managed|mirror (or a boolean)`, v)
+		if parseBoolParam(v) || strings.EqualFold(strings.TrimSpace(v), "capable") {
+			return fmt.Errorf(`remote=%q is no longer supported: lock order comes from the entity's category, so register the kind in a category (entity.EntityCategoryWorld / entity.EntityCategoryOther / ...) and use remote=none|managed|mirror`, v)
+		}
+		return fmt.Errorf(`remote=%q is not one of none|managed|mirror`, v)
 	}
 	if v, ok := params["lifetime"]; ok && !validLifetimeParam(v) {
 		return fmt.Errorf(`lifetime=%q is not one of ephemeral|runtime_rebuild|persisted_hot_cold|resident|remote_managed|mirror_cache`, v)
@@ -579,16 +582,17 @@ func parseRemoteParam(v string) string {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "", "0", "f", "false", "no", "n", "off", "none":
 		return "entity.RemotePolicyNone"
-	case "1", "t", "true", "yes", "y", "on", "capable":
-		return "entity.RemotePolicyCapable"
 	case "managed":
 		return "entity.RemotePolicyManaged"
 	case "mirror":
 		return "entity.RemotePolicyMirror"
 	default:
-		if parseBoolParam(v) {
-			return "entity.RemotePolicyCapable"
-		}
+		// "capable" and the boolean true spellings used to mean
+		// entity.RemotePolicyCapable, which said only "put this kind in the
+		// first lock rank". Lock order is the kind's category now, so the
+		// value said nothing the category does not and was removed from the
+		// framework. Rejected rather than silently mapped to none, because
+		// none would change an existing entity's lock rank.
 		return ""
 	}
 }

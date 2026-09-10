@@ -351,7 +351,12 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		body = fmt.Sprintf("//go:build protocoldef\n\npackage protocoldef\n\ntype %sRequest struct{}\ntype %sResponse struct {\n\tCode int32 `pb:\"1\"`\n\tReason string `pb:\"2\"`\n}\n\n%s\ntype %sProtocol interface {\n\t//roost:msg id=%d\n\t%s(%sRequest) %sResponse\n}\n", pascal, pascal, protocolMarker, pascal, o.ID, pascal, pascal, pascal)
 	case "entity":
 		path = "game/entities/" + snake + "/entity.go"
-		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/roost-core/entity\"\n\nconst (\n\tEntityCategory%s entity.EntityCategory = 1\n\tEntityKind%s entity.EntityKind = %d\n)\n\nvar _ = func() struct{} { entity.MustRegisterEntityKindCategory(EntityKind%s, EntityCategory%s); return struct{}{} }()\n\n// I%sEntity is the lock-safe business view used by Nest handlers.\ntype I%sEntity interface { entity.IThreadSafeEntity }\n\n//roost:entity id=%d entityKind=EntityKind%s\ntype %s struct {\n\t*entity.EntityBase\n\tentity.ComponentManager\n\tentity.DaoManager\n}\n", snake, pascal, pascal, o.ID, pascal, pascal, pascal, pascal, o.ID, pascal, pascal)
+		// A new entity goes in entity.EntityCategoryOther. The category IS the
+		// kind's lock rank, so the scaffold must not invent a per-entity value:
+		// entities minting their own "= 1" would each claim the rank reserved
+		// for remote-managed kinds and be locked before everything else. Move
+		// the kind to World / PlayerScoped / Player once its ordering is known.
+		body = fmt.Sprintf("package %s\n\nimport \"github.com/tjbdwanghaibo/roost-core/entity\"\n\nconst EntityKind%s entity.EntityKind = %d\n\n// The category is this kind's lock rank, acquired lowest first. Other is the\n// safe default: holding it permits acquiring nothing further.\nvar _ = func() struct{} { entity.MustRegisterEntityKindCategory(EntityKind%s, entity.EntityCategoryOther); return struct{}{} }()\n\n// I%sEntity is the lock-safe business view used by Nest handlers.\ntype I%sEntity interface { entity.IThreadSafeEntity }\n\n//roost:entity id=%d entityKind=EntityKind%s\ntype %s struct {\n\t*entity.EntityBase\n\tentity.ComponentManager\n\tentity.DaoManager\n}\n", snake, pascal, o.ID, pascal, pascal, pascal, o.ID, pascal, pascal)
 	case "component":
 		return addEntityComponent(root, m, o)
 	case "handler":

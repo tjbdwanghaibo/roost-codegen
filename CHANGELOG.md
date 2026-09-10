@@ -6,6 +6,8 @@
 
 ### Changed
 
+- **`remote=capable` 与 `remote=true` 系列拼写改为报错;`roost add entity` 脚手架归 `entity.EntityCategoryOther`**(M-04,**破坏性**,须与 roost-core 同版本升级)。core 删除了 `entity.RemotePolicyCapable`:它的全部作用是把 kind 放进第一个锁档,而锁档现在就是 kind 的 category。标记不再静默降级成 `none` —— 降级会改变一个已有实体的锁档 —— 而是报错并给出替代方案(把 kind 注册进某个 category,`remote=` 用 none / managed / mirror);`remote=bogus` 这类拼写错误仍得到原来的"不是这几个之一"信息。
+  脚手架不再自铸 per-entity 的 `EntityCategory<Name> = 1`:那是留给远程托管实体的档,每个实体各铸一个会让它们全部排在所有东西之前且彼此同档、互相不能叠锁。生成的实体注册进 `entity.EntityCategoryOther`(安全默认:持有它之后什么都锁不了),文件里提示等顺序明确后再挪到 World / PlayerScoped / Player。`remote_capable_removed_promises_test.go` 与 `add_entity_category_promises_test.go` 修前红。消费方升级须知见 roost-core `docs/bugfix/M-04-drop-capable-and-the-group-hook.md`。
 - **发版清单升到 core v1.15.2 / kit v1.14.3**（codegen v1.15.4）；`source-head-check.sh` 默认 pin 同步。
 - **`rollbackSync` 的"回滚前文件不可检查"分支钉住**（U-0152，C2）。路径成了目录时报 "inspect ... before rollback" 而不是当作不存在去重建。`add.go:299`（同步失败且回滚也失败）只在 SyncProject 执行期间清单被并发改写或 I/O 故障时可达，外部无法构造，记为 rollbackSync 错误的防御性包装。
 - **nil / 参数守卫收尾（codegen 八个包）：internal/dao、servicerpc、eventgen、tablegen、attribute、webroute、project、cfggen**（U-0151，C2）。各一条 `*_promises_test.go`，共 13 条守卫回退全红：redisdao 标记的四种畸形与 dao 标签 sync / nosync 冲突、接口重复方法与派生亲和键形式、位置参数点名拒绝、正整数解析、处理函数第二返回值必须是 error、目录多包拒绝、bean 字段全被目标组排除拒绝。
