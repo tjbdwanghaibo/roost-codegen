@@ -1,11 +1,10 @@
 // Command loadtest drives this project's player TCP listener with robots.
 //
-//	go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20
 //	go run ./cmd/accountctl upsert-server -sid 1000        # once: account must know the server
-//	go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20 -account-nats nats://127.0.0.1:4222   # real login
+//	go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20 -account-nats nats://127.0.0.1:4222
 //
 // It is a load test and the demo's regression test in one: every robot logs
-// in with the terminal credential, creates or loads its Player, adds an item,
+// in through the account service, creates or loads its Player, adds an item,
 // levels up, queues for a duel until the matchmaker pairs it, reads the
 // World's counters, and the run fails on any non-zero response code or on a
 // threshold breach. Use an even -count: duels need pairs. The runner, scenario tree, action registry and threshold
@@ -53,14 +52,14 @@ func main() {
 	duration := flag.Duration("duration", 0, "bound the run; 0 lets every robot finish its scenario once")
 	scenarioDir := flag.String("scenarios", "loadtest/scenarios", "directory of scenario YAML files")
 	scenarioName := flag.String("scenario", "demo", "scenario to run")
-	firstPlayerID := flag.Int64("first-player-id", 900_000, "robot i logs in as this id + i")
+	firstPlayerID := flag.Int64("first-player-id", 900_000, "provisional id for robot i before the account service allocates its real one")
 	maxErrorRate := flag.Float64("max-error-rate", 0, "threshold: failed robots / finished robots")
 	// The scenario deliberately waits for matchmaking (poll every 250ms while
 	// the matchmaker ticks every 500ms), so a whole-scenario p95 of a few
 	// hundred milliseconds is the floor, not a regression.
 	maxP95 := flag.Float64("max-p95", 2.0, "threshold: scenario cost p95, seconds")
 	metricsAddr := flag.String("metrics-addr", "", "serve this process's metrics at http://<addr>/metrics for Prometheus (deploy/dev/observability scrapes 127.0.0.1:9300)")
-	accountNATS := flag.String("account-nats", "", "NATS url of the bus the account service answers on; when set, robots log in for real (Login → CreateRole → SelectRole) and present session tickets instead of player:<id>")
+	accountNATS := flag.String("account-nats", "nats://127.0.0.1:4222", "NATS url of the bus the account service answers on; robots log in for real (Login → CreateRole → SelectRole) and present session tickets")
 	natsPrefix := flag.String("nats-prefix", "roost", "bus subject prefix (nats.prefix in the services' configs)")
 	serverID := flag.Int("server-id", 1000, "the game server's sid, which roles are created on")
 	flag.Parse()
@@ -69,16 +68,12 @@ func main() {
 		go serveMetrics(*metricsAddr)
 	}
 
-	var login *accountLogin
-	if *accountNATS != "" {
-		var err error
-		login, err = newAccountLogin(*accountNATS, *natsPrefix, int32(*serverID))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
-			os.Exit(1)
-		}
-		defer login.Close()
+	login, err := newAccountLogin(*accountNATS, *natsPrefix, int32(*serverID))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
+		os.Exit(1)
 	}
+	defer login.Close()
 
 	if err := run(*endpoint, *count, *duration, *scenarioDir, *scenarioName, *firstPlayerID, *maxErrorRate, *maxP95, login); err != nil {
 		fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
@@ -124,15 +119,10 @@ func run(endpoint string, count int, duration time.Duration, scenarioDir, scenar
 			runner.WithIdentityProvider(func(index int) (int64, error) {
 				return firstPlayerID + int64(index), nil
 			}),
-			// Two credentials, matching internal/access/player/tcp/auth.go.
-			// Without -account-nats the robot presents the terminal shortcut;
-			// with it, a session ticket the account service minted.
-			runner.WithAuthProvider(func(rb *robot.Context) (*transport.Packet, error) {
-				if login == nil {
-					return playertcp.AuthPacket("player:" + strconv.FormatInt(rb.PlayerID, 10)), nil
-				}
-				return login.authPacket(rb)
-			}),
+			// The handshake credential is a session ticket the account
+			// service minted for this robot's role — the same path a real
+			// client takes; see internal/access/player/tcp/auth.go.
+			runner.WithAuthProvider(login.authPacket),
 		},
 	})
 

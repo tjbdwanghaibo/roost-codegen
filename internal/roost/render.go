@@ -565,6 +565,7 @@ LDFLAGS := -X github.com/tjbdwanghaibo/roost-core/app/buildinfo.Version=$(VERSIO
 LOADTEST_ENDPOINT ?= 127.0.0.1:7000
 LOADTEST_COUNT ?= 10
 LOADTEST_METRICS_ADDR ?= 127.0.0.1:9300
+LOADTEST_ACCOUNT_NATS ?= nats://127.0.0.1:4222
 
 .PHONY: help sync project-upgrade deps-update roost-up codegen-up next doctor fmt fmt-check vet glsvet test test-race build run loadtest generate generate-changed check-generated config-check config-check-all player-tcp-enable player-tcp-disable id-check ci cicd-check release-check image-build compose-check k8s-render k8s-check deploy-shell rollback-shell deploy-docker rollback-docker deploy-k8s rollback-k8s dev-up dev-down dev-logs clean
 .PHONY: new-service add-mod new-access new-transport new-module new-protocol new-entity new-component new-handler new-lifecycle new-endpoint new-skill new-event new-table new-dao new-webroute new-errcode new-saga
@@ -604,7 +605,7 @@ run:
 	go run . $(SERVICE) --sid $(SID) --config $(CONFIG)
 loadtest:
 	@test -d cmd/loadtest || { echo "cmd/loadtest is not part of this project: generate with 'roost project new ... -template game-demo', or add your own robots under cmd/loadtest"; exit 1; }
-	go run ./cmd/loadtest -endpoint $(LOADTEST_ENDPOINT) -count $(LOADTEST_COUNT) -metrics-addr $(LOADTEST_METRICS_ADDR) $(LOADTEST_ARGS)
+	go run ./cmd/loadtest -endpoint $(LOADTEST_ENDPOINT) -count $(LOADTEST_COUNT) -metrics-addr $(LOADTEST_METRICS_ADDR) -account-nats $(LOADTEST_ACCOUNT_NATS) $(LOADTEST_ARGS)
 generate:
 	$(ROOST) generate
 generate-changed:

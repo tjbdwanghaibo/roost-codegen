@@ -47,6 +47,7 @@ func (component *StatsComponent) Owner() *World { return component.owner }
 type Stats struct {
 	PlayersEntered int64
 	MatchesFormed  int64
+	ExpGranted     int64
 }
 
 // RecordEnter counts one login.
@@ -61,8 +62,16 @@ func (component *StatsComponent) RecordMatch() {
 	dao.SetMatchesFormed(dao.GetMatchesFormed() + 1)
 }
 
-// Snapshot reads both counters under the lock.
+// RecordExp adds to the server-wide experience total. It is called from
+// AddExp, which holds the Player and the World at once — the reason the two
+// kinds have distinct lock ranks.
+func (component *StatsComponent) RecordExp(amount int64) {
+	dao := component.Owner().Dao()
+	dao.SetExpGranted(dao.GetExpGranted() + amount)
+}
+
+// Snapshot reads the counters under the lock.
 func (component *StatsComponent) Snapshot() Stats {
 	dao := component.Owner().Dao()
-	return Stats{PlayersEntered: dao.GetPlayersEntered(), MatchesFormed: dao.GetMatchesFormed()}
+	return Stats{PlayersEntered: dao.GetPlayersEntered(), MatchesFormed: dao.GetMatchesFormed(), ExpGranted: dao.GetExpGranted()}
 }

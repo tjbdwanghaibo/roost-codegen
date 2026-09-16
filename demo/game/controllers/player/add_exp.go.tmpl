@@ -14,6 +14,8 @@ import (
 
 // HandleAddExp: same boundary rule as HandleAddItem — coded errors become the
 // response, everything else collapses to CodeInternal and is logged here.
+// It is hand-written rather than scaffolded: `roost add endpoint` wires a
+// single-entity handler, and AddExp addresses two.
 func (controller *Controller) HandleAddExp(context *player_agent.Context, request *pb.AddExpRequest) (*pb.AddExpResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("add_exp endpoint: context and request are required")
@@ -25,7 +27,9 @@ func (controller *Controller) HandleAddExp(context *player_agent.Context, reques
 		return nil, fmt.Errorf("add_exp endpoint: %w", err)
 	}
 	sender := syncsender.NewAddExpSender(controller.NestClient())
-	gained, err := sender.Sync_AddExp(context.Context(), entityID, request.Amount)
+	// Two entity ids, one call: the handler declares two entity parameters,
+	// so the Sender takes an id for each and Nest locks both, World first.
+	gained, err := sender.MultiSync_AddExp(context.Context(), entityID, controller.WorldID(), request.Amount)
 	if err != nil {
 		code, reason := errcode.ClientError(err)
 		if code == errcode.CodeInternal {

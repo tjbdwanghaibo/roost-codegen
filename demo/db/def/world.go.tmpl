@@ -9,4 +9,7 @@ package dbdef
 type WorldDao struct {
 	PlayersEntered int64 `bson:"players_entered" dao:"persist,sync"`
 	MatchesFormed  int64 `bson:"matches_formed" dao:"persist,sync"`
+	// ExpGranted moves in the same Nest transaction as a Player's Exp: one
+	// WAL record, two entities, two lock ranks.
+	ExpGranted int64 `bson:"exp_granted" dao:"persist,sync"`
 }

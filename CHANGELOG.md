@@ -104,6 +104,14 @@
   **真实登录**：`cmd/loadtest -account-nats` 在压测进程里起 bus，用 account 的 typed 客户端 `Login → CreateRole → SelectRole`，
   以 `session:<player_id>:<token>` 握手，每次运行用新 open id。`UpsertServer` 刻意不在 account 的 RPC 接口上（控制面写入，game 无权做），
   所以新增操作员工具 `cmd/accountctl upsert-server`：用 Redis 凭据直接打开 account 的 store 写服务器记录，环境准备时跑一次。
+  第八批（交接文档 §7.3 / 7.7 + 收尾）：**实体锁档与两实体事务**——Player → `EntityCategoryPlayer`、World → `EntityCategoryWorld`
+  （demo 覆盖两个 entity.go，注释写清档位即锁序、档位编进 id、改档等于迁移）；`AddExp` 改为
+  `handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amount)`，World 累计 `ExpGranted`，两处变更一条 WAL 记录，
+  Sender 变为 `MultiSync_AddExp`，端点手写（`add endpoint` 只接单实体）。**删掉 `player:<id>` 调试凭据**：auth.go 只认会话票据，
+  `cmd/loadtest -account-nats` 默认 `nats://127.0.0.1:4222`、`make loadtest` 传 `LOADTEST_ACCOUNT_NATS`。**`demo-publish.yml`**：
+  main 上 demo / internal / cmd 有变更时，按 source-head 生成工程、build / vet / test / generate --check / id check 通过后
+  force-push 到本仓 `demo-generated` 分支（带 GENERATED.md 说明来源 SHA），给人一个可直接 clone 来读的完整工程。
+
   **成组推送**：`MatchFound`（10100，notify）协议，matchmaker Commit 后经传输层 `PushPlayer` 推给成员，场景改为 `wait_push`，
   `poll_match` 退为 `selector` 里的兜底。
 

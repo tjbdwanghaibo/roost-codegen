@@ -16,21 +16,16 @@ import (
 	svcaccount "github.com/tjbdwanghaibo/roost-kit/service/account"
 )
 
-// Two credential forms are accepted on the socket.
+// The credential on the socket is a session ticket:
 //
-//	session:<player_id>:<token>   the real one — the token was issued by the
-//	                              account service (Login → CreateRole →
-//	                              SelectRole) and is validated there.
-//	player:<id>                   a development shortcut that trusts the id.
+//	session:<player_id>:<token>
 //
-// THE SECOND FORM IS NOT AUTHENTICATION. It exists so the demo can be driven
-// from a terminal with nothing but a TCP client. Delete demoTokenPrefix and
-// the branch that reads it before this project takes outside traffic; the
-// first form is what stays.
-const (
-	sessionTokenPrefix = "session:"
-	demoTokenPrefix    = "player:"
-)
+// The token was issued by the account service (Login → CreateRole →
+// SelectRole) and is validated there; the principal is built from the role
+// the account service returns, never from the id the socket claimed. There
+// is no debug shortcut: a credential the server does not verify is not a
+// credential, and the load test logs in for real (cmd/loadtest -account-nats).
+const sessionTokenPrefix = "session:"
 
 type accountsHandle struct{ accounts svcaccount.Accounts }
 
@@ -64,9 +59,6 @@ func (authenticator *applicationAuthenticator) Authenticate(ctx context.Context,
 	if rest, ok := strings.CutPrefix(token, sessionTokenPrefix); ok {
 		return authenticator.authenticateSession(ctx, rest)
 	}
-	if rest, ok := strings.CutPrefix(token, demoTokenPrefix); ok {
-		return demoPrincipal(rest)
-	}
 	return gateway.Principal{}, gateway.ErrUnauthenticated
 }
 
@@ -93,14 +85,6 @@ func (authenticator *applicationAuthenticator) authenticateSession(ctx context.C
 		return gateway.Principal{}, gateway.ErrUnauthenticated
 	}
 	return newPrincipal(role.PlayerID), nil
-}
-
-func demoPrincipal(rest string) (gateway.Principal, error) {
-	playerID, err := strconv.ParseInt(rest, 10, 64)
-	if err != nil || playerID <= 0 {
-		return gateway.Principal{}, gateway.ErrUnauthenticated
-	}
-	return newPrincipal(playerID), nil
 }
 
 // newPrincipal mints a SessionID unique per connection: the access layer uses

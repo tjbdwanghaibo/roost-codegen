@@ -10,6 +10,7 @@ type WorldStatsResponse struct {
 	Reason         string `pb:"2"`
 	PlayersEntered int64  `pb:"3"`
 	MatchesFormed  int64  `pb:"4"`
+	ExpGranted     int64  `pb:"5"`
 }
 
 //roost:protocol group=game handler=player

@@ -1,14 +1,25 @@
 package handler
 
-import player "{{MODULE}}/game/entities/player"
+import (
+	player "{{MODULE}}/game/entities/player"
+	world "{{MODULE}}/game/entities/world"
+)
 
-// handlerAddExp is the demo's second write transaction and the start of its
-// event chain: the component moves Exp and Level and emits a level-up effect
-// on this same transaction; after commit the game service consumes the
-// effect and sends a reward mail. The return value is the number of levels
-// gained, carried back through the generated Sender.
+// handlerAddExp is a two-entity transaction: the Player gains experience and
+// levels up, the World counts the experience granted, and both changes land
+// in one WAL record — either both are durable or neither is. Nest locks the
+// two by rank, World (2) before Player (4), which is why the demo moved the
+// kinds off the scaffold's EntityCategoryOther (see the entity files). The
+// level-up effect rides on the same transaction. The return value is the
+// number of levels gained, carried back through the generated Sender
+// (MultiSync_AddExp, one id per entity parameter).
 //
 //roost:nest rollback=undo durability=strict
-func handlerAddExp(target player.IProfileEntity, amount int64) (int32, error) {
-	return target.ProfileComp().AddExp(amount)
+func handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amount int64) (int32, error) {
+	gained, err := target.ProfileComp().AddExp(amount)
+	if err != nil {
+		return 0, err
+	}
+	stats.StatsComp().RecordExp(amount)
+	return gained, nil
 }

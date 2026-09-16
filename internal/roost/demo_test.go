@@ -157,10 +157,11 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if endpoint := read("game/controllers/player/add_item.go"); !strings.Contains(endpoint, "request.ItemID") || !strings.Contains(endpoint, "request.Count") {
 		t.Errorf("endpoint does not pass the request through:\n%s", endpoint)
 	}
-	// The demo replaces the fail-closed skeleton; `roost config` refuses to
-	// enable player TCP while the skeleton is still in place.
-	if auth := read("internal/access/player/tcp/auth.go"); !strings.Contains(auth, demoTokenPrefixName) {
-		t.Errorf("auth.go is not the demo authenticator:\n%s", auth)
+	// The demo replaces the fail-closed skeleton with a session-ticket
+	// authenticator and ships no debug credential: a token the server does
+	// not verify is not a credential.
+	if auth := read("internal/access/player/tcp/auth.go"); !strings.Contains(auth, sessionTokenPrefixName) || strings.Contains(auth, `"player:"`) {
+		t.Errorf("auth.go is not the session-ticket authenticator, or still carries the debug shortcut:\n%s", auth)
 	}
 	// Persistent state must go through generated mutators, not raw fields,
 	// and validation reads the item table through the generated accessor.
@@ -267,8 +268,20 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if spec := read("loadtest/scenarios/demo.yaml"); !strings.Contains(spec, "action: wait_push") || !strings.Contains(spec, "msg: 10100") {
 		t.Errorf("scenario does not wait for the MatchFound push:\n%s", spec)
 	}
-	if command := read("cmd/loadtest/main.go"); !strings.Contains(command, "svcaccount.NewBusClient(") || !strings.Contains(command, `"session:%d:%s"`) || !strings.Contains(command, ".SelectRole(") {
-		t.Errorf("loadtest cannot log in through the account service:\n%s", command)
+	if command := read("cmd/loadtest/main.go"); !strings.Contains(command, "svcaccount.NewBusClient(") || !strings.Contains(command, `"session:%d:%s"`) || !strings.Contains(command, ".SelectRole(") || strings.Contains(command, `"player:"`) {
+		t.Errorf("loadtest does not log in through the account service only:\n%s", command)
+	}
+	// Lock ranks and the two-entity transaction: both kinds carry their
+	// category on the marker, and the generated Sender for AddExp takes one
+	// id per entity parameter.
+	if entityFile := read("game/entities/player/entity.go"); !strings.Contains(entityFile, "category=entity.EntityCategoryPlayer") {
+		t.Errorf("Player is not in EntityCategoryPlayer:\n%s", entityFile)
+	}
+	if entityFile := read("game/entities/world/entity.go"); !strings.Contains(entityFile, "category=entity.EntityCategoryWorld") {
+		t.Errorf("World is not in EntityCategoryWorld:\n%s", entityFile)
+	}
+	if sender := read("game/handler/syncsender/add_exp_nest_gen.go"); !strings.Contains(sender, "MultiSync_AddExp(ctx context.Context, target int64, stats int64, amount int64)") {
+		t.Errorf("AddExp Sender is not the two-entity form:\n%s", sender)
 	}
 	if operator := read("cmd/accountctl/main.go"); !strings.Contains(operator, ".UpsertServer(") || !strings.Contains(operator, `"roost:planet:account"`) {
 		t.Errorf("accountctl does not register a server on the project's account store:\n%s", operator)
@@ -367,10 +380,10 @@ func TestDemoTemplateFollowsTheGameServiceName(t *testing.T) {
 	}
 }
 
-// demoTokenPrefixName is the identifier the demo authenticator declares. The
-// test asserts on the name rather than the literal so renaming the credential
-// format does not silently pass.
-const demoTokenPrefixName = "demoTokenPrefix"
+// sessionTokenPrefixName is the identifier the demo authenticator declares.
+// The test asserts on the name rather than the literal so renaming the
+// credential format does not silently pass.
+const sessionTokenPrefixName = "sessionTokenPrefix"
 
 // Every generated Makefile carries a loadtest target. The target guards on
 // cmd/loadtest existing, so the game template — which ships no load test —
@@ -382,7 +395,7 @@ func TestGeneratedMakefileHasLoadtestTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(plan["Makefile"].Body)
-	for _, want := range []string{"\nloadtest:\n", "LOADTEST_ENDPOINT ?= ", "LOADTEST_COUNT ?= ", "test -d cmd/loadtest", "go run ./cmd/loadtest -endpoint $(LOADTEST_ENDPOINT) -count $(LOADTEST_COUNT)"} {
+	for _, want := range []string{"\nloadtest:\n", "LOADTEST_ENDPOINT ?= ", "LOADTEST_COUNT ?= ", "LOADTEST_ACCOUNT_NATS ?= ", "test -d cmd/loadtest", "go run ./cmd/loadtest -endpoint $(LOADTEST_ENDPOINT) -count $(LOADTEST_COUNT)", "-account-nats $(LOADTEST_ACCOUNT_NATS)"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("Makefile lacks %q", want)
 		}

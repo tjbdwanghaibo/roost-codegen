@@ -1,0 +1,32 @@
+package player
+
+import (
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+)
+
+const EntityKindPlayer entity.EntityKind = 1
+
+// IPlayerEntity is the lock-safe business view used by Nest handlers.
+type IPlayerEntity interface{ entity.IThreadSafeEntity }
+
+// Category is the kind's lock rank; ranks are acquired lowest first. The
+// demo's AddExp locks a World (rank 2) and a Player (rank 4) in one
+// transaction, so the two kinds must sit in different ranks, in the order the
+// framework is designed around: World before Player. The scaffold's default,
+// EntityCategoryOther, is deliberately the rank from which nothing further
+// can be locked — safe for a kind whose ordering nobody has decided yet.
+//
+// Changing a kind's category changes every one of its entity ids (the rank
+// is encoded in the id), so this is decided once, before the first document
+// is persisted; afterwards it is a data migration.
+//
+//roost:entity id=1 entityKind=EntityKindPlayer category=entity.EntityCategoryPlayer
+type Player struct {
+	*entity.EntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	profile *ProfileComponent `comp:"CompTypeProfile"`
+	bag     *BagComponent     `comp:"CompTypeBag"`
+	dao     *db.PlayerDao     `dao:"player"`
+}

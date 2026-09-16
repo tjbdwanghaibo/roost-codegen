@@ -99,21 +99,21 @@ World 有了自己的 DAO（`PlayersEntered` / `MatchesFormed`）和 `Stats` 组
 ## 机器人压测 = 回归测试
 
 ```bash
-make loadtest LOADTEST_COUNT=20                                   # 等价于下面这行
-go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20 -metrics-addr 127.0.0.1:9300
-go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20 -account-nats nats://127.0.0.1:4222   # 真实登录
+go run ./cmd/accountctl -redis 127.0.0.1:6379 upsert-server -sid 1000   # 环境准备时一次：account 得知道这台服
+make loadtest LOADTEST_COUNT=20                                           # 等价于下面这行
+go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20 -metrics-addr 127.0.0.1:9300 -account-nats nats://127.0.0.1:4222
 ```
 
-`-account-nats` 给值时机器人走真实凭据：在压测进程里起一条 bus，用 account 的 typed 客户端依次 `Login`（demo 渠道，
-凭据 `demo:<open_id>`）→ `CreateRole`（在 `-server-id` 上）→ `SelectRole`，再以 `session:<player_id>:<token>` 握手；
-每次运行用新的 open id（账号在一个服务器上只能有一个角色，且没有角色列表可查）。不给 `-account-nats` 则仍用 `player:<id>` 捷径。
+机器人走真实凭据：在压测进程里起一条 bus，用 account 的 typed 客户端依次 `Login`（demo 渠道，凭据 `demo:<open_id>`）→
+`CreateRole`（在 `-server-id` 上）→ `SelectRole`，再以 `session:<player_id>:<token>` 握手；每次运行用新的 open id
+（账号在一个服务器上只能有一个角色，且没有角色列表可查）。
 
 `CreateRole` 会拒绝未知或未开放的服务器，而 **`UpsertServer` 刻意不在 account 的 RPC 接口上**：登记 / 开关服务器改变的是
 所有玩家能登录什么，game 进程无权做，放在 Login 同一条总线上等于任何能到达 account 的进程都能关服。所以 demo 给了一个
 操作员工具 `cmd/accountctl`：用 Redis 凭据直接打开 account 服务自己的 store 写入服务器记录——
 `go run ./cmd/accountctl -redis 127.0.0.1:6379 upsert-server -sid 1000`，环境准备时跑一次。
 
-每个机器人：`connect`（握手凭据）→ `enter_game`（GetOrCreate Player）→ `add_item` → `add_exp`（升级，触发奖励邮件）
+每个机器人：`connect`（握手凭据是 account 签发的票据）→ `enter_game`（GetOrCreate Player）→ `add_item` → `add_exp`（升级，触发奖励邮件）
 → `join_queue` → `wait_push` 等服务端推送的 `MatchFound`（msg 10100，10s 超时后退回每 250ms `poll_match`，`selector` 节点）
 → `world_stats`（两个计数都得大于零）。
 任何一步返回非零 code、或 `error_rate` / `p95` 超阈值，进程以非零码退出并打印 JSON 报告。**`-count` 要给偶数**：duel 两人一组。
@@ -130,6 +130,66 @@ go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20 -account-nats nats://12
 - **成组后推送**：matchmaker 在 Commit 成功后经传输层 `Runtime.PushPlayer` 给每个成员推 `MatchFound`（协议里是一个没有请求的
   notify 方法，生成的 bind 注册它的编码器）。推送到达的是该玩家**所有**已认证会话；玩家已下线时推送失败只记 debug 日志——票据里
   仍有 match_id，`PollMatch` 是兜底，推送是捷径而不是事实来源。
+
+## 可观测性
+
+`deploy/dev/observability/` 是一套 Prometheus + Grafana：compose、抓取配置（三个进程的 ops 端口 + 压测的 `-metrics-addr`）、
+预置数据源与仪表盘 "Roost game-demo"。仪表盘按链路分组：玩家接入 → Nest 分发与锁 → WAL 落库 → 事件链与配置 →
+跨服务 RPC → 机器人。每个指标对应链路上的哪一步、该看什么，写在同目录 `README.md`。它与生成的 `deploy/dev/docker-compose.yaml`
+分开：那个文件会被重生成，观测是可选的。
+
+## 本地实跑
+
+用 roost-kit 的隔离环境（`scripts/integration/dataengine-env.sh up`：Mongo 副本集 27117–27119、NATS JetStream 14222–14224、Redis 16379）
+跑过整条链。在生成的工程里复制一份 `configs/service/config.game.yaml`，改四处：`mongo.uri` 指向副本集、`nats.url`、
+`dataengine.effects.max_bytes` 调小（隔离集群只预留了 1GB 存储，默认 8GB 会报 `insufficient storage`）、`player_access.tcp.addr`；
+mail 的配置同样改 `redis.addr` 与 `nats.url`。然后：
+
+```bash
+go run . game --sid 1000 --config configs/service/config.game.smoke.yaml &
+go run . mail --sid 1000 --config configs/service/config.mail.smoke.yaml &
+go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 5
+```
+
+看四处：`db.player` 在 DAO 标记写的 `db=game` 库里（不是 `dataengine.database`）；重启 game 再跑一轮，items 与 level 在原值上累加；
+mail 的 Redis 里每个升级的玩家一封 `box:<id>`，`send:<EffectID>` 是幂等键；`db.world` 的 `players_entered` / `matches_formed` 随每轮增长。
+
+**给每次实跑一个独立的 `nats.prefix`**（三个进程一致，例如 `planetsmoke`）。共享的 JetStream 集群里若残留了别的测试建的流、
+且它的 subject 过滤覆盖 `roost.rpc.>`，JetStream 会用 PubAck 回应每一个 RPC 请求，与真正的服务端抢先——先到的赢，于是
+读调用大面积得到 `bus: unsupported rpc response version 0`（PubAck 被当作响应信封解码），写调用偶尔成功。这一次就是 kit
+集成测试留下的 `ROOST_IT_RPC_REQ_*` 流；换前缀即可，无需删流。
+
+## account 的 collaborators
+
+`game` 模板给的 `Verifier` / `Allocator` 默认全拒绝（这是对的：没有校验的身份和会重复的 id 都不该有默认值）。
+demo 换成能跑的版本：
+
+- `Verifier` 只认 `demo` 渠道，凭据必须是 `demo:<open_id>`，其它渠道一律 fail-closed，返回的是它确认过的身份而不是提交
+  上来的那份。**这不是身份校验**，只是把"该做的两件事"做了个样子，上线前换成对平台的真实调用。
+- `Allocator` 用 account 服务自己 Redis 里的一个 `INCR` 计数器——持久、跨副本共享，满足 allocator 契约。它通过
+  `account.RegistryBound`（roost-kit）在 `Provide` 里拿到 registry 再查 Redis 客户端：collaborator 是在 app 存在之前
+  构造的，没有这个钩子就拿不到任何持久的东西。
+
+## auth.go：会话票据
+
+`internal/access/player/tcp/auth.go` 只认 `session:<player_id>:<token>`：token 由 account 服务签发（Login → CreateRole → SelectRole），
+这里经 account 客户端 `ValidateSession` 校验，principal 用的是 account 返回的角色而不是 socket 声称的 id。拿到 account 客户端靠
+生成的 TCP 传输层的 `RegistryBound` 钩子：authenticator 在 `Init` 里只有 viper 配置，Mod 在 `Provide` 里把 registry 交给它。
+**没有调试捷径**：服务端不校验的凭据不是凭据，压测也走真实登录（下文）。生成器默认给的是 fail-closed 骨架，demo 替换掉它——
+这也是 `roost config` 启用 TCP 时会检查的那个文件。脚手架同时把 `player_access.tcp.enabled` 置为 true，
+`roost project doctor -workflow player-tcp` 在刚生成的工程上全绿。
+
+## 实体锁档与跨实体事务
+
+`entity.EntityCategory` 的值就是锁的获取顺序（低的先锁）：Remote(1) → World(2) → PlayerScoped(3) → Player(4) → Other(5)。
+生成器默认把新实体放在 Other——"持有它之后什么都锁不了"，对还没决定顺序的实体是安全的。demo 把 Player 放到
+`EntityCategoryPlayer`、World 放到 `EntityCategoryWorld`，因为 `AddExp` 是一个**两实体事务**：
+`handlerAddExp(target player.IProfileEntity, stats world.IStatsEntity, amount int64)`——Player 加经验升级、World 累计
+`ExpGranted`，两处变更进同一条 WAL 记录，要么都落库要么都不。Nest 按档位锁：World 先、Player 后。生成的 Sender 变成
+`MultiSync_AddExp(ctx, target, stats, amount)`，一个实体一个 id；`roost add endpoint` 只接单实体 handler，所以这个端点手写。
+
+**档位编进实体 id**：改一个 kind 的 category 会改它所有实体的 id，已落库的文档全部失配。所以这是在第一条文档落库之前
+决定一次的事；之后再改等于一次数据迁移。
 
 ## 可观测性
 
