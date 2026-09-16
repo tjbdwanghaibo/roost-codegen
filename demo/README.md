@@ -87,8 +87,8 @@ PollMatch 端点 ─ Ticket / Match ─▶ match 服务（带 subject，服务�
 - `game/matchmaking/queue.go` 是游戏对 match 说的话：duel 队列两人一组、subject kind 是 `player`。
 - 所有对 match 的调用都从端点或普通 goroutine 发出，**从不在实体锁里**——World 只在 Commit 成功之后经自己的 Nest handler 记一笔。
 - `configs/service/config.match.yaml` 的 `sweep_queues` 列出 duel 队列：match 进程只负责扫过期票，不负责成组。
-- 一个发现：kit 的 match Mod 接受 `Grouping` collaborator 并写明"这是整个匹配策略"，但 store 里没有任何路径调用它；
-  成组是调用方驱动的。demo 的 matchmaker 直接调 `FirstComeGrouping{}.Group`，这才是那个接口的用法。
+- `Grouping` 是调用方的工具，不是 match 服务的配置：kit 的 match Mod 曾接受一个 `Grouping` collaborator 却从不执行它
+  （RR-20260916-05，已删掉该参数）。demo 的 matchmaker 直接调 `FirstComeGrouping{}.Group`，这是那个接口唯一的用法。
 
 ## World 的职责
 

@@ -87,7 +87,7 @@ func TestGameTemplateRendersHostingAndClientWiring(t *testing.T) {
 		`svcmail.NewMod(serviceMail.Broadcast(), serviceMail.Metrics())`,
 		`svcaccount.NewMod(serviceAccount.Verifier(), serviceAccount.Allocator(), serviceAccount.NameRules(), serviceAccount.Metrics())`,
 		`svcchat.NewMod(serviceChat.Policy(), serviceChat.Bodies(), serviceChat.System(), serviceChat.Rules(), serviceChat.Metrics())`,
-		`svcmatch.NewMod(serviceMatch.Grouping(), serviceMatch.Metrics())`,
+		`svcmatch.NewMod(serviceMatch.Metrics())`,
 		`kitredis.NewRedisMod()`, `kitnats.NewNatsMod(nil)`,
 		`a.RegisterServer(app.ServiceName("game"), serviceGame.New()`,
 		`svcaccount.NewClientMod()`, `svcmail.NewClientMod()`, `svcmatch.NewClientMod()`, `svcchat.NewClientMod()`,

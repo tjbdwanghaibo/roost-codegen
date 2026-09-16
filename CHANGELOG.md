@@ -15,6 +15,8 @@
 
 ### Changed
 
+- **match 服务不再生成 `Grouping()` collaborator，bootstrap 生成 `svcmatch.NewMod(serviceMatch.Metrics())`**（U-0217，RR-20260916-05，随 kit 的破坏性改动同版本升级）。kit 的 match Mod 曾接受一个从不执行的匹配策略参数，生成的 collaborators 注释还让项目"在这里替换成自己的规则"——一个静默失效的教学入口。现在 collaborators 里是一段说明：成组由游戏进程的 matchmaker 驱动（Candidates → `match.Grouping` → Commit），指向 game-demo 的 `internal/service/<game>/matchmaker.go`。已有工程 `internal/service/match/collaborators.go` 是业务所有、不回写，其中的 `Grouping()` 留作无引用函数即可；`project sync` 会重写 bootstrap 的 `NewMod` 调用。
+
 - **生成的 player TCP 传输层新增 `RegistryBound` 钩子**：authenticator 若实现 `BindRegistry(*app.Registry) error`，Mod 在
   `Provide` 里（listener 启动之前）把进程的 registry 交给它，返回错误则进程不启动。此前 authenticator 只在 `Init` 拿到 viper
   配置，拿不到任何进程内能力——要用 account 客户端校验会话票据就没有入口。`server_gen.go` 是生成物，`project sync` 即得到；

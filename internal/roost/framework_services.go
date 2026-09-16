@@ -86,10 +86,12 @@ func Broadcast() mail.Deliverer { return nil }
 	},
 	"match": {
 		Package: "match", Interface: "Matchmaker", Depends: []string{"redis", "nats"},
-		ModArgs: []string{"Grouping()", "Metrics()"},
-		Collabs: `// Grouping decides which waiting tickets form a match. nil selects the
-// default first-come grouping; replace it with the project's own rules.
-func Grouping() match.Grouping { return nil }
+		ModArgs: []string{"Metrics()"},
+		Collabs: `// The match service takes no matchmaking policy: it holds the queue and makes
+// Commit atomic, and deciding which waiting tickets form a match is the game's
+// job — a matchmaker in the game process reads Candidates, applies a
+// match.Grouping (FirstComeGrouping, ScoreWindowGrouping or its own) and
+// Commits. See the game-demo template's internal/service/<game>/matchmaker.go.
 `,
 		ConfigFunc: func(project string) string {
 			return "match:\n  key_prefix: roost:" + project + ":match\n  ticket_ttl: 60s\n  sweep_queues: []\n"
