@@ -1,0 +1,30 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	player_agent "{{MODULE}}/game/player_agent"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// HandleEnterGame makes sure the authenticated player has a Player Entity.
+// A Nest handler addresses an Entity that exists; a first login has none, so
+// this endpoint goes through the lifecycle instead of a Sender. GetOrCreate is
+// safe to race: two logins of the same new player both end holding the one
+// Entity, and only one of them sees Created.
+func (controller *Controller) HandleEnterGame(context *player_agent.Context, request *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("enter_game endpoint: context and request are required")
+	}
+	_, created, err := controller.Players().GetOrCreate(context.Context(), context.PlayerID)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("enter_game failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.EnterGameResponse{PlayerID: context.PlayerID, Created: created}, nil
+}

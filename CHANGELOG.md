@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`roost add endpoint` 生成的端点把 `context.PlayerID` 直接当实体 id 交给 Sender**。Nest 寻址的是完整实体 id（unique id + kind
+  + 锁档），`PlayerID` 只是 unique id，第一条真实请求就在 Nest 里死于 `entity id: invalid: kind N category is not registered`；
+  脚手架能编译，此前没有任何一步真的把它跑起来——是 game-demo 的机器人压测第一次实跑发现的。端点现在解析 Nest handler 第一个形参的
+  `<pkg>.I<Component>Entity`，从 handler 文件的 import 找到实体包，生成 `entity.BuildEntityID(context.PlayerID, <pkg>.EntityKind<Name>)`
+  再调 Sender（与 `add lifecycle` 的写法一致）。`TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint` 钉住修前红。
+  已有工程的端点文件是业务所有、不会被回写，需按此改一行；未改的工程症状即上面那条错误（见 roost-core TROUBLESHOOTING）。
+
 ### Changed
 
 - **生成的 player TCP 传输层新增 `RegistryBound` 钩子**：authenticator 若实现 `BindRegistry(*app.Registry) error`，Mod 在
@@ -62,6 +71,16 @@
   （`{{GAME_SERVICE}}` / `{{GAME_SERVICE_PKG}}` 占位符），`TestDemoTemplateFollowsTheGameServiceName` 钉住。错误码增至 100005。
   脚手架多一类"运行"步骤：`player_access.tcp.enabled` 置 true（等价 `roost config enable player-tcp`），
   `roost project doctor -workflow player-tcp` 在刚生成的工程上全绿，测试直接调 `checkPlayerTCPWorkflow` 钉住。
+  第四批：**机器人压测 = 回归测试**。`cmd/loadtest`（`go run ./cmd/loadtest -endpoint … -count N`）用 `roost-core/robot`
+  的 runner / 场景树 / `loadtest.Manager` 阈值门跑 `loadtest/scenarios/demo.yaml`：connect → enter_game → add_item → add_exp，
+  任一步非零 code 或 `error_rate` / `p95` 超阈值即失败并打印 JSON 报告。新增 `loadtest/playertcp`：生成的 player TCP 帧的
+  robot 传输适配器（16 字节大端帧 + 握手 + 严格递增序号 ↔ core robot 的 12 字节小端帧）。新增 `EnterGame` 协议（msg 10002）
+  与手写端点，控制器改为同时持有 `PlayerLifecycle`，`GetOrCreate` 补上"第一次登录没有 Player"这一环——此前 Nest handler 对
+  不存在的实体会返回 ErrEntityNotFound。生成工程的 `cmd/loadtest` 随 CI 一起编译。
+  本批首次在本地真实基础设施（隔离的 Mongo 副本集 / NATS JetStream 集群 / Redis）上跑通整条链：game 进程 + mail 进程，
+  5 个机器人 connect → enter_game → add_item → add_exp 全部成功，Mongo 里 `game.player` 落库，进程重启后再跑一轮 items 1→2、
+  level 1→3；升级 effect 经 JetStream 投递到消费者，mail 服务 Redis 里出现每个玩家的奖励邮件与以 EffectID 为键的幂等记录。
+  实跑同时发现并修掉了上面 Fixed 里的端点 id 缺陷。
 
 - **生成物自带守卫测试**（U-0124）。远端托管实体的 `*_gen_wire.go` 旁生成 `*_gen_wire_test.go`，在业务工程里钉住生成代码内的三条远端提交守卫
   （无事务内持久化变更、DAO 级删除、别的实体的确认）；nest sender 包旁生成 `*_nest_gen_test.go`，钉住 nil 客户端 → `nest.ErrNestStopped`。

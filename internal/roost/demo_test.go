@@ -215,6 +215,24 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if endpoint := read("game/controllers/player/add_exp.go"); !strings.Contains(endpoint, "errcode.ClientError(err)") {
 		t.Errorf("add_exp endpoint does not translate errors at the boundary:\n%s", endpoint)
 	}
+	// The load test: the controller can create Players, the EnterGame message
+	// is bound, the transport adapter and the scenario ship, and the command
+	// checks every response code so a coded failure fails the run.
+	if controller := read("game/controllers/player/controller.go"); !strings.Contains(controller, "lifecycle.PlayerFromRegistry(") {
+		t.Errorf("controller does not hold the Player lifecycle:\n%s", controller)
+	}
+	if bind := read("game/protocol_handlers/player/protocol_gen.go"); !strings.Contains(bind, "HandleEnterGame") {
+		t.Errorf("EnterGame is not bound to the controller:\n%s", bind)
+	}
+	if conn := read("loadtest/playertcp/conn.go"); !strings.Contains(conn, "transport.RegisterDialer(") {
+		t.Errorf("playertcp does not register a robot dialer:\n%s", conn)
+	}
+	if spec := read("loadtest/scenarios/demo.yaml"); !strings.Contains(spec, "action: enter_game") || !strings.Contains(spec, "action: add_exp") {
+		t.Errorf("demo scenario lost a step:\n%s", spec)
+	}
+	if command := read("cmd/loadtest/main.go"); !strings.Contains(command, "loadtest.Threshold{") || !strings.Contains(command, "coded(resp.Code, resp.Reason)") {
+		t.Errorf("loadtest command lacks thresholds or response-code checks:\n%s", command)
+	}
 	// The whole player-tcp workflow, as doctor judges it: access declared,
 	// transport generated, authenticator real, listener enabled.
 	manifest, err := LoadManifest(target)

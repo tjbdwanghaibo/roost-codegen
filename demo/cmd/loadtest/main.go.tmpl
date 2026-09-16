@@ -1,0 +1,231 @@
+// Command loadtest drives this project's player TCP listener with robots.
+//
+//	go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20
+//
+// It is a load test and the demo's regression test in one: every robot logs
+// in with the terminal credential, creates or loads its Player, adds an item
+// and levels up, and the run fails on any non-zero response code or on a
+// threshold breach. The runner, scenario tree, action registry and threshold
+// gate are roost-core/robot; this file only registers the project's messages
+// and the transport that speaks the generated server's frame.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"syscall"
+	"time"
+
+	"{{MODULE}}/loadtest/playertcp"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/action"
+	"github.com/tjbdwanghaibo/roost-core/robot/loadtest"
+	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
+	"github.com/tjbdwanghaibo/roost-core/robot/runner"
+	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+)
+
+const profileName = "demo"
+
+func main() {
+	endpoint := flag.String("endpoint", "127.0.0.1:7000", "player TCP address")
+	count := flag.Int("count", 10, "robot population")
+	duration := flag.Duration("duration", 0, "bound the run; 0 lets every robot finish its scenario once")
+	scenarioDir := flag.String("scenarios", "loadtest/scenarios", "directory of scenario YAML files")
+	scenarioName := flag.String("scenario", "demo", "scenario to run")
+	firstPlayerID := flag.Int64("first-player-id", 900_000, "robot i logs in as this id + i")
+	maxErrorRate := flag.Float64("max-error-rate", 0, "threshold: failed robots / finished robots")
+	maxP95 := flag.Float64("max-p95", 0.5, "threshold: scenario cost p95, seconds")
+	flag.Parse()
+
+	if err := run(*endpoint, *count, *duration, *scenarioDir, *scenarioName, *firstPlayerID, *maxErrorRate, *maxP95); err != nil {
+		fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run(endpoint string, count int, duration time.Duration, scenarioDir, scenarioName string, firstPlayerID int64, maxErrorRate, maxP95 float64) error {
+	playertcp.MustRegister()
+
+	protocols := protocol.NewRegistry(pbCodec{})
+	actions := action.NewRegistry()
+	scenarios := scenario.NewRegistry()
+	registerCalls(actions, protocols)
+	if err := loadScenarios(scenarios, scenarioDir); err != nil {
+		return err
+	}
+
+	manager := loadtest.New(loadtest.Config{
+		Profiles: map[string]loadtest.Profile{
+			profileName: {
+				Run: runner.Config{
+					Executor: runner.ExecutorPool,
+					Count:    count,
+					Scenario: scenarioName,
+					Duration: duration,
+					Transport: transport.Config{
+						Type:     playertcp.TransportType,
+						Endpoint: endpoint,
+					},
+				},
+				Thresholds: []loadtest.Threshold{
+					{Metric: "error_rate", Max: maxErrorRate},
+					{Metric: "p95", Max: maxP95},
+				},
+			},
+		},
+		RunnerOptions: []runner.Option{
+			runner.WithActionRegistry(actions),
+			runner.WithScenarioRegistry(scenarios),
+			runner.WithProtocolRegistry(protocols),
+			runner.WithIdentityProvider(func(index int) (int64, error) {
+				return firstPlayerID + int64(index), nil
+			}),
+			// The terminal credential from internal/access/player/tcp/auth.go.
+			// A real load test would log in through the account service and
+			// present session:<id>:<token> here instead.
+			runner.WithAuthProvider(func(rb *robot.Context) (*transport.Packet, error) {
+				return playertcp.AuthPacket("player:" + strconv.FormatInt(rb.PlayerID, 10)), nil
+			}),
+		},
+	})
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	started, err := manager.Start(ctx, loadtest.StartRequest{Profile: profileName})
+	if err != nil {
+		return err
+	}
+	snapshot, err := waitForRun(ctx, manager, started.RunID)
+	if err != nil {
+		return err
+	}
+	report, _ := json.MarshalIndent(snapshot, "", "  ")
+	fmt.Println(string(report))
+	if snapshot.State != loadtest.StateFinished {
+		return fmt.Errorf("run %s ended %s (%s)", snapshot.RunID, snapshot.State, snapshot.StopReason)
+	}
+	return nil
+}
+
+// registerCalls turns the project's request/response pairs into actions a
+// scenario can name. Request fields fill from the scenario param (snake_case
+// of the json tag) or the blackboard. The generated pb types carry no
+// GetCode(), so each call checks Code itself: a coded failure from the server
+// is a failed robot, which is what makes this a regression test.
+func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
+	action.MustRegisterCall[pb.EnterGameRequest, pb.EnterGameResponse](actions, protocols, "enter_game", msgid.MsgEnterGame,
+		action.OnResp(func(_ *robot.Context, resp *pb.EnterGameResponse) error {
+			return coded(resp.Code, resp.Reason)
+		}))
+	action.MustRegisterCall[pb.AddItemRequest, pb.AddItemResponse](actions, protocols, "add_item", msgid.MsgAddItem,
+		action.OnResp(func(_ *robot.Context, resp *pb.AddItemResponse) error {
+			return coded(resp.Code, resp.Reason)
+		}))
+	action.MustRegisterCall[pb.AddExpRequest, pb.AddExpResponse](actions, protocols, "add_exp", msgid.MsgAddExp,
+		action.OnResp(func(_ *robot.Context, resp *pb.AddExpResponse) error {
+			return coded(resp.Code, resp.Reason)
+		}))
+}
+
+func coded(code int32, reason string) error {
+	if code == 0 {
+		return nil
+	}
+	return fmt.Errorf("response code %d: %s", code, reason)
+}
+
+// loadScenarios registers every YAML file in dir.
+func loadScenarios(registry *scenario.Registry, dir string) error {
+	files, err := filepath.Glob(filepath.Join(dir, "*.yaml"))
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return fmt.Errorf("no scenario files in %s", dir)
+	}
+	sort.Strings(files)
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			return err
+		}
+		if err := scenario.RegisterSpec(registry, raw); err != nil {
+			return fmt.Errorf("%s: %w", file, err)
+		}
+	}
+	return nil
+}
+
+func waitForRun(ctx context.Context, manager *loadtest.Manager, runID string) (loadtest.RunSnapshot, error) {
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		for _, run := range manager.History(loadtest.HistoryRequest{Limit: 10}).Runs {
+			if run.RunID == runID {
+				return run, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			_, _ = manager.Stop(context.Background(), loadtest.StopRequest{RunID: runID, Reason: "interrupted"})
+			return loadtest.RunSnapshot{}, errors.New("interrupted")
+		case <-ticker.C:
+		}
+	}
+}
+
+// pbCodec routes the robot's generic Marshal/Unmarshal to the generated,
+// typed pb functions. Only the messages the scenarios use are listed; a new
+// call needs a case here — the compiler cannot check it, the first run does.
+type pbCodec struct{}
+
+func (pbCodec) Marshal(value any) ([]byte, error) {
+	switch message := value.(type) {
+	case *pb.EnterGameRequest:
+		return pb.MarshalEnterGameRequest(message)
+	case *pb.AddItemRequest:
+		return pb.MarshalAddItemRequest(message)
+	case *pb.AddExpRequest:
+		return pb.MarshalAddExpRequest(message)
+	default:
+		return nil, fmt.Errorf("pb codec: no marshal for %T", value)
+	}
+}
+
+func (pbCodec) Unmarshal(data []byte, target any) error {
+	switch message := target.(type) {
+	case *pb.EnterGameResponse:
+		decoded, err := pb.UnmarshalEnterGameResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.AddItemResponse:
+		decoded, err := pb.UnmarshalAddItemResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.AddExpResponse:
+		decoded, err := pb.UnmarshalAddExpResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	default:
+		return fmt.Errorf("pb codec: no unmarshal for %T", target)
+	}
+	return nil
+}

@@ -9,7 +9,9 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -222,7 +224,7 @@ func addProtocolEndpoint(root string, manifest Manifest, options AddOptions) ([]
 			return nil, err
 		}
 	}
-	arguments, err := endpointArguments(protocolPath, protocolType, handlerPath, nestType)
+	arguments, target, err := endpointArguments(protocolPath, protocolType, handlerPath, nestType)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +250,7 @@ func addProtocolEndpoint(root string, manifest Manifest, options AddOptions) ([]
 		return nil, fmt.Errorf("%s is not Nest-injected; create a new controller domain or add NestClient() before generating the endpoint", relativeSlash(root, controllerPath))
 	}
 
-	callArgs := "context.PlayerID"
+	callArgs := "entityID"
 	if len(arguments) > 0 {
 		callArgs += ", " + strings.Join(arguments, ", ")
 	}
@@ -257,8 +259,10 @@ func addProtocolEndpoint(root string, manifest Manifest, options AddOptions) ([]
 import (
 	"fmt"
 
+	%s %q
 	player_agent %q
 	%ssyncsender %q
+	"github.com/tjbdwanghaibo/roost-core/entity"
 	%q
 )
 
@@ -268,14 +272,26 @@ func (controller *Controller) Handle%s(context *player_agent.Context, request *p
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("%s endpoint: context and request are required")
 	}
+	// context.PlayerID is the player's unique id; Nest addresses a full entity
+	// id, which carries the kind and its lock category as well.
+	entityID, err := entity.BuildEntityID(context.PlayerID, %s.%s)
+	if err != nil {
+		return nil, fmt.Errorf("%s endpoint: %%w", err)
+	}
 	sender := %ssyncsender.New%sSender(controller.NestClient())
 	if err := sender.Sync_%s(context.Context(), %s); err != nil {
 		return nil, err
 	}
 	return &pb.%sResponse{}, nil
 }
-`, domain, manifest.Project.Module+protocol.PlayerAgentImportSuffix, nestSnake, manifest.Project.Module+"/game/handler/syncsender", manifest.Project.Module+protocol.PBImportSuffix,
-		protocolType, protocolType, protocolType, protocolType, protocolSnake, nestSnake, nestType, nestType, callArgs, protocolType)
+`, domain,
+		target.alias, target.importPath,
+		manifest.Project.Module+protocol.PlayerAgentImportSuffix,
+		nestSnake, manifest.Project.Module+"/game/handler/syncsender",
+		manifest.Project.Module+protocol.PBImportSuffix,
+		protocolType, protocolType, protocolType, protocolType, protocolSnake,
+		target.alias, target.kind, protocolSnake,
+		nestSnake, nestType, nestType, callArgs, protocolType)
 	formatted, err := format.Source([]byte(body))
 	if err != nil {
 		return nil, fmt.Errorf("format endpoint scaffold: %w\n%s", err, body)
@@ -329,15 +345,29 @@ func (controller *Controller) NestClient() corenest.Client {
 `, domain, domain, domain)
 }
 
-func endpointArguments(protocolPath, protocolType, handlerPath, handlerType string) ([]string, error) {
+// endpointEntity is the Entity a Nest handler's first parameter names: the
+// package it lives in and the kind constant that package declares. The
+// endpoint needs it because Nest addresses a full entity id — unique id plus
+// kind plus lock category — and context.PlayerID is only the unique id. An
+// endpoint that passed the bare id reached Nest as "kind N category is not
+// registered" on the first real request; nothing before a live run could see
+// it, because the scaffold compiled.
+type endpointEntity struct {
+	alias      string
+	importPath string
+	kind       string
+}
+
+func endpointArguments(protocolPath, protocolType, handlerPath, handlerType string) ([]string, endpointEntity, error) {
+	var target endpointEntity
 	requestFields, err := requestFieldNames(protocolPath, protocolType+"Request")
 	if err != nil {
-		return nil, err
+		return nil, target, err
 	}
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, handlerPath, nil, parser.ParseComments)
 	if err != nil {
-		return nil, err
+		return nil, target, err
 	}
 	for _, declaration := range file.Decls {
 		function, ok := declaration.(*ast.FuncDecl)
@@ -345,10 +375,14 @@ func endpointArguments(protocolPath, protocolType, handlerPath, handlerType stri
 			continue
 		}
 		if len(function.Type.Params.List) == 0 {
-			return nil, fmt.Errorf("Nest handler %s has no Entity target", handlerType)
+			return nil, target, fmt.Errorf("Nest handler %s has no Entity target", handlerType)
 		}
 		if len(function.Type.Params.List[0].Names) != 1 {
-			return nil, fmt.Errorf("Nest handler %s endpoint requires exactly one named Player Entity target", handlerType)
+			return nil, target, fmt.Errorf("Nest handler %s endpoint requires exactly one named Player Entity target", handlerType)
+		}
+		target, err = endpointEntityOf(file, function.Type.Params.List[0].Type, handlerType)
+		if err != nil {
+			return nil, target, err
 		}
 		var arguments []string
 		for index, field := range function.Type.Params.List {
@@ -356,20 +390,49 @@ func endpointArguments(protocolPath, protocolType, handlerPath, handlerType stri
 				continue
 			}
 			if len(field.Names) == 0 {
-				return nil, fmt.Errorf("Nest handler %s parameter %d must be named", handlerType, index+1)
+				return nil, target, fmt.Errorf("Nest handler %s parameter %d must be named", handlerType, index+1)
 			}
 			for _, name := range field.Names {
 				parameter := name.Name
 				requestField, exists := requestFields[toSnake(parameter)]
 				if !exists {
-					return nil, fmt.Errorf("protocol %sRequest has no field matching Nest parameter %q", protocolType, parameter)
+					return nil, target, fmt.Errorf("protocol %sRequest has no field matching Nest parameter %q", protocolType, parameter)
 				}
 				arguments = append(arguments, "request."+requestField)
 			}
 		}
-		return arguments, nil
+		return arguments, target, nil
 	}
-	return nil, fmt.Errorf("Nest handler function handler%s not found in %s", handlerType, handlerPath)
+	return nil, target, fmt.Errorf("Nest handler function handler%s not found in %s", handlerType, handlerPath)
+}
+
+// endpointEntityOf resolves the handler's first parameter type, written as
+// <alias>.I<Component>Entity, to the Entity package it imports. The kind
+// constant follows the entity scaffold's naming: EntityKind<Pascal(package)>.
+func endpointEntityOf(file *ast.File, expression ast.Expr, handlerType string) (endpointEntity, error) {
+	selector, ok := expression.(*ast.SelectorExpr)
+	if !ok {
+		return endpointEntity{}, fmt.Errorf("Nest handler %s: the Entity target must be a <package>.I<Component>Entity interface", handlerType)
+	}
+	alias, ok := selector.X.(*ast.Ident)
+	if !ok {
+		return endpointEntity{}, fmt.Errorf("Nest handler %s: the Entity target must be a <package>.I<Component>Entity interface", handlerType)
+	}
+	for _, spec := range file.Imports {
+		importPath, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			continue
+		}
+		name := path.Base(importPath)
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		if name != alias.Name {
+			continue
+		}
+		return endpointEntity{alias: alias.Name, importPath: importPath, kind: "EntityKind" + toPascal(path.Base(importPath))}, nil
+	}
+	return endpointEntity{}, fmt.Errorf("Nest handler %s: no import provides package %q for the Entity target", handlerType, alias.Name)
 }
 
 func requestFieldNames(path, typeName string) (map[string]string, error) {

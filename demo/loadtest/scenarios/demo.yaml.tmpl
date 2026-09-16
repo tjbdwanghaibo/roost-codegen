@@ -1,0 +1,20 @@
+# One robot's life: connect and hand over the credential, make sure the Player
+# exists, add an item, earn enough exp to level up (which sends a reward mail
+# through the effect chain). Param keys are the request fields' snake_case
+# names; a value can also come from the robot's blackboard.
+#
+# The same file is the demo's regression test: `go run ./cmd/loadtest` fails
+# when any step returns a non-zero code or the thresholds are exceeded.
+scenarios:
+  - name: demo
+    node:
+      sequence:
+        - action: connect
+        - action: enter_game
+        - action: add_item
+          param:
+            item_id: 1001
+            count: 1
+        - action: add_exp
+          param:
+            amount: 150

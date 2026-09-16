@@ -72,6 +72,41 @@ internal/service/game/level_up_mail.go     durable consumer + Mongo inbox（每�
   产生分歧。
 - 消费者在 `Service.Init` 里订阅、`Shutdown` 里 `Drain`：进程宕机期间提交的升级，回来时会补投。
 
+## 机器人压测 = 回归测试
+
+```bash
+go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20
+```
+
+每个机器人：`connect`（握手凭据 `player:<id>`）→ `enter_game`（GetOrCreate Player）→ `add_item` → `add_exp`（升级，
+触发奖励邮件）。任何一步返回非零 code、或 `error_rate` / `p95` 超阈值，进程以非零码退出并打印 JSON 报告。
+
+- **runner / 场景树 / 动作注册 / 阈值门**全是 `roost-core/robot`，`cmd/loadtest/main.go` 只做三件事：注册本工程的消息
+  （`action.MustRegisterCall` + 一个把泛型 Marshal 路由到生成的 pb 函数的 codec）、加载 `loadtest/scenarios/*.yaml`、
+  把 flag 变成一个 `loadtest.Profile`。
+- **`loadtest/playertcp`** 是生成的 player TCP 帧的客户端半边：core 的 robot 传输层说的是 12 字节小端帧，生成的 server
+  说的是 16 字节大端带 magic / 版本 / flags 的帧，且要求先握手、每帧序号严格递增非零。适配器自己计数 wire 序号，
+  用一张表把响应映射回机器人等待的序号；这是唯一同时知道两边格式的地方，常量要与 `server_gen.go` 同步。
+- **`enter_game` 为什么不是 Nest handler**：Nest 处理的是已存在的实体，第一次登录还没有；创建 Player 是生命周期操作，
+  端点直接走 `PlayerLifecycle.GetOrCreate`，所以这条协议只有 `roost add protocol`，控制器方法手写。
+- 生成的 pb 类型没有 `GetCode()`，`RegisterCall` 的自动 code 检查不会生效，每个 call 用 `OnResp` 自己查 `Code`。
+
+## 本地实跑
+
+用 roost-kit 的隔离环境（`scripts/integration/dataengine-env.sh up`：Mongo 副本集 27117–27119、NATS JetStream 14222–14224、Redis 16379）
+跑过整条链。在生成的工程里复制一份 `configs/service/config.game.yaml`，改四处：`mongo.uri` 指向副本集、`nats.url`、
+`dataengine.effects.max_bytes` 调小（隔离集群只预留了 1GB 存储，默认 8GB 会报 `insufficient storage`）、`player_access.tcp.addr`；
+mail 的配置同样改 `redis.addr` 与 `nats.url`。然后：
+
+```bash
+go run . game --sid 1000 --config configs/service/config.game.smoke.yaml &
+go run . mail --sid 1000 --config configs/service/config.mail.smoke.yaml &
+go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 5
+```
+
+看三处：`db.player` 在 DAO 标记写的 `db=game` 库里（不是 `dataengine.database`）；重启 game 再跑一轮，items 与 level 在原值上累加；
+mail 的 Redis 里每个升级的玩家一封 `box:<id>`，`send:<EffectID>` 是幂等键。
+
 ## account 的 collaborators
 
 `game` 模板给的 `Verifier` / `Allocator` 默认全拒绝（这是对的：没有校验的身份和会重复的 id 都不该有默认值）。

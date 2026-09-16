@@ -1,0 +1,50 @@
+package player
+
+import (
+	"fmt"
+
+	lifecycle "{{MODULE}}/game/lifecycle"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
+)
+
+// Controller hosts the player protocol endpoints. It holds the two things an
+// endpoint may reach for: the Nest client, for everything that touches a
+// locked Entity, and the Player lifecycle, for the one operation that happens
+// before there is an Entity to lock — creating it.
+type Controller struct {
+	nestClient corenest.Client
+	players    *lifecycle.PlayerLifecycle
+}
+
+// FromRegistry is what the generated protocol binding calls once per
+// process; keep its signature.
+func FromRegistry(registry *app.Registry) (*Controller, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("player controller: app registry is required")
+	}
+	client, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || client == nil {
+		return nil, fmt.Errorf("player controller: nest client is unavailable")
+	}
+	players, err := lifecycle.PlayerFromRegistry(registry)
+	if err != nil {
+		return nil, fmt.Errorf("player controller: %w", err)
+	}
+	return &Controller{nestClient: client, players: players}, nil
+}
+
+func (controller *Controller) NestClient() corenest.Client {
+	if controller == nil {
+		return nil
+	}
+	return controller.nestClient
+}
+
+// Players is the create/load boundary for Player Entities.
+func (controller *Controller) Players() *lifecycle.PlayerLifecycle {
+	if controller == nil {
+		return nil
+	}
+	return controller.players
+}

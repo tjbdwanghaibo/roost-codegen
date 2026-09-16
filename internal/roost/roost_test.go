@@ -475,7 +475,7 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 		"internal/access/player/mod_gen.go":        {"protocolbootstrap.RegisterPlayerProtocols", "registry.Register(Name, mod.runtime)"},
 		"game/protocol_bootstrap/protocol_gen.go":  {"RegisterPlayerPlayerProtocols"},
 		"game/controllers/player/controller.go":    {"app.Lookup[corenest.Client]", "NestClient() corenest.Client"},
-		"game/controllers/player/rename_player.go": {"Sync_RenamePlayer", "context.PlayerID", "NewRenamePlayerSender"},
+		"game/controllers/player/rename_player.go": {"Sync_RenamePlayer", "NewRenamePlayerSender", "entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)", "Sync_RenamePlayer(context.Context(), entityID, request.Name)"},
 		"game/lifecycle/player.go":                 {"GetOrCreate", "FromRegistry", "mods.ModEntityRuntime", "engine.ErrEntityAggregateNotFound", "entity.BuildEntityID", "EntityKindPlayer"},
 		"protocol/player_bind/bind_gen.go":         {"RegisterRenamePlayer"},
 	}
@@ -1070,15 +1070,29 @@ func TestEndpointArgumentsMapNamedRequestFields(t *testing.T) {
 	if err := os.WriteFile(protocolPath, []byte("package def\ntype RenamePlayerRequest struct { Name string; Locale string }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(handlerPath, []byte("package handler\nfunc handlerRenamePlayer(target IPlayerEntity, name, locale string) error { return nil }\n"), 0o644); err != nil {
+	if err := os.WriteFile(handlerPath, []byte("package handler\n\nimport player \"example.com/planet/game/entities/player\"\n\nfunc handlerRenamePlayer(target player.IPlayerEntity, name, locale string) error { return nil }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	arguments, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer")
+	arguments, target, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got, want := strings.Join(arguments, ","), "request.Name,request.Locale"; got != want {
 		t.Fatalf("endpoint arguments = %q, want %q", got, want)
+	}
+	// The Entity the handler locks is what the endpoint builds the full id
+	// from; the bare context.PlayerID is not an entity id (see endpointEntity).
+	want := endpointEntity{alias: "player", importPath: "example.com/planet/game/entities/player", kind: "EntityKindPlayer"}
+	if target != want {
+		t.Fatalf("endpoint entity = %+v, want %+v", target, want)
+	}
+	// A target the scaffold cannot resolve to a package is refused up front,
+	// not turned into an endpoint that fails on its first request.
+	if err := os.WriteFile(handlerPath, []byte("package handler\nfunc handlerRenamePlayer(target IPlayerEntity, name, locale string) error { return nil }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer"); err == nil || !strings.Contains(err.Error(), "<package>.I<Component>Entity") {
+		t.Fatalf("unqualified Entity target accepted: %v", err)
 	}
 }
 

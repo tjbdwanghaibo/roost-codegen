@@ -18,5 +18,5 @@ import "embed"
 // honest: a new top-level directory that is not named here fails that test
 // rather than silently shipping an empty template.
 //
-//go:embed configs db game internal protocol
+//go:embed cmd configs db game internal loadtest protocol
 var Files embed.FS
