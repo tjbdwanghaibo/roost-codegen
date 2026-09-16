@@ -5,29 +5,63 @@ import (
 	"fmt"
 	"go/format"
 	"strings"
+	"text/template"
 	"unicode"
 )
 
-// Generate renders the transport for one service.
+// File is one generated source file: its base name and formatted content.
+type File struct {
+	Name    string
+	Content []byte
+}
+
+// TransportFileName is the transport half's file name for an interface.
+func TransportFileName(iface string) string { return strings.ToLower(iface) + "_rpc_gen.go" }
+
+// AssemblyFileName is the assembly half's file name for an interface.
+func AssemblyFileName(iface string) string {
+	return strings.ToLower(iface) + "_rpc_assembly_gen.go"
+}
+
+// Generate renders the transport for one service as two files: the transport
+// half (roost-core imports only) and the assembly half (Server, ClientMod,
+// OwnerCapabilities; imports roost-kit/mods). Both land in the same package,
+// so nothing changes for a caller; the split exists so an interface can move
+// into a core domain package together with its wire types and client (M-10).
 //
 // It is built with text/template rather than string concatenation, and the
 // output is run through go/format, so a template mistake surfaces as a parse
 // error here rather than as an unbuildable file in someone's package.
-func Generate(service Service) ([]byte, error) {
+func Generate(service Service) ([]File, error) {
 	view, err := newView(service)
 	if err != nil {
 		return nil, err
 	}
+	transport, err := render(transportTemplate, "transport", service, view)
+	if err != nil {
+		return nil, err
+	}
+	assembly, err := render(assemblyTemplate, "assembly", service, view)
+	if err != nil {
+		return nil, err
+	}
+	return []File{
+		{Name: TransportFileName(service.Interface), Content: transport},
+		{Name: AssemblyFileName(service.Interface), Content: assembly},
+	}, nil
+}
+
+func render(tmpl *template.Template, half string, service Service, view view) ([]byte, error) {
 	var out bytes.Buffer
-	if err := transportTemplate.Execute(&out, view); err != nil {
-		return nil, fmt.Errorf("render %s: %w", service.Interface, err)
+	if err := tmpl.Execute(&out, view); err != nil {
+		return nil, fmt.Errorf("render %s %s: %w", service.Interface, half, err)
 	}
 	formatted, err := format.Source(out.Bytes())
 	if err != nil {
 		// The unformatted source is included because a template bug is much
 		// easier to find with the text in front of you than from a line
 		// number in generated output nobody has.
-		return nil, fmt.Errorf("format generated %s transport: %w\n%s", service.Interface, err, out.String())
+		return nil, fmt.Errorf("format generated %s %s: %w\n%s", service.Interface, half, err, out.String())
 	}
 	return formatted, nil
 }
@@ -48,6 +82,9 @@ type view struct {
 	// Lower is the interface name with a lowercase first letter, for
 	// unexported identifiers.
 	Lower string
+	// FileBase is the interface name lowercased, the stem both generated
+	// file names share; the headers name the sibling file with it.
+	FileBase string
 	// Methods carries the derived per-method names.
 	Methods []methodView
 }
@@ -87,9 +124,10 @@ type methodView struct {
 
 func newView(service Service) (view, error) {
 	v := view{
-		Service: service,
-		Iface:   service.Interface,
-		Lower:   lowerFirst(service.Interface),
+		Service:  service,
+		Iface:    service.Interface,
+		Lower:    lowerFirst(service.Interface),
+		FileBase: strings.ToLower(service.Interface),
 	}
 	for _, method := range service.Methods {
 		mv := methodView{

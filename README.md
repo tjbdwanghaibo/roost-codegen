@@ -29,7 +29,7 @@ cfggen 的 schema 字段级参考见 [CFGGEN_META](docs/CFGGEN_META.zh-CN.md)。
 | `attribute` | `//roost:attribute` | `gen_<profile>_attribute.go` | 属性 profile 的计算/聚合代码 |
 | `webroute` | `//roost:web` | 路由注册代码 | HTTP 路由注册不再手写 |
 | `errcode` | 扫描 `errcode.Define(code, name, msg)` 调用 | `docs/generated/errcode.csv` | 错误码清单导出与查重 |
-| `servicerpc` | `//roost:rpc service_type=... capability=...` 打在**手写的服务接口**上，方法上可选 `//roost:rpc affinity=...` | `<接口名小写>_rpc_gen.go`：线上类型、handler 注册、打字的 `BusClient`、`Server`、`ClientMod`、capability 包装 | 服务拆成独立进程后，调用方只查接口（`app.Lookup[mail.Mail]`），两种实现都满足它；传输层从接口本身生成，所以**漂移结构上不可能**而不是被检测到 |
+| `servicerpc` | `//roost:rpc service_type=... capability=...` 打在**手写的服务接口**上，方法上可选 `//roost:rpc affinity=...` | 两个文件：`<接口名小写>_rpc_gen.go`（线上类型、handler 注册、打字的 `BusClient`、capability 包装与名字，只依赖 roost-core）与 `<接口名小写>_rpc_assembly_gen.go`（`Server`、`OwnerCapabilities`、`ClientMod`，依赖 roost-kit/mods；M-10） | 服务拆成独立进程后，调用方只查接口（`app.Lookup[mail.Mail]`），两种实现都满足它；传输层从接口本身生成，所以**漂移结构上不可能**而不是被检测到 |
 | `roost id` | 扫描各类标记中的 `id=/kind=/type=/code=` | —（校验命令） | 按 `roost.yaml` 声明的 ID 空间检查冲突、分配下一个可用 ID |
 
 所有生成器都可以独立运行（`cmd/<name>`），也可以由 `roost generate` 按依赖顺序统一编排：DAO → Event → Errcode → Protocol → Entity → Nest → Attribute → Config → WebRoute。

@@ -62,34 +62,35 @@ func Run(args []string, stdout io.Writer) error {
 	}
 	var stale []string
 	for _, service := range services {
-		content, err := Generate(service)
+		files, err := Generate(service)
 		if err != nil {
 			return err
 		}
-		name := strings.ToLower(service.Interface) + "_rpc_gen.go"
-		path := filepath.Join(absDir, name)
-		existing, readErr := os.ReadFile(path)
-		current := readErr == nil && bytes.Equal(existing, content)
-		if current {
-			_, _ = fmt.Fprintf(stdout, "up to date: %s\n", name)
-			continue
-		}
-		if *check {
-			// Missing and differing are reported apart: one means nobody ran
-			// the generator, the other means the file was edited or produced
-			// by a different version of it, and the fix is not the same.
-			if readErr != nil {
-				stale = append(stale, name+" (missing)")
-			} else {
-				stale = append(stale, name)
+		for _, file := range files {
+			path := filepath.Join(absDir, file.Name)
+			existing, readErr := os.ReadFile(path)
+			current := readErr == nil && bytes.Equal(existing, file.Content)
+			if current {
+				_, _ = fmt.Fprintf(stdout, "up to date: %s\n", file.Name)
+				continue
 			}
-			_, _ = fmt.Fprintf(stdout, "STALE: %s\n", name)
-			continue
+			if *check {
+				// Missing and differing are reported apart: one means nobody ran
+				// the generator, the other means the file was edited or produced
+				// by a different version of it, and the fix is not the same.
+				if readErr != nil {
+					stale = append(stale, file.Name+" (missing)")
+				} else {
+					stale = append(stale, file.Name)
+				}
+				_, _ = fmt.Fprintf(stdout, "STALE: %s\n", file.Name)
+				continue
+			}
+			if err := os.WriteFile(path, file.Content, 0o644); err != nil {
+				return fmt.Errorf("write %s: %w", path, err)
+			}
+			_, _ = fmt.Fprintf(stdout, "generated: %s\n", file.Name)
 		}
-		if err := os.WriteFile(path, content, 0o644); err != nil {
-			return fmt.Errorf("write %s: %w", path, err)
-		}
-		_, _ = fmt.Fprintf(stdout, "generated: %s\n", name)
 	}
 	if len(stale) > 0 {
 		return fmt.Errorf("%s: generated transport does not match the interface: %s. "+

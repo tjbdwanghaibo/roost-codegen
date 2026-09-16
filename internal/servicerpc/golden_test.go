@@ -31,11 +31,16 @@ func TestGoldenTransport(t *testing.T) {
 	if len(services) != 1 {
 		t.Fatalf("parsed %d services, want 1", len(services))
 	}
-	content, err := Generate(services[0])
+	files, err := Generate(services[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	genutil.AssertGolden(t, filepath.Join("testdata", "golden", "shop_rpc_gen.go.txt"), content, *updateGolden)
+	if len(files) != 2 || files[0].Name != "shop_rpc_gen.go" || files[1].Name != "shop_rpc_assembly_gen.go" {
+		t.Fatalf("generated files = %v, want the transport half then the assembly half", fileNames(files))
+	}
+	for _, file := range files {
+		genutil.AssertGolden(t, filepath.Join("testdata", "golden", file.Name+".txt"), file.Content, *updateGolden)
+	}
 }
 
 // Generation is deterministic: the same input produces byte-identical output.
@@ -46,15 +51,9 @@ func TestGenerationIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := Generate(services[0])
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := generateJoined(t, services[0])
 	for run := 0; run < 8; run++ {
-		again, err := Generate(services[0])
-		if err != nil {
-			t.Fatal(err)
-		}
+		again := generateJoined(t, services[0])
 		if string(again) != string(first) {
 			t.Fatalf("run %d produced different output", run)
 		}
@@ -87,10 +86,7 @@ func TestWireTypesAreUnexported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := Generate(services[0])
-	if err != nil {
-		t.Fatal(err)
-	}
+	content := generateJoined(t, services[0])
 	source := string(content)
 	for _, exported := range []string{
 		"type BuyRequest struct", "type BuyResponse struct",
@@ -174,10 +170,7 @@ func TestAnAffinityMarkerReachesTheGeneratedClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := Generate(services[0])
-	if err != nil {
-		t.Fatal(err)
-	}
+	content := generateJoined(t, services[0])
 	source := string(content)
 	// The method attaches the key.
 	if !contains(source, "servicerpc.WithAffinityKey(ctx, shelfID)") {
@@ -220,10 +213,7 @@ type Plain interface {
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := Generate(services[0])
-	if err != nil {
-		t.Fatal(err)
-	}
+	content := generateJoined(t, services[0])
 	if contains(string(content), "WithKeyAffinity") {
 		t.Fatal("the picker option was installed for a service that routes by nothing")
 	}
@@ -292,10 +282,7 @@ type Rank interface {
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := Generate(services[0])
-	if err != nil {
-		t.Fatal(err)
-	}
+	content := generateJoined(t, services[0])
 	source := string(content)
 	// The wrapper holds an unexported field and forwards, rather than
 	// embedding — embedding is what created the shadowing.
@@ -335,20 +322,12 @@ func TestEveryEmittedNameIsListed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := Generate(services[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "gen.go", content, parser.ParseComments)
-	if err != nil {
-		t.Fatal(err)
-	}
+	parsed := parseGenerated(t, services[0])
 	listed := map[string]bool{}
 	for _, name := range emittedNames(services[0]) {
 		listed[name] = true
 	}
-	for name := range declaredNames(map[string]*ast.File{"gen.go": file}) {
+	for name := range declaredNames(parsed) {
 		if !listed[name] {
 			t.Fatalf("the generated file declares %q at package scope but emittedNames does not "+
 				"list it, so a package that already declares %q would be accepted and then fail "+
@@ -368,16 +347,8 @@ func TestNothingIsListedThatIsNotEmitted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := Generate(services[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "gen.go", content, parser.ParseComments)
-	if err != nil {
-		t.Fatal(err)
-	}
-	declared := declaredNames(map[string]*ast.File{"gen.go": file})
+	parsed := parseGenerated(t, services[0])
+	declared := declaredNames(parsed)
 	for _, name := range emittedNames(services[0]) {
 		if _, ok := declared[name]; !ok {
 			t.Fatalf("emittedNames lists %q, but the generated file does not declare it; the "+
@@ -396,14 +367,54 @@ func TestTheGeneratedClientDependsOnTheModThatPublishesTheBus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := Generate(services[0])
-	if err != nil {
-		t.Fatal(err)
-	}
+	content := generateJoined(t, services[0])
 	if !strings.Contains(string(content), "func (m *ClientMod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats} }") {
 		t.Fatalf("ClientMod.DependsOn does not name the NATS mod:\n%s", content)
 	}
 	if strings.Contains(string(content), "DependsOn() []app.ModName { return []app.ModName{mods.ModBus} }") {
 		t.Fatal("ClientMod depends on the bus capability name, which no Mod is called")
 	}
+}
+
+// generateJoined renders both halves and joins them, for assertions about what
+// the generated transport as a whole says. TestGoldenTransport pins each file.
+func generateJoined(t *testing.T, service Service) []byte {
+	t.Helper()
+	files, err := Generate(service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var joined []byte
+	for _, file := range files {
+		joined = append(joined, file.Content...)
+	}
+	return joined
+}
+
+// parseGenerated parses each generated file on its own: the two halves are
+// separate files of one package, so the declared names are their union.
+func parseGenerated(t *testing.T, service Service) map[string]*ast.File {
+	t.Helper()
+	files, err := Generate(service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	parsed := make(map[string]*ast.File, len(files))
+	for _, file := range files {
+		parsedFile, err := parser.ParseFile(fset, file.Name, file.Content, parser.ParseComments)
+		if err != nil {
+			t.Fatalf("%s: %v", file.Name, err)
+		}
+		parsed[file.Name] = parsedFile
+	}
+	return parsed
+}
+
+func fileNames(files []File) []string {
+	names := make([]string, 0, len(files))
+	for _, file := range files {
+		names = append(names, file.Name)
+	}
+	return names
 }

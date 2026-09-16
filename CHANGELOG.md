@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`servicerpc` 生成的传输拆成两个文件**（M-10，ARCH-04 生成器部分；来源 `roost-core/docs/bug/REVIEW-2026-09-16-04.md` §7）。`<接口名小写>_rpc_gen.go` 现在只含常量、wire 类型、handler 表、`BusClient`、capability 包装与 `CapabilityName` / `LocalCapabilityName`，只 import roost-core；`Server`、`OwnerCapabilities`、`ClientMod` 移到新文件 `<接口名小写>_rpc_assembly_gen.go`，它是唯一 import `roost-kit/mods` 的生成文件。两个文件落在同一个包，调用方不用改；拆分是为了让 RPC 接口能连同 wire / handler / BusClient 一起搬进 core 的领域包（M-06～M-08 的下一步）。`-check` 对两个文件分别判定，老仓库第一次跑会报装配文件 `(missing)`——跑一次 `go generate ./...` 即可。`Generate` 的签名从 `([]byte, error)` 变为 `([]servicerpc.File, error)`（内部包）。测试：`split_promises_test.go`；golden 拆成 `shop_rpc_gen.go.txt` + `shop_rpc_assembly_gen.go.txt`。记录：`roost-core/docs/bugfix/M-10-servicerpc-split.md`。
+
 ### Fixed
 
 - **托管服务的 collaborators 文件不再无条件 import 服务包**（U-0218，C4，发版验证发现，codegen v1.15.6 补丁）。U-0217 删掉 match 的 `Grouping()` 之后正文只剩 `Metrics()`，`renderFrameworkCollaborators` 仍写入 `"roost-kit/service/match"`，生成的 `internal/service/match/collaborators.go` "imported and not used"，**整个工程编译不过**；codegen 自己的测试不编译生成物，v1.15.5 带着它发了出去。现在按 AST 判断正文是否有 `<pkg>.` 选择表达式再决定是否 import（注释里的 `match.Grouping` 不算）。`collaborators_imports_promises_test.go` 对目录里每个托管服务断言"每个 import 都被引用"，修前 match 红。用 v1.15.5 生成过工程的：删掉那一行 import 即可，文件是业务所有不会回写。
