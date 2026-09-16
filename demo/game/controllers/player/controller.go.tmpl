@@ -3,18 +3,24 @@ package player
 import (
 	"fmt"
 
+	world "{{MODULE}}/game/entities/world"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
+	svcmatch "github.com/tjbdwanghaibo/roost-kit/service/match"
 )
 
-// Controller hosts the player protocol endpoints. It holds the two things an
-// endpoint may reach for: the Nest client, for everything that touches a
-// locked Entity, and the Player lifecycle, for the one operation that happens
-// before there is an Entity to lock — creating it.
+// Controller hosts the player protocol endpoints. It holds what an endpoint
+// may reach for: the Nest client, for everything that touches a locked
+// Entity; the Player lifecycle, for the one operation that happens before
+// there is an Entity to lock; the match service client, a typed servicerpc
+// interface to another process; and this process's World id.
 type Controller struct {
 	nestClient corenest.Client
 	players    *lifecycle.PlayerLifecycle
+	matcher    svcmatch.Matchmaker
+	worldID    int64
 }
 
 // FromRegistry is what the generated protocol binding calls once per
@@ -31,7 +37,18 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
-	return &Controller{nestClient: client, players: players}, nil
+	// The same capability internal/service/<game>'s generated Match()
+	// accessor returns; looked up here directly so this package does not
+	// import the service package.
+	matcher, ok := app.Lookup[svcmatch.Matchmaker](registry, svcmatch.CapabilityName)
+	if !ok || matcher == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; list match under services.<game>.uses", svcmatch.CapabilityName)
+	}
+	worldID, err := entity.BuildEntityID(lifecycle.WorldUniqueID, world.EntityKindWorld)
+	if err != nil {
+		return nil, fmt.Errorf("player controller: %w", err)
+	}
+	return &Controller{nestClient: client, players: players, matcher: matcher, worldID: worldID}, nil
 }
 
 func (controller *Controller) NestClient() corenest.Client {
@@ -47,4 +64,20 @@ func (controller *Controller) Players() *lifecycle.PlayerLifecycle {
 		return nil
 	}
 	return controller.players
+}
+
+// Matcher is the match service, reached over the bus.
+func (controller *Controller) Matcher() svcmatch.Matchmaker {
+	if controller == nil {
+		return nil
+	}
+	return controller.matcher
+}
+
+// WorldID is the full entity id of this process's World.
+func (controller *Controller) WorldID() int64 {
+	if controller == nil {
+		return 0
+	}
+	return controller.worldID
 }

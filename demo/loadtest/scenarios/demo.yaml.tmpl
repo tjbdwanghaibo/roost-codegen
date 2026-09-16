@@ -1,6 +1,7 @@
 # One robot's life: connect and hand over the credential, make sure the Player
 # exists, add an item, earn enough exp to level up (which sends a reward mail
-# through the effect chain). Param keys are the request fields' snake_case
+# through the effect chain), queue for a duel until matched, read the World's
+# counters. Run an even number of robots: duels need pairs. Param keys are the request fields' snake_case
 # names; a value can also come from the robot's blackboard.
 #
 # The same file is the demo's regression test: `go run ./cmd/loadtest` fails
@@ -18,3 +19,16 @@ scenarios:
         - action: add_exp
           param:
             amount: 150
+        # Matchmaking: join the duel queue, then poll until the game's
+        # matchmaker has paired this robot with another one. The ticket id
+        # comes from the blackboard, where join_queue's OnResp put it.
+        - action: join_queue
+          param:
+            mode: duel
+        - retry:
+            times: 40
+            node:
+              sequence:
+                - wait: 250ms
+                - action: poll_match
+        - action: world_stats

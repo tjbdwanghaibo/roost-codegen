@@ -5,6 +5,7 @@ import (
 	"go/format"
 	"io"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -120,6 +121,23 @@ type demoScaffoldStep struct {
 	why   string
 }
 
+// enableDemoMatchSweep lists the demo's duel queue under match.sweep_queues in
+// the match service's config, the way a deployment does. The match process
+// then resolves expired duel tickets in the background; without it a lapsed
+// ticket is only resolved when touched, and the process says so at start.
+func enableDemoMatchSweep(root, _ string) error {
+	path := filepath.Join(root, "configs", "service", "config.match.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	const before, after = "  sweep_queues: []\n", "  sweep_queues:\n    - duel:2:default\n"
+	if !strings.Contains(string(raw), before) {
+		return fmt.Errorf("%s: expected %q to replace", path, strings.TrimSpace(before))
+	}
+	return writeAtomic(path, []byte(strings.Replace(string(raw), before, after, 1)), 0o644)
+}
+
 // enableDemoPlayerTCP flips player_access.tcp.enabled in the game service's
 // config, the same edit `roost config enable player-tcp` makes. A demo whose
 // listener is off cannot be connected to, and `roost project doctor
@@ -138,6 +156,11 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/entities/player/profile_component.go", why: "rename and level-up through generated mutators; level-up emits an effect"},
 		{write: "game/entities/player/bag_component.go", why: "add-item: table lookup, coded errors, generated map mutators"},
 		{write: "game/effects/level_up.go", why: "the level-up effect: topic, payload, and the Emit onto the current transaction"},
+		{add: &AddOptions{Kind: "component", Name: "Stats", Entity: "World"}, why: "World's one job: server-wide counters"},
+		{add: &AddOptions{Kind: "dao", Name: "World", Entity: "World"}, why: "persistence for the counters"},
+		{write: "db/def/world.go", why: "PlayersEntered and MatchesFormed"},
+		{write: "game/entities/world/stats_component.go", why: "count logins and matches through generated mutators; snapshot for reads"},
+		{write: "game/matchmaking/queue.go", why: "the duel queue and how a player is named in it"},
 		{add: &AddOptions{Kind: "table", Name: "Item"}, why: "the item config table"},
 		{write: "configs/schema/item.go", why: "the table's columns and rules"},
 		{write: "configs/table/item.csv", why: "the rows; converted to configs/data/item.json by generate"},
@@ -155,6 +178,12 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/handler/add_item.go", why: "handler parameters and result; the Sender and endpoint are generated from them"},
 		{add: &AddOptions{Kind: "handler", Name: "AddExp", Entity: "Player", Component: "Profile"}, why: "the transaction that starts the event chain"},
 		{write: "game/handler/add_exp.go", why: "handler parameter and result"},
+		{add: &AddOptions{Kind: "handler", Name: "RecordEnter", Entity: "World", Component: "Stats"}, why: "World counts a login"},
+		{write: "game/handler/record_enter.go", why: "a separate Nest call after the Player one"},
+		{add: &AddOptions{Kind: "handler", Name: "RecordMatch", Entity: "World", Component: "Stats"}, why: "World counts a formed match"},
+		{write: "game/handler/record_match.go", why: "called by the matchmaker after the remote Commit"},
+		{add: &AddOptions{Kind: "handler", Name: "WorldStats", Entity: "World", Component: "Stats"}, why: "a read under the lock"},
+		{write: "game/handler/world_stats.go", why: "returns a value, not the Entity"},
 		{add: &AddOptions{Kind: "access", Name: "player", Service: gameService}, why: "the player request boundary"},
 		{add: &AddOptions{Kind: "transport", Name: "tcp"}, why: "a transport a client can actually connect to"},
 		{write: "internal/access/player/tcp/auth.go", why: "session tickets validated by the account service, plus a terminal shortcut"},
@@ -171,11 +200,22 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "protocol/def/enter_game.go", why: "no Nest handler behind it: creating a Player is a lifecycle operation"},
 		{write: "game/controllers/player/controller.go", why: "the controller also holds the Player lifecycle"},
 		{write: "game/controllers/player/enter_game.go", why: "hand-written endpoint: GetOrCreate the Player, then answer"},
+		{add: &AddOptions{Kind: "protocol", Name: "JoinQueue", Group: "game", Handler: "player"}, why: "the cross-service call: game → match"},
+		{write: "protocol/def/join_queue.go", why: "no Nest handler behind it either: the match service is another process"},
+		{write: "game/controllers/player/join_queue.go", why: "Enqueue through the typed match client, frame sequence as idempotency key"},
+		{add: &AddOptions{Kind: "protocol", Name: "PollMatch", Group: "game", Handler: "player"}, why: "reading the ticket and the match"},
+		{write: "protocol/def/poll_match.go", why: "state, match id, members"},
+		{write: "game/controllers/player/poll_match.go", why: "ownership-checked reads through the match client"},
+		{add: &AddOptions{Kind: "protocol", Name: "WorldStats", Group: "game", Handler: "player"}, why: "the World's counters"},
+		{write: "protocol/def/world_stats.go", why: "two counters"},
+		{write: "game/controllers/player/world_stats.go", why: "a Nest read handler on the World"},
+		{run: enableDemoMatchSweep, why: "the match process sweeps the duel queue for expired tickets"},
 		{write: "loadtest/playertcp/conn.go", why: "the robot transport that speaks the generated server's frame"},
 		{write: "loadtest/scenarios/demo.yaml", why: "one robot's life, as a scenario tree"},
 		{write: "cmd/loadtest/main.go", why: "robots + thresholds: the load test that is also the regression test"},
 		{write: "internal/service/game/service.go", why: "the game service starts the effect consumer in Init and drains it in Shutdown"},
 		{write: "internal/service/game/level_up_mail.go", why: "the consumer: JetStream durable + Mongo inbox → mail.Send keyed by EffectID"},
+		{write: "internal/service/game/matchmaker.go", why: "Candidates → Grouping → Commit on a ticker, then the World records the match"},
 		{write: "internal/service/account/collaborators.go", why: "an account service that can log a demo user in and mint ids from Redis"},
 	}
 }

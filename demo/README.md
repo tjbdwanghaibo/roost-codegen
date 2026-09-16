@@ -72,6 +72,30 @@ internal/service/game/level_up_mail.go     durable consumer + Mongo inbox（每�
   产生分歧。
 - 消费者在 `Service.Init` 里订阅、`Shutdown` 里 `Drain`：进程宕机期间提交的升级，回来时会补投。
 
+## 跨服务：game → match 组队
+
+match 服务是通用的：队列由 `Queue{Mode, GroupSize, Partition}` 定义、subject 的 kind 对它不透明，它负责的是队列本身与
+`Commit` 的原子性——**谁和谁一组不是它决定的**。`Candidates` 交出等待中的票，`Commit` 一次 CAS 成组；决定权是游戏策略，
+所以住在 game 进程：
+
+```
+JoinQueue 端点 ─ Enqueue(队列, subject, requestID=帧序号) ─▶ match 服务（typed servicerpc，经生成的 Match() 客户端）
+internal/service/game/matchmaker.go  每 500ms：Candidates → Grouping.Group → Commit → Sync_RecordMatch(World)
+PollMatch 端点 ─ Ticket / Match ─▶ match 服务（带 subject，服务端校验票的归属）
+```
+
+- `game/matchmaking/queue.go` 是游戏对 match 说的话：duel 队列两人一组、subject kind 是 `player`。
+- 所有对 match 的调用都从端点或普通 goroutine 发出，**从不在实体锁里**——World 只在 Commit 成功之后经自己的 Nest handler 记一笔。
+- `configs/service/config.match.yaml` 的 `sweep_queues` 列出 duel 队列：match 进程只负责扫过期票，不负责成组。
+- 一个发现：kit 的 match Mod 接受 `Grouping` collaborator 并写明"这是整个匹配策略"，但 store 里没有任何路径调用它；
+  成组是调用方驱动的。demo 的 matchmaker 直接调 `FirstComeGrouping{}.Group`，这才是那个接口的用法。
+
+## World 的职责
+
+World 有了自己的 DAO（`PlayersEntered` / `MatchesFormed`）和 `Stats` 组件：`RecordEnter` 在 EnterGame 之后、
+`RecordMatch` 在 Commit 之后各是一次独立的 Nest 调用（Player 与 World 是不同实体、不同锁档）；`WorldStats` 是一个带返回值的
+读 handler，锁内读、值出锁，端点从不碰 World 本身。
+
 ## 机器人压测 = 回归测试
 
 ```bash
@@ -79,7 +103,8 @@ go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20
 ```
 
 每个机器人：`connect`（握手凭据 `player:<id>`）→ `enter_game`（GetOrCreate Player）→ `add_item` → `add_exp`（升级，
-触发奖励邮件）。任何一步返回非零 code、或 `error_rate` / `p95` 超阈值，进程以非零码退出并打印 JSON 报告。
+触发奖励邮件）→ `join_queue` → 每 250ms `poll_match` 直到 matched（`retry` 节点包一层）→ `world_stats`（两个计数都得大于零）。
+任何一步返回非零 code、或 `error_rate` / `p95` 超阈值，进程以非零码退出并打印 JSON 报告。**`-count` 要给偶数**：duel 两人一组。
 
 - **runner / 场景树 / 动作注册 / 阈值门**全是 `roost-core/robot`，`cmd/loadtest/main.go` 只做三件事：注册本工程的消息
   （`action.MustRegisterCall` + 一个把泛型 Marshal 路由到生成的 pb 函数的 codec）、加载 `loadtest/scenarios/*.yaml`、
@@ -104,8 +129,13 @@ go run . mail --sid 1000 --config configs/service/config.mail.smoke.yaml &
 go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 5
 ```
 
-看三处：`db.player` 在 DAO 标记写的 `db=game` 库里（不是 `dataengine.database`）；重启 game 再跑一轮，items 与 level 在原值上累加；
-mail 的 Redis 里每个升级的玩家一封 `box:<id>`，`send:<EffectID>` 是幂等键。
+看四处：`db.player` 在 DAO 标记写的 `db=game` 库里（不是 `dataengine.database`）；重启 game 再跑一轮，items 与 level 在原值上累加；
+mail 的 Redis 里每个升级的玩家一封 `box:<id>`，`send:<EffectID>` 是幂等键；`db.world` 的 `players_entered` / `matches_formed` 随每轮增长。
+
+**给每次实跑一个独立的 `nats.prefix`**（三个进程一致，例如 `planetsmoke`）。共享的 JetStream 集群里若残留了别的测试建的流、
+且它的 subject 过滤覆盖 `roost.rpc.>`，JetStream 会用 PubAck 回应每一个 RPC 请求，与真正的服务端抢先——先到的赢，于是
+读调用大面积得到 `bus: unsupported rpc response version 0`（PubAck 被当作响应信封解码），写调用偶尔成功。这一次就是 kit
+集成测试留下的 `ROOST_IT_RPC_REQ_*` 流；换前缀即可，无需删流。
 
 ## account 的 collaborators
 

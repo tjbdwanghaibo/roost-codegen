@@ -233,6 +233,26 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if command := read("cmd/loadtest/main.go"); !strings.Contains(command, "loadtest.Threshold{") || !strings.Contains(command, "coded(resp.Code, resp.Reason)") {
 		t.Errorf("loadtest command lacks thresholds or response-code checks:\n%s", command)
 	}
+	// Cross-service matchmaking and the World's job: the matchmaker calls the
+	// typed match client and applies a Grouping; the World's counters move
+	// through Nest handlers; the match process sweeps the demo queue.
+	if matchmaker := read("internal/service/game/matchmaker.go"); !strings.Contains(matchmaker, "matcher.Commit(") || !strings.Contains(matchmaker, "grouping.Group(") || !strings.Contains(matchmaker, "Sync_RecordMatch(") {
+		t.Errorf("matchmaker does not drive the match service and record into the World:\n%s", matchmaker)
+	}
+	if stats := read("game/handler/world_stats.go"); !strings.Contains(stats, "(world.Stats, error)") {
+		t.Errorf("world_stats handler does not return the counters as a value:\n%s", stats)
+	}
+	if config := read("configs/service/config.match.yaml"); !strings.Contains(config, "- duel:2:default") {
+		t.Errorf("match config does not sweep the duel queue:\n%s", config)
+	}
+	for _, name := range []string{"HandleJoinQueue", "HandlePollMatch", "HandleWorldStats"} {
+		if bind := read("game/protocol_handlers/player/protocol_gen.go"); !strings.Contains(bind, name) {
+			t.Errorf("%s is not bound to the controller", name)
+		}
+	}
+	if spec := read("loadtest/scenarios/demo.yaml"); !strings.Contains(spec, "action: join_queue") || !strings.Contains(spec, "action: poll_match") || !strings.Contains(spec, "action: world_stats") {
+		t.Errorf("demo scenario lacks the matchmaking steps:\n%s", spec)
+	}
 	// The whole player-tcp workflow, as doctor judges it: access declared,
 	// transport generated, authenticator real, listener enabled.
 	manifest, err := LoadManifest(target)

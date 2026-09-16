@@ -1,0 +1,22 @@
+// Package matchmaking is what this game tells the match service: which queue
+// its players wait in and how a player is named there. The match service is
+// generic — mode, group size and subject kind are opaque to it — so these
+// definitions belong to the game.
+package matchmaking
+
+import (
+	svcmatch "github.com/tjbdwanghaibo/roost-kit/service/match"
+)
+
+// DuelQueue is the demo's one queue: two players, one partition. A queue is
+// identified by all three fields; a 3-player duel would be a different queue.
+var DuelQueue = svcmatch.Queue{Mode: "duel", GroupSize: 2, Partition: "default"}
+
+// SubjectKindPlayer names players in the match service's subjects.
+const SubjectKindPlayer svcmatch.SubjectKind = "player"
+
+// PlayerSubject is how a player queues. Score is what a grouping policy ranks
+// on; the demo's first-come grouping ignores it, so it stays zero here.
+func PlayerSubject(playerID int64) svcmatch.Subject {
+	return svcmatch.Subject{Kind: SubjectKindPlayer, ID: playerID}
+}

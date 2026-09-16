@@ -3,9 +3,10 @@
 //	go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20
 //
 // It is a load test and the demo's regression test in one: every robot logs
-// in with the terminal credential, creates or loads its Player, adds an item
-// and levels up, and the run fails on any non-zero response code or on a
-// threshold breach. The runner, scenario tree, action registry and threshold
+// in with the terminal credential, creates or loads its Player, adds an item,
+// levels up, queues for a duel until the matchmaker pairs it, reads the
+// World's counters, and the run fails on any non-zero response code or on a
+// threshold breach. Use an even -count: duels need pairs. The runner, scenario tree, action registry and threshold
 // gate are roost-core/robot; this file only registers the project's messages
 // and the transport that speaks the generated server's frame.
 package main
@@ -46,7 +47,10 @@ func main() {
 	scenarioName := flag.String("scenario", "demo", "scenario to run")
 	firstPlayerID := flag.Int64("first-player-id", 900_000, "robot i logs in as this id + i")
 	maxErrorRate := flag.Float64("max-error-rate", 0, "threshold: failed robots / finished robots")
-	maxP95 := flag.Float64("max-p95", 0.5, "threshold: scenario cost p95, seconds")
+	// The scenario deliberately waits for matchmaking (poll every 250ms while
+	// the matchmaker ticks every 500ms), so a whole-scenario p95 of a few
+	// hundred milliseconds is the floor, not a regression.
+	maxP95 := flag.Float64("max-p95", 2.0, "threshold: scenario cost p95, seconds")
 	flag.Parse()
 
 	if err := run(*endpoint, *count, *duration, *scenarioDir, *scenarioName, *firstPlayerID, *maxErrorRate, *maxP95); err != nil {
@@ -137,6 +141,39 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 		action.OnResp(func(_ *robot.Context, resp *pb.AddExpResponse) error {
 			return coded(resp.Code, resp.Reason)
 		}))
+	// join_queue remembers the ticket on the blackboard under the name
+	// poll_match's request field resolves to (ticket_id).
+	action.MustRegisterCall[pb.JoinQueueRequest, pb.JoinQueueResponse](actions, protocols, "join_queue", msgid.MsgJoinQueue,
+		action.OnResp(func(rb *robot.Context, resp *pb.JoinQueueResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			rb.Blackboard.Set("ticket_id", resp.TicketID)
+			return nil
+		}))
+	// poll_match fails while the ticket is still waiting, so a Retry node
+	// around it is the wait-for-match loop.
+	action.MustRegisterCall[pb.PollMatchRequest, pb.PollMatchResponse](actions, protocols, "poll_match", msgid.MsgPollMatch,
+		action.OnResp(func(rb *robot.Context, resp *pb.PollMatchResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.State != "matched" {
+				return fmt.Errorf("ticket still %s", resp.State)
+			}
+			rb.Blackboard.Set("match_id", resp.MatchID)
+			return nil
+		}))
+	action.MustRegisterCall[pb.WorldStatsRequest, pb.WorldStatsResponse](actions, protocols, "world_stats", msgid.MsgWorldStats,
+		action.OnResp(func(_ *robot.Context, resp *pb.WorldStatsResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.PlayersEntered <= 0 || resp.MatchesFormed <= 0 {
+				return fmt.Errorf("world counters not moving: entered=%d matches=%d", resp.PlayersEntered, resp.MatchesFormed)
+			}
+			return nil
+		}))
 }
 
 func coded(code int32, reason string) error {
@@ -199,6 +236,12 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalAddItemRequest(message)
 	case *pb.AddExpRequest:
 		return pb.MarshalAddExpRequest(message)
+	case *pb.JoinQueueRequest:
+		return pb.MarshalJoinQueueRequest(message)
+	case *pb.PollMatchRequest:
+		return pb.MarshalPollMatchRequest(message)
+	case *pb.WorldStatsRequest:
+		return pb.MarshalWorldStatsRequest(message)
 	default:
 		return nil, fmt.Errorf("pb codec: no marshal for %T", value)
 	}
@@ -220,6 +263,24 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 		*message = *decoded
 	case *pb.AddExpResponse:
 		decoded, err := pb.UnmarshalAddExpResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.JoinQueueResponse:
+		decoded, err := pb.UnmarshalJoinQueueResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.PollMatchResponse:
+		decoded, err := pb.UnmarshalPollMatchResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.WorldStatsResponse:
+		decoded, err := pb.UnmarshalWorldStatsResponse(data)
 		if err != nil {
 			return err
 		}

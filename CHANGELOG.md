@@ -81,6 +81,18 @@
   5 个机器人 connect → enter_game → add_item → add_exp 全部成功，Mongo 里 `game.player` 落库，进程重启后再跑一轮 items 1→2、
   level 1→3；升级 effect 经 JetStream 投递到消费者，mail 服务 Redis 里出现每个玩家的奖励邮件与以 EffectID 为键的幂等记录。
   实跑同时发现并修掉了上面 Fixed 里的端点 id 缺陷。
+  第五批：**跨服务组队（game → match）+ World 的真实职责**。`game/matchmaking/queue.go` 定义 duel 队列与 player subject；
+  `JoinQueue`（10003）/ `PollMatch`（10004）端点经生成的 typed match 客户端 `Enqueue` / `Ticket` / `Match`，帧序号作 Enqueue 幂等键；
+  `internal/service/<game>/matchmaker.go` 在 game 进程里每 500ms `Candidates → Grouping.Group → Commit`，成组后
+  `Sync_RecordMatch` 让 World 记一笔——对 match 的调用全部在实体锁之外。World 加 `Stats` 组件与 DAO（`PlayersEntered` /
+  `MatchesFormed`），`RecordEnter`（EnterGame 之后的独立 Nest 调用）、`RecordMatch`、`WorldStats`（带 `world.Stats` 返回值的读
+  handler）三个 handler，`WorldStats`（10005）端点读出计数。match 配置 `sweep_queues` 列出 duel 队列（run 步骤）。
+  压测场景追加 join_queue → retry{wait 250ms; poll_match} → world_stats，`-count` 须为偶数。
+  顺带记一个 kit 观察：match Mod 接受的 `Grouping` collaborator 在 store 里没有任何调用路径，成组完全由调用方驱动。
+  实跑：game + mail + match 三进程，10 个机器人全部成功（error_rate 0，p95 1.0s，含刻意等待匹配的时间，默认阈值放到 2s），
+  match 进程里成组 5 对，`db.world` 计数 players_entered / matches_formed 同步增长，每个升级玩家一封奖励邮件。
+  过程中撞到一个环境陷阱并写进 `demo/README.md`：共享 JetStream 里残留的测试流（`ROOST_IT_RPC_REQ_*`）覆盖 `roost.rpc.>`，
+  以 PubAck 抢答 RPC 请求，读调用大面积得到 `bus: unsupported rpc response version 0`；每次实跑给三个进程一个独立的 `nats.prefix` 即可。
 
 - **生成物自带守卫测试**（U-0124）。远端托管实体的 `*_gen_wire.go` 旁生成 `*_gen_wire_test.go`，在业务工程里钉住生成代码内的三条远端提交守卫
   （无事务内持久化变更、DAO 级删除、别的实体的确认）；nest sender 包旁生成 `*_nest_gen_test.go`，钉住 nil 客户端 → `nest.ErrNestStopped`。

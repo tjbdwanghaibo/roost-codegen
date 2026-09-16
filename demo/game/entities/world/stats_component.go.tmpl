@@ -1,0 +1,68 @@
+package world
+
+import (
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/entity"
+)
+
+//roost:component type=2002
+const CompTypeStats entity.ComponentType = 2002
+
+// StatsComponent owns World gameplay logic. Persistent or replicated state should
+// be changed through generated DAO methods so dirty tracking remains correct.
+type StatsComponent struct {
+	entity.ComponentBase
+	owner *World
+}
+
+// IStatsEntity is the narrow lock-safe view for Nest handlers using this
+// component. The generated Entity wire implements the getter.
+type IStatsEntity interface {
+	entity.IThreadSafeEntity
+	StatsComp() *StatsComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeStats, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*World)
+		if !ok {
+			return nil, fmt.Errorf("stats component: owner %T is not *World", owner)
+		}
+		return &StatsComponent{owner: typed}, nil
+	})
+}
+
+func (component *StatsComponent) Name() string { return "stats" }
+
+// Owner is available only while the Entity is alive and locked by Nest.
+func (component *StatsComponent) Owner() *World { return component.owner }
+
+// Add business methods below. Do not add mutexes here: Nest enters business
+// handlers only after locking the owning Entity.
+
+// Stats is the World's counters as a handler result. It crosses the Nest
+// boundary as a value, so the endpoint that reads it never touches the World
+// outside its lock.
+type Stats struct {
+	PlayersEntered int64
+	MatchesFormed  int64
+}
+
+// RecordEnter counts one login.
+func (component *StatsComponent) RecordEnter() {
+	dao := component.Owner().Dao()
+	dao.SetPlayersEntered(dao.GetPlayersEntered() + 1)
+}
+
+// RecordMatch counts one formed match.
+func (component *StatsComponent) RecordMatch() {
+	dao := component.Owner().Dao()
+	dao.SetMatchesFormed(dao.GetMatchesFormed() + 1)
+}
+
+// Snapshot reads both counters under the lock.
+func (component *StatsComponent) Snapshot() Stats {
+	dao := component.Owner().Dao()
+	return Stats{PlayersEntered: dao.GetPlayersEntered(), MatchesFormed: dao.GetMatchesFormed()}
+}

@@ -1,0 +1,33 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	"{{MODULE}}/game/matchmaking"
+	player_agent "{{MODULE}}/game/player_agent"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// HandleJoinQueue enqueues the player with the match service — a typed call
+// into another process over the bus, made from the endpoint with no Entity
+// lock held. The frame sequence is the idempotency key: a client retrying
+// the same frame gets the same ticket, a new frame after a match gets a new
+// one. The match service's own coded errors (already queued, queue invalid)
+// pass through ClientError like any other.
+func (controller *Controller) HandleJoinQueue(context *player_agent.Context, request *pb.JoinQueueRequest) (*pb.JoinQueueResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("join_queue endpoint: context and request are required")
+	}
+	requestID := fmt.Sprintf("join:%d:%s:%d", context.PlayerID, context.Session.Principal().SessionID, context.Seq)
+	ticket, err := controller.Matcher().Enqueue(context.Context(), matchmaking.DuelQueue, matchmaking.PlayerSubject(context.PlayerID), requestID)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("join_queue failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.JoinQueueResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.JoinQueueResponse{TicketID: ticket.ID, State: string(ticket.State)}, nil
+}

@@ -1,0 +1,120 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	world "{{MODULE}}/game/entities/world"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	lifecycle "{{MODULE}}/game/lifecycle"
+	"{{MODULE}}/game/matchmaking"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
+	svcmatch "github.com/tjbdwanghaibo/roost-kit/service/match"
+)
+
+const (
+	// matchmakerInterval is how often this process tries to form groups.
+	matchmakerInterval = 500 * time.Millisecond
+	// matchmakerWindow bounds how many waiting tickets one pass reads.
+	matchmakerWindow = 64
+)
+
+// startMatchmaker drives the match service's queue for this game.
+//
+// The match service holds the queue and makes Commit atomic, but it does not
+// decide who plays with whom: Candidates hands back the waiting tickets and
+// Commit takes a group. Deciding is a game policy, so it runs here, in the
+// game process, with a Grouping — the same interface the match Mod is built
+// around. Every call into the match service is a typed servicerpc call
+// through the generated client (see framework_clients_gen.go), made from a
+// plain goroutine: never from inside an Entity lock, which is why the World
+// only learns about a match afterwards, through its own Nest handler.
+func startMatchmaker(ctx context.Context, registry *app.Registry) (func(), error) {
+	matcher, err := Match(registry)
+	if err != nil {
+		return nil, fmt.Errorf("matchmaker: %w", err)
+	}
+	nestClient, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || nestClient == nil {
+		return nil, errors.New("matchmaker: nest client is unavailable")
+	}
+	worldID, err := entity.BuildEntityID(lifecycle.WorldUniqueID, world.EntityKindWorld)
+	if err != nil {
+		return nil, fmt.Errorf("matchmaker: %w", err)
+	}
+	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(matchmakerInterval)
+		defer ticker.Stop()
+		recorder := syncsender.NewRecordMatchSender(nestClient)
+		var grouping svcmatch.Grouping = svcmatch.FirstComeGrouping{}
+		for {
+			select {
+			case <-loopCtx.Done():
+				return
+			case <-ticker.C:
+			}
+			if err := formMatches(loopCtx, matcher, grouping, recorder, worldID); err != nil && loopCtx.Err() == nil {
+				slog.Warn("matchmaker: pass failed", "queue", matchmaking.DuelQueue.Key(), "err", err)
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}, nil
+}
+
+// formMatches drains as many groups as the policy can form from one window
+// of candidates. A Commit that loses a race (a ticket was cancelled or taken
+// meanwhile) is not an error of this pass: the next tick reads fresh
+// candidates.
+func formMatches(ctx context.Context, matcher svcmatch.Matchmaker, grouping svcmatch.Grouping, recorder *syncsender.RecordMatchSender, worldID int64) error {
+	queue := matchmaking.DuelQueue
+	candidates, err := matcher.Candidates(ctx, queue, matchmakerWindow)
+	if err != nil {
+		return fmt.Errorf("candidates: %w", err)
+	}
+	for len(candidates) >= queue.GroupSize {
+		group, formed, err := grouping.Group(queue, candidates)
+		if err != nil {
+			return fmt.Errorf("grouping: %w", err)
+		}
+		if !formed {
+			return nil
+		}
+		ids := make([]string, 0, len(group))
+		taken := make(map[string]bool, len(group))
+		for _, ticket := range group {
+			ids = append(ids, ticket.ID)
+			taken[ticket.ID] = true
+		}
+		match, err := matcher.Commit(ctx, queue, ids)
+		if err != nil {
+			if errors.Is(err, svcmatch.ErrTicketMissing) || errors.Is(err, svcmatch.ErrTicketMatched) || errors.Is(err, svcmatch.ErrConflict) {
+				return nil
+			}
+			return fmt.Errorf("commit: %w", err)
+		}
+		slog.Info("matchmaker: match formed", "queue", queue.Key(), "match_id", match.ID, "members", len(match.Members))
+		if err := recorder.Sync_RecordMatch(ctx, worldID); err != nil {
+			// The match exists either way; the counter is bookkeeping.
+			slog.Warn("matchmaker: world did not record the match", "match_id", match.ID, "err", err)
+		}
+		remaining := candidates[:0]
+		for _, ticket := range candidates {
+			if !taken[ticket.ID] {
+				remaining = append(remaining, ticket)
+			}
+		}
+		candidates = remaining
+	}
+	return nil
+}
