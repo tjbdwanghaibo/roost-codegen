@@ -1,0 +1,57 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"fmt"
+
+	world "{{MODULE}}/game/entities/world"
+	lifecycle "{{MODULE}}/game/lifecycle"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+)
+
+// Service is the game server. It owns this process's World and the consumers
+// that turn committed effects into work — here, level-ups into reward mail.
+type Service struct {
+	world       *world.World
+	levelUpMail fnats.IJetStreamSubscription
+}
+
+func New() *Service                    { return &Service{} }
+func (*Service) Name() app.ServiceName { return app.ServiceName("{{GAME_SERVICE}}") }
+
+// Init runs after every Mod has started, so the Entity runtime, JetStream,
+// Mongo and the mail client are all up. The World — this process's one
+// singleton Entity — is created or loaded here, before any request is
+// served; then the effect consumer subscribes, so a level-up committed while
+// this process was down is delivered as soon as it is back.
+func (s *Service) Init(registry *app.Registry) error {
+	value, err := lifecycle.EnsureWorld(context.Background(), registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.world = value
+	subscription, err := startLevelUpMailer(context.Background(), registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.levelUpMail = subscription
+	return nil
+}
+
+// World is this process's World. It is set in Init and never nil afterwards.
+func (s *Service) World() *world.World { return s.world }
+
+func (*Service) Serve(ctx context.Context) error { <-ctx.Done(); return nil }
+
+// Shutdown drains the consumer: in-flight effects finish or are redelivered
+// to the next process holding the durable; nothing is lost either way.
+func (s *Service) Shutdown(context.Context) error {
+	if s.levelUpMail != nil {
+		s.levelUpMail.Drain()
+		s.levelUpMail = nil
+	}
+	return nil
+}
+
+var _ app.Service = (*Service)(nil)

@@ -239,6 +239,17 @@ type Authenticator interface {
 	Authenticate(context.Context, string, net.Addr) (gateway.Principal, error)
 }
 
+// RegistryBound is implemented by an Authenticator that needs a capability
+// this process publishes — an account client to validate session tickets, a
+// key store the verifier reads. Authenticators are built in Init from
+// configuration alone; the Mod calls BindRegistry in Provide, after the
+// process's Mods have published their capabilities and before the listener
+// starts. An error stops the process: a listener whose authenticator cannot
+// reach its verifier must not accept connections.
+type RegistryBound interface {
+	BindRegistry(registry *app.Registry) error
+}
+
 type AuthenticatorFunc func(context.Context, string, net.Addr) (gateway.Principal, error)
 
 func (fn AuthenticatorFunc) Authenticate(ctx context.Context, token string, remote net.Addr) (gateway.Principal, error) {
@@ -273,6 +284,9 @@ func (mod *Mod) Provide(registry *app.Registry) error {
 	if registry == nil { return errors.New("player tcp: app registry is nil") }
 	runtime, ok := app.Lookup[*accessplayer.Runtime](registry, accessplayer.Name)
 	if !ok || runtime == nil || runtime.Protocols == nil { return errors.New("player tcp: player access runtime is unavailable") }
+	if bound, ok := mod.authenticator.(RegistryBound); ok {
+		if err := bound.BindRegistry(registry); err != nil { return fmt.Errorf("player tcp: bind authenticator: %%w", err) }
+	}
 	mod.runtime = runtime
 	mod.transportRuntime = &Runtime{protocols: runtime.Protocols}
 	return registry.Register(Name, mod.transportRuntime)

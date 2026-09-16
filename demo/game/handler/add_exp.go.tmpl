@@ -1,0 +1,14 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+// handlerAddExp is the demo's second write transaction and the start of its
+// event chain: the component moves Exp and Level and emits a level-up effect
+// on this same transaction; after commit the game service consumes the
+// effect and sends a reward mail. The return value is the number of levels
+// gained, carried back through the generated Sender.
+//
+//roost:nest rollback=undo durability=strict
+func handlerAddExp(target player.IProfileEntity, amount int64) (int32, error) {
+	return target.ProfileComp().AddExp(amount)
+}

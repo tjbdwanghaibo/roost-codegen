@@ -53,6 +53,25 @@ TCP (player access)
 - **错误码归号段**：`roost add errcode X -id N` 的 N 必须落在清单 `ids.errcode`（100000–199999）里，
   `roost id check` 负责查重；`docs/generated/errcode.csv` 是给客户端的对照表。
 
+## 事件链：升级 → 奖励邮件（事务性 outbox）
+
+```
+AddExp 端点 → Nest 锁 Player → ProfileComponent.AddExp
+  ├─ dao.SetExp / SetLevel                 状态变更
+  └─ effects.EmitPlayerLevelUp             nest.Emit：effect 与状态变更进同一条 WAL 记录
+        ↓ commit 后由 dataengine 发到 JetStream（<subject_prefix>.player.level_up）
+internal/service/game/level_up_mail.go     durable consumer + Mongo inbox（每个 EffectID 只处理一次）
+  └─ mail.Send(RequestID = EffectID)       mail 服务按 RequestID 去重：第二层幂等
+```
+
+- **升级"这件事"在组件里发出**，紧挨着让它成立的状态变更；谁对它做出反应住在别处。handler 回滚时 effect 一起消失，
+  所以永远不会给一个没落库的升级发奖励。
+- **两层幂等**：inbox 收据与业务写入在一个 Mongo 事务里提交，进程重启后重投的 effect 会被认出来；邮件是总线调用
+  不是 Mongo 写入，所以还要靠 `RequestID = EffectID` 让 mail 服务自己去重。
+- **生产者与消费者读同一组配置键**（`dataengine.database` / `dataengine.effects.*`）、用同一组默认值，两边不会对"effect 在哪"
+  产生分歧。
+- 消费者在 `Service.Init` 里订阅、`Shutdown` 里 `Drain`：进程宕机期间提交的升级，回来时会补投。
+
 ## account 的 collaborators
 
 `game` 模板给的 `Verifier` / `Allocator` 默认全拒绝（这是对的：没有校验的身份和会重复的 id 都不该有默认值）。
@@ -64,13 +83,20 @@ demo 换成能跑的版本：
   `account.RegistryBound`（roost-kit）在 `Provide` 里拿到 registry 再查 Redis 客户端：collaborator 是在 app 存在之前
   构造的，没有这个钩子就拿不到任何持久的东西。
 
-## auth.go 不是认证
+## auth.go：两种凭据
 
-`internal/access/player/tcp/auth.go` 认一个 `player:<id>` 的字符串就把你当成那个玩家。它的存在只是为了让
-demo 能在终端里跑通，**上线前必须换成真实校验**（签名、过期、密钥来自配置或 Secret）。
+`internal/access/player/tcp/auth.go` 认两种字符串：
+
+- `session:<player_id>:<token>` —— **真实路径**。token 由 account 服务签发（Login → CreateRole → SelectRole），
+  这里经 account 客户端 `ValidateSession` 校验，principal 用的是 account 返回的角色而不是 socket 声称的 id。
+  客户端拿到 account 客户端靠生成的 TCP 传输层新增的 `RegistryBound` 钩子：authenticator 在 `Init` 里只有 viper 配置，
+  Mod 在 `Provide` 里把 registry 交给它。
+- `player:<id>` —— **不是认证**，直接信任 socket 给的 id，只为了能用一个裸 TCP 客户端把 demo 跑通。上线前删掉
+  `demoTokenPrefix` 和读它的分支。
+
 生成器默认给的是 fail-closed 骨架，demo 故意替换掉它——这也是 `roost config` 启用 TCP 时会检查的那个文件。
-真实形态是 token 里带 account 服务发的会话票据、在这里经 account 客户端 `ValidateSession` 校验；目前生成的
-authenticator 只拿得到 viper 配置、拿不到 registry，所以 demo 还接不上——这是 codegen 模板层的一个待补项。
+脚手架同时把 `player_access.tcp.enabled` 置为 true（等价于 `roost config enable player-tcp`），
+所以 `roost project doctor -workflow player-tcp` 在刚生成的工程上全绿。
 
 ## 改这里的东西之后
 

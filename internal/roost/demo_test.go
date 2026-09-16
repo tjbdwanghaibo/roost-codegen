@@ -56,8 +56,11 @@ func TestDemoTemplateStepsAndShippedFilesAgree(t *testing.T) {
 	}
 	written := map[string]bool{}
 	for _, step := range demoScaffoldSteps("game") {
-		if step.write == "" {
+		if step.add != nil || step.run != nil {
 			continue
+		}
+		if step.write == "" {
+			t.Fatal("a step neither adds, runs nor writes")
 		}
 		if written[step.write] {
 			t.Errorf("step writes %s twice", step.write)
@@ -189,6 +192,78 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// through the kit hook; the game template's defaults refuse every login.
 	if collaborators := read("internal/service/account/collaborators.go"); !strings.Contains(collaborators, "account.RegistryBound") || strings.Contains(collaborators, "is not configured; implement") {
 		t.Errorf("account collaborators are still the refusing defaults:\n%s", collaborators)
+	}
+	// The authenticator validates session tickets through the account client
+	// it is bound to in Provide; the generated transport must expose the hook.
+	if auth := read("internal/access/player/tcp/auth.go"); !strings.Contains(auth, "ValidateSession(") || !strings.Contains(auth, "BindRegistry(") {
+		t.Errorf("auth.go does not validate sessions through a bound account client:\n%s", auth)
+	}
+	if server := read("internal/access/player/tcp/server_gen.go"); !strings.Contains(server, "type RegistryBound interface") {
+		t.Errorf("the generated transport lost the RegistryBound hook the demo authenticator relies on")
+	}
+	// The event chain: the component emits on the transaction, the service
+	// consumes with an inbox and sends mail keyed by the effect id.
+	if profile := read("game/entities/player/profile_component.go"); !strings.Contains(profile, "effects.EmitPlayerLevelUp(") {
+		t.Errorf("profile component does not emit the level-up effect:\n%s", profile)
+	}
+	if service := read("internal/service/game/service.go"); !strings.Contains(service, "startLevelUpMailer(") {
+		t.Errorf("game service does not start the effect consumer:\n%s", service)
+	}
+	if mailer := read("internal/service/game/level_up_mail.go"); !strings.Contains(mailer, "nestwal.SubscribeJetStreamEffects(") || !strings.Contains(mailer, "RequestID:        envelope.EffectID") {
+		t.Errorf("level-up mailer is not the inbox-backed, idempotent consumer:\n%s", mailer)
+	}
+	if endpoint := read("game/controllers/player/add_exp.go"); !strings.Contains(endpoint, "errcode.ClientError(err)") {
+		t.Errorf("add_exp endpoint does not translate errors at the boundary:\n%s", endpoint)
+	}
+	// The whole player-tcp workflow, as doctor judges it: access declared,
+	// transport generated, authenticator real, listener enabled.
+	manifest, err := LoadManifest(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := checkPlayerTCPWorkflow(target, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.Status != StatusOK {
+			t.Errorf("doctor %s: %s", item.Name, item.Detail)
+		}
+	}
+}
+
+// The demo's service files follow the game service's name: a project whose
+// first service is not called "game" gets them under its own directory, in
+// its own package, naming itself correctly.
+func TestDemoTemplateFollowsTheGameServiceName(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planet")
+	if _, _, err := NewProject(NewOptions{
+		Name: "planet", Module: "example.com/planet", Out: target, Services: []string{"arena"},
+		Mods: []string{"configdata", "mongo", "nats", "dataengine", "nest"}, Template: demoTemplateName,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "internal", "service", "game")); !os.IsNotExist(err) {
+		t.Fatalf("internal/service/game exists in a project whose game service is arena (err=%v)", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(target, "internal", "service", "arena", "level_up_mail.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"package " + safeIdent("arena"), `"arena-level-up-mail"`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("level_up_mail.go lacks %q:\n%s", want, raw)
+		}
+	}
+	if strings.Contains(string(raw), demoGameServicePlaceholder) || strings.Contains(string(raw), demoGameServicePackagePlaceholder) {
+		t.Errorf("a placeholder survived:\n%s", raw)
+	}
+	service, err := os.ReadFile(filepath.Join(target, "internal", "service", "arena", "service.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(service), `app.ServiceName("arena")`) {
+		t.Errorf("service.go does not name the arena service:\n%s", service)
 	}
 }
 

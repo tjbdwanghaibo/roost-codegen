@@ -1,11 +1,13 @@
 package player
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
+	"{{MODULE}}/game/effects"
+	apperrors "{{MODULE}}/internal/errors"
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
 )
 
 //roost:component type=2000
@@ -47,24 +49,27 @@ func (component *ProfileComponent) Owner() *Player { return component.owner }
 // framework rather than about balancing.
 const ExpPerLevel int64 = 100
 
-// ErrEmptyName rejects a blank rename before any state moves.
-var ErrEmptyName = errors.New("profile: name must not be empty")
-
 // Rename sets the display name through the generated mutator.
 func (component *ProfileComponent) Rename(name string) error {
 	if strings.TrimSpace(name) == "" {
-		return ErrEmptyName
+		return errcode.Wrap(apperrors.ErrNameEmpty, nil)
 	}
 	component.Owner().Dao().SetName(name)
 	return nil
 }
 
-// AddExp grants experience and levels the player up while the curve allows it.
+// AddExp grants experience, levels the player up while the curve allows it,
+// and returns the number of levels gained.
+//
 // Both fields move through generated mutators, so a handler that fails later
-// has both rolled back together.
+// has both rolled back together — and so does the effect: EmitPlayerLevelUp
+// rides on the same Nest transaction, so the reward mail it leads to is sent
+// exactly when the new level is durable, never for a level-up that rolled
+// back. The fact "a level-up happened" is emitted here, next to the state
+// change that is that fact; who reacts to it lives elsewhere.
 func (component *ProfileComponent) AddExp(amount int64) (int32, error) {
 	if amount <= 0 {
-		return 0, nil
+		return 0, errcode.Wrap(apperrors.ErrExpAmount, nil, "amount", amount)
 	}
 	dao := component.Owner().Dao()
 	exp := dao.GetExp() + amount
@@ -74,8 +79,13 @@ func (component *ProfileComponent) AddExp(amount int64) (int32, error) {
 		gained++
 	}
 	dao.SetExp(exp)
-	if gained > 0 {
-		dao.SetLevel(dao.GetLevel() + gained)
+	if gained == 0 {
+		return 0, nil
+	}
+	level := dao.GetLevel() + gained
+	dao.SetLevel(level)
+	if err := effects.EmitPlayerLevelUp(component.Owner().UniqueID(), level); err != nil {
+		return 0, fmt.Errorf("profile: %w", err)
 	}
 	return gained, nil
 }

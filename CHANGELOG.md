@@ -6,6 +6,10 @@
 
 ### Changed
 
+- **生成的 player TCP 传输层新增 `RegistryBound` 钩子**：authenticator 若实现 `BindRegistry(*app.Registry) error`，Mod 在
+  `Provide` 里（listener 启动之前）把进程的 registry 交给它，返回错误则进程不启动。此前 authenticator 只在 `Init` 拿到 viper
+  配置，拿不到任何进程内能力——要用 account 客户端校验会话票据就没有入口。`server_gen.go` 是生成物，`project sync` 即得到；
+  未实现该接口的 authenticator 不受影响。
 - **`category=` 进实体标记并直接进生成物;生成的聚合注册末尾校验 entity 注册表**(M-05;前置 M-01～M-04)。生成的接线原来写 `entity.MustEntityCategoryOfKind(kind)`,一次运行期查表、查不到就 panic,于是"业务文件里手写的 `MustRegisterEntityKindCategory` 必须先跑"成了隐式前置,而这个顺序只由手写聚合文件的第一行保证。category 是 kind 的静态事实,标记里写清楚就能直接生成,前置随之消失。取值要求是导出标识符可带包限定,`category=1` / `category="player"` 这类写法在生成器就报错。没写 `category=` 时仍生成运行期查表,未迁移的工程不受影响。
   `roost add entity` 的实体文件不再手写注册,category 写在标记上;`roost add lifecycle` 生成的两处 `<pkg>.EntityCategory<Name>` 引用(M-04 删掉了那个常量,会让工程编译不过)改为 `entity.MustEntityCategoryOfKind(<pkg>.EntityKind<Name>)`。`registry.RegisterAll()` 是工程里唯一知道"注册结束了"的时点,聚合末尾因此调 `entity.ValidateEntityRegistry()` 并包装其错误,一次列出所有不一致;模板的 `fmt` 与 `roost-core/entity` 两个 import 变成无条件。实施记录见 roost-core `docs/bugfix/M-05-marker-owns-the-category.md`。
 - **`remote=capable` 与 `remote=true` 系列拼写改为报错;`roost add entity` 脚手架归 `entity.EntityCategoryOther`**(M-04,**破坏性**,须与 roost-core 同版本升级)。core 删除了 `entity.RemotePolicyCapable`:它的全部作用是把 kind 放进第一个锁档,而锁档现在就是 kind 的 category。标记不再静默降级成 `none` —— 降级会改变一个已有实体的锁档 —— 而是报错并给出替代方案(把 kind 注册进某个 category,`remote=` 用 none / managed / mirror);`remote=bogus` 这类拼写错误仍得到原来的"不是这几个之一"信息。
@@ -49,6 +53,15 @@
   `internal/service/account/collaborators.go` 换成能跑的版本：`Verifier` 只认 `demo` 渠道的 `demo:<open_id>` 凭据（不是身份校验，
   文件头写明）；`Allocator` 用 account 服务自己 Redis 里的 `INCR` 计数器，经 roost-kit 新增的 `account.RegistryBound` 在 `Provide`
   里拿到 registry。生成的工程 `go build` / `go vet` / `go test ./...` / `roost id check` / `roost generate --check` 全绿。
+  第三批：**会话票据校验 + 升级事件链（事务性 outbox → 奖励邮件）**。auth.go 认 `session:<player_id>:<token>`，经 account
+  客户端 `ValidateSession` 校验、principal 取 account 返回的角色；`player:<id>` 保留为终端调试捷径并标明不是认证。
+  `AddExp` 加第二条 handler / 协议（msg 10001）/ 端点；`ProfileComponent.AddExp` 升级时 `effects.EmitPlayerLevelUp` →
+  `nest.Emit`，effect 与状态变更进同一条 WAL 记录、回滚一起消失；`internal/service/<game>/level_up_mail.go` 用
+  `nestwal.SubscribeJetStreamEffects`（durable + Mongo inbox）消费并 `mail.Send`，`RequestID = EffectID` 作第二层幂等；
+  `service.go` 在 Init 订阅、Shutdown drain。demo 的 `internal/service/game/` 下文件按实际游戏服务名落盘
+  （`{{GAME_SERVICE}}` / `{{GAME_SERVICE_PKG}}` 占位符），`TestDemoTemplateFollowsTheGameServiceName` 钉住。错误码增至 100005。
+  脚手架多一类"运行"步骤：`player_access.tcp.enabled` 置 true（等价 `roost config enable player-tcp`），
+  `roost project doctor -workflow player-tcp` 在刚生成的工程上全绿，测试直接调 `checkPlayerTCPWorkflow` 钉住。
 
 - **生成物自带守卫测试**（U-0124）。远端托管实体的 `*_gen_wire.go` 旁生成 `*_gen_wire_test.go`，在业务工程里钉住生成代码内的三条远端提交守卫
   （无事务内持久化变更、DAO 级删除、别的实体的确认）；nest sender 包旁生成 `*_nest_gen_test.go`，钉住 nil 客户端 → `nest.ErrNestStopped`。
