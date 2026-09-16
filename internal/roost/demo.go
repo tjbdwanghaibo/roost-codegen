@@ -55,14 +55,15 @@ func demoSourceFiles() ([]string, error) {
 }
 
 // applyDemoTemplate is the game template plus what the demo's own code needs
-// from the manifest: the protocol feature (its request message) and the dao
-// feature (its persistent Player state). Both are on by default; a caller who
-// narrowed -features would otherwise get a project that cannot build.
+// from the manifest: protocol (its request message), dao (its persistent
+// Player state), config (the item table) and errcode (its coded failures).
+// All are on by default; a caller who narrowed -features would otherwise get
+// a project that cannot build.
 func applyDemoTemplate(m *Manifest, gameService string) error {
 	if err := applyGameTemplate(m, gameService); err != nil {
 		return err
 	}
-	for _, feature := range []string{"protocol", "entity", "nest", "dao"} {
+	for _, feature := range []string{"protocol", "entity", "nest", "dao", "config", "errcode"} {
 		if !contains(m.Features, feature) {
 			m.Features = append(m.Features, feature)
 		}
@@ -89,22 +90,35 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "dao", Name: "Player", Entity: "Player"}, why: "persistence for both components"},
 		{write: "db/def/player.go", why: "the persistent fields the generated mutators are built from"},
 		{write: "game/entities/player/profile_component.go", why: "rename and level-up through generated mutators"},
-		{write: "game/entities/player/bag_component.go", why: "add-item through generated map mutators"},
+		{write: "game/entities/player/bag_component.go", why: "add-item: table lookup, coded errors, generated map mutators"},
+		{add: &AddOptions{Kind: "table", Name: "Item"}, why: "the item config table"},
+		{write: "configs/schema/item.go", why: "the table's columns and rules"},
+		{write: "configs/table/item.csv", why: "the rows; converted to configs/data/item.json by generate"},
+		{add: &AddOptions{Kind: "errcode", Name: "ItemUnknown", ID: 100001}, why: "a coded failure in the manifest's errcode space"},
+		{add: &AddOptions{Kind: "errcode", Name: "ItemCount", ID: 100002}, why: "a coded failure in the manifest's errcode space"},
+		{add: &AddOptions{Kind: "errcode", Name: "BagFull", ID: 100003}, why: "a coded failure in the manifest's errcode space"},
+		{write: "internal/errors/item_unknown.go", why: "client-facing message instead of the TODO placeholder"},
+		{write: "internal/errors/item_count.go", why: "client-facing message instead of the TODO placeholder"},
+		{write: "internal/errors/bag_full.go", why: "client-facing message instead of the TODO placeholder"},
 		{add: &AddOptions{Kind: "handler", Name: "AddItem", Entity: "Player", Component: "Bag"}, why: "the write transaction"},
-		{write: "game/handler/add_item.go", why: "handler parameters; the Sender and endpoint are generated from them"},
+		{write: "game/handler/add_item.go", why: "handler parameters and result; the Sender and endpoint are generated from them"},
 		{add: &AddOptions{Kind: "access", Name: "player", Service: gameService}, why: "the player request boundary"},
 		{add: &AddOptions{Kind: "transport", Name: "tcp"}, why: "a transport a client can actually connect to"},
 		{write: "internal/access/player/tcp/auth.go", why: "a demo credential so the flow can be driven end to end"},
 		{add: &AddOptions{Kind: "protocol", Name: "AddItem", Group: "game", Handler: "player"}, why: "the wire message"},
-		{write: "protocol/def/add_item.go", why: "request fields matching the handler parameters"},
+		{write: "protocol/def/add_item.go", why: "request fields matching the handler parameters; response with code and count"},
 		{add: &AddOptions{Kind: "endpoint", Name: "AddItem", Handler: "player"}, why: "protocol boundary to Nest sender"},
+		{write: "game/controllers/player/add_item.go", why: "the error boundary: coded errors become the response, not a dropped connection"},
+		{write: "internal/service/account/collaborators.go", why: "an account service that can log a demo user in and mint ids from Redis"},
 	}
 }
 
 // scaffoldDemoTemplate builds the demo on top of the game template: Player
-// gains Profile and Bag components backed by a DAO, one Nest write
-// transaction adds an item, and a TCP endpoint carries it. Everything it
-// writes is application-owned and written once.
+// gains Profile and Bag components backed by a DAO, an item table and three
+// coded errors, one Nest write transaction adds an item, a TCP endpoint
+// carries it and turns failures into coded responses, and the account service
+// gets collaborators that work. Everything it writes is application-owned and
+// written once.
 func scaffoldDemoTemplate(root string, m Manifest, gameService string) ([]string, error) {
 	created, err := scaffoldGameTemplate(root, m, gameService)
 	if err != nil {

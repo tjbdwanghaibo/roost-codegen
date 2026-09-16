@@ -1,10 +1,12 @@
 package player
 
 import (
-	"errors"
 	"fmt"
 
+	generated "{{MODULE}}/configs/generated"
+	apperrors "{{MODULE}}/internal/errors"
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
 )
 
 //roost:component type=2001
@@ -42,20 +44,34 @@ func (component *BagComponent) Owner() *Player { return component.owner }
 // Add business methods below. Do not add mutexes here: Nest enters business
 // handlers only after locking the owning Entity.
 
-// ErrItemCount rejects a non-positive amount before any state moves.
-var ErrItemCount = errors.New("bag: item count must be positive")
-
-// AddItem adds count of itemID to the bag. It goes through the generated DAO
-// mutators so dirty tracking, the Nest undo log and the persist patch all see
-// the change; never assign to DAO storage directly.
-func (component *BagComponent) AddItem(itemID int64, count int32) error {
+// AddItem adds count of itemID to the bag and returns the new amount.
+//
+// Three things it shows:
+//
+//   - Validation reads the item table through the generated accessor. The
+//     framework pins one config snapshot to the request, so a hot reload
+//     landing mid-handler cannot make two reads disagree.
+//   - Failures are coded errors from internal/errors. The endpoint turns the
+//     code into the response; a plain error would reach the client as
+//     "server error" and close the connection.
+//   - State moves only through the generated DAO mutators, so dirty tracking,
+//     the Nest undo log and the persist patch all see it. Never assign to DAO
+//     storage directly.
+func (component *BagComponent) AddItem(itemID int64, count int32) (int32, error) {
 	if count <= 0 {
-		return ErrItemCount
+		return 0, errcode.Wrap(apperrors.ErrItemCount, nil, "item_id", itemID, "count", count)
+	}
+	item, ok := generated.ItemByID(itemID)
+	if !ok {
+		return 0, errcode.Wrap(apperrors.ErrItemUnknown, nil, "item_id", itemID)
 	}
 	dao := component.Owner().Dao()
 	current, _ := dao.GetItems(itemID)
+	if item.MaxStack > 0 && current+count > item.MaxStack {
+		return 0, errcode.Wrap(apperrors.ErrBagFull, nil, "item_id", itemID, "have", current, "add", count, "max_stack", item.MaxStack)
+	}
 	dao.SetItems(itemID, current+count)
-	return nil
+	return current + count, nil
 }
 
 // ItemCount is the current amount held for itemID.

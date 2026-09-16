@@ -125,6 +125,9 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		if strings.Contains(string(raw), demoModulePlaceholder) {
 			t.Errorf("%s still contains the module placeholder", rel)
 		}
+		if !strings.HasSuffix(rel, ".go") {
+			continue
+		}
 		if _, parseErr := parser.ParseFile(token.NewFileSet(), path, raw, parser.AllErrors); parseErr != nil {
 			t.Errorf("%s does not parse: %v", rel, parseErr)
 		}
@@ -155,9 +158,37 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if auth := read("internal/access/player/tcp/auth.go"); !strings.Contains(auth, demoTokenPrefixName) {
 		t.Errorf("auth.go is not the demo authenticator:\n%s", auth)
 	}
-	// Persistent state must go through generated mutators, not raw fields.
-	if bag := read("game/entities/player/bag_component.go"); !strings.Contains(bag, "dao.SetItems(") {
-		t.Errorf("bag component does not use the generated map mutator:\n%s", bag)
+	// Persistent state must go through generated mutators, not raw fields,
+	// and validation reads the item table through the generated accessor.
+	if bag := read("game/entities/player/bag_component.go"); !strings.Contains(bag, "dao.SetItems(") || !strings.Contains(bag, "generated.ItemByID(") {
+		t.Errorf("bag component does not use the generated mutator and table accessor:\n%s", bag)
+	}
+	// The demo endpoint replaces the generated scaffold with the error
+	// boundary; a handler error that reached the access layer would close the
+	// connection.
+	if endpoint := read("game/controllers/player/add_item.go"); !strings.Contains(endpoint, "errcode.ClientError(err)") {
+		t.Errorf("endpoint does not translate errors at the boundary:\n%s", endpoint)
+	}
+	// The table exists in all three forms the generator maintains: schema,
+	// rows, and the JSON the runtime loads — the last proves the final
+	// Generate ran the CSV conversion on the demo's rows.
+	if schema := read("configs/schema/item.go"); !strings.Contains(schema, "//roost:table name=item key=ID") {
+		t.Errorf("item schema lost its marker:\n%s", schema)
+	}
+	if data := read("configs/data/item.json"); !strings.Contains(data, "\"id\": 1001") {
+		t.Errorf("item.json was not converted from the demo rows:\n%s", data)
+	}
+	// Coded errors sit in the manifest's errcode space, so `roost id check`
+	// owns their uniqueness; an id outside it would fail at add time.
+	for _, file := range []string{"internal/errors/item_unknown.go", "internal/errors/item_count.go", "internal/errors/bag_full.go"} {
+		if body := read(file); !strings.Contains(body, "errcode.Define(1000") || strings.Contains(body, "TODO") {
+			t.Errorf("%s is not a finished coded error:\n%s", file, body)
+		}
+	}
+	// The account collaborators must be the working ones, bound to Redis
+	// through the kit hook; the game template's defaults refuse every login.
+	if collaborators := read("internal/service/account/collaborators.go"); !strings.Contains(collaborators, "account.RegistryBound") || strings.Contains(collaborators, "is not configured; implement") {
+		t.Errorf("account collaborators are still the refusing defaults:\n%s", collaborators)
 	}
 }
 

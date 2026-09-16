@@ -11,9 +11,13 @@ type AddItemRequest struct {
 	Count  int32 `pb:"2"`
 }
 
+// AddItemResponse carries either the new amount or a coded failure. Code 0 is
+// success; other codes are the stable values from internal/errors, and Reason
+// is their client-facing message. Nothing else about a failure crosses here.
 type AddItemResponse struct {
-	Code   int32 `pb:"1"`
+	Code   int32  `pb:"1"`
 	Reason string `pb:"2"`
+	Count  int32  `pb:"3"`
 }
 
 //roost:protocol group=game handler=player

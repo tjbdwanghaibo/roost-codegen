@@ -40,6 +40,15 @@
   因此 `demo × minimum` 与 `demo × released` 被 exclude。
   写进工程的全部是业务文件（无 `Code generated` 头），`project sync` / `project upgrade` 不会回写。
   生成的 `internal/access/player/tcp/auth.go` 认 `player:<id>` 字符串，**不是认证**，文件头与 `demo/README.md` 都写明上线前必须替换。
+  第二批：**item 配置表 + 错误码边界 + 可用的 account collaborators**。`roost add table Item` 加 `configs/schema/item.go`
+  与 `configs/table/item.csv`（CSV 前四行为列名 / 标题 / 类型 / 规则），最终一次 `generate` 生成类型化 loader 并转出
+  `configs/data/item.json`；`BagComponent.AddItem` 经 `generated.ItemByID` 校验道具存在与 `MaxStack`，失败返回
+  `internal/errors` 里 `errcode.Define` 的三个码（100001–100003，`roost add errcode … -id` 落在清单号段里）；handler 改为
+  `(int32, error)`，新数量经生成的 Sender 回到端点；端点文件由 demo 覆盖，`errcode.ClientError(err)` 把 coded error 换成响应里的
+  `Code` / `Reason`——生成的 TCP server 把端点返回的 error 当坏帧断连，所以业务失败必须在这里换形状。
+  `internal/service/account/collaborators.go` 换成能跑的版本：`Verifier` 只认 `demo` 渠道的 `demo:<open_id>` 凭据（不是身份校验，
+  文件头写明）；`Allocator` 用 account 服务自己 Redis 里的 `INCR` 计数器，经 roost-kit 新增的 `account.RegistryBound` 在 `Provide`
+  里拿到 registry。生成的工程 `go build` / `go vet` / `go test ./...` / `roost id check` / `roost generate --check` 全绿。
 
 - **生成物自带守卫测试**（U-0124）。远端托管实体的 `*_gen_wire.go` 旁生成 `*_gen_wire_test.go`，在业务工程里钉住生成代码内的三条远端提交守卫
   （无事务内持久化变更、DAO 级删除、别的实体的确认）；nest sender 包旁生成 `*_nest_gen_test.go`，钉住 nil 客户端 → `nest.ErrNestStopped`。
