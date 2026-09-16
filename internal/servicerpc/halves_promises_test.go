@@ -59,3 +59,26 @@ func firstLines(s string, n int) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// -dir accepts an import path and resolves it in the module context of -out,
+// so a kit package's go:generate can name the core package rather than a path
+// into the module cache.
+func TestDirAcceptsAnImportPathResolvedInTheOutModule(t *testing.T) {
+	here, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := resolveDir("github.com/tjbdwanghaibo/roost-codegen/internal/servicerpc", here)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Clean(resolved) != filepath.Clean(here) {
+		t.Fatalf("resolved %q, want this package's directory %q", resolved, here)
+	}
+	if _, err := resolveDir("no-such-dir", here); err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("a bare missing path was not refused: %v", err)
+	}
+	if _, err := resolveDir("example.invalid/nope/pkg", here); err == nil || !strings.Contains(err.Error(), "go list") {
+		t.Fatalf("an unresolvable import path was not reported via go list: %v", err)
+	}
+}

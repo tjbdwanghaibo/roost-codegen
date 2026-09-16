@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -45,15 +46,19 @@ func Run(args []string, stdout io.Writer) error {
 	default:
 		return fmt.Errorf("-emit %q: want transport, assembly or all", *emit)
 	}
-	absDir, err := filepath.Abs(*dir)
-	if err != nil {
-		return fmt.Errorf("resolve dir: %w", err)
-	}
-	outDir := absDir
+	outDir := ""
 	if *out != "" {
+		var err error
 		if outDir, err = filepath.Abs(*out); err != nil {
 			return fmt.Errorf("resolve out: %w", err)
 		}
+	}
+	absDir, err := resolveDir(*dir, outDir)
+	if err != nil {
+		return err
+	}
+	if outDir == "" {
+		outDir = absDir
 	}
 	regenerate := regenerateCommand(*dir, *out, half)
 	services, err := ParseDir(absDir)
@@ -134,4 +139,43 @@ func regenerateCommand(dir, out string, half Half) string {
 		cmd += " -out " + out
 	}
 	return cmd
+}
+
+// resolveDir turns -dir into a directory. A path on disk is taken as is. An
+// import path — nothing on disk by that name, and shaped like one (a dotted
+// first segment) — is resolved with `go list` in the module context of
+// moduleDir (the -out directory, else the working directory), so a kit package
+// can generate its assembly half from an interface that lives in the core
+// module without spelling the module cache path (M-11).
+func resolveDir(dir, moduleDir string) (string, error) {
+	if info, err := os.Stat(dir); err == nil && info.IsDir() {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return "", fmt.Errorf("resolve dir: %w", err)
+		}
+		return abs, nil
+	}
+	if !looksLikeImportPath(dir) {
+		return "", fmt.Errorf("-dir %q: not a directory", dir)
+	}
+	cmd := exec.Command("go", "list", "-f", "{{.Dir}}", dir)
+	cmd.Dir = moduleDir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	outBytes, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("-dir %q: go list: %w\n%s", dir, err, stderr.String())
+	}
+	resolved := strings.TrimSpace(string(outBytes))
+	if resolved == "" {
+		return "", fmt.Errorf("-dir %q: go list returned no directory", dir)
+	}
+	return resolved, nil
+}
+
+// looksLikeImportPath is the shape test go itself uses for a module path:
+// the first element has a dot in it.
+func looksLikeImportPath(s string) bool {
+	first, _, _ := strings.Cut(s, "/")
+	return strings.Contains(first, ".") && !strings.HasPrefix(s, ".") && !filepath.IsAbs(s)
 }
