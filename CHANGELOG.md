@@ -15,6 +15,8 @@
 
 ### Changed
 
+- **发版清单升到 core v1.15.3 / kit v1.14.4**（codegen v1.15.5）；`source-head-check.sh` 默认 pin 同步。core 带 U-0209～U-0216 与 M-06（`service/match`、`servicemetrics` 下沉），kit 带 U-0217（**破坏性** `match.NewMod(reporter)`）与别名包；生成工程的 `svcmatch.` 引用经别名不变，`framework-compat` 的 demo scenario 仍只排 source-head（实体 category 接线仍依赖 core main 之后的改动）。
+
 - **match 服务不再生成 `Grouping()` collaborator，bootstrap 生成 `svcmatch.NewMod(serviceMatch.Metrics())`**（U-0217，RR-20260916-05，随 kit 的破坏性改动同版本升级）。kit 的 match Mod 曾接受一个从不执行的匹配策略参数，生成的 collaborators 注释还让项目"在这里替换成自己的规则"——一个静默失效的教学入口。现在 collaborators 里是一段说明：成组由游戏进程的 matchmaker 驱动（Candidates → `match.Grouping` → Commit），指向 game-demo 的 `internal/service/<game>/matchmaker.go`。已有工程 `internal/service/match/collaborators.go` 是业务所有、不回写，其中的 `Grouping()` 留作无引用函数即可；`project sync` 会重写 bootstrap 的 `NewMod` 调用。
 
 - **生成的 player TCP 传输层新增 `RegistryBound` 钩子**：authenticator 若实现 `BindRegistry(*app.Registry) error`，Mod 在
