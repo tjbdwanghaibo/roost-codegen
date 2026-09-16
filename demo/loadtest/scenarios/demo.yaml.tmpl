@@ -25,10 +25,18 @@ scenarios:
         - action: join_queue
           param:
             mode: duel
-        - retry:
-            times: 40
-            node:
-              sequence:
-                - wait: 250ms
-                - action: poll_match
+        # The matchmaker pushes MatchFound (msg 10100) to both players; wait
+        # for it. If the push was missed (10s), fall back to polling the
+        # ticket — the ticket carries the match id either way.
+        - selector:
+            - action: wait_push
+              param:
+                msg: 10100
+                timeout: 10s
+            - retry:
+                times: 20
+                node:
+                  sequence:
+                    - wait: 250ms
+                    - action: poll_match
         - action: world_stats

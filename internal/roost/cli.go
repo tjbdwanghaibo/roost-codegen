@@ -506,7 +506,7 @@ func normalizeNextIDArgs(args []string) []string {
 }
 
 func printMakeHelp(w io.Writer) {
-	fmt.Fprint(w, `Targets: next sync project-upgrade deps-update roost-up codegen-up doctor generate generate-changed check-generated config-check config-check-all player-tcp-enable player-tcp-disable id-check build run test test-race ci cicd-check release-check image-build compose-check k8s-render k8s-check deploy-shell rollback-shell deploy-docker rollback-docker deploy-k8s rollback-k8s dev-up dev-down dev-logs
+	fmt.Fprint(w, `Targets: next sync project-upgrade deps-update roost-up codegen-up doctor generate generate-changed check-generated config-check config-check-all player-tcp-enable player-tcp-disable id-check build run loadtest test test-race ci cicd-check release-check image-build compose-check k8s-render k8s-check deploy-shell rollback-shell deploy-docker rollback-docker deploy-k8s rollback-k8s dev-up dev-down dev-logs
 Scaffolds: new-entity NAME=Player | new-component NAME=Profile ENTITY=Player | new-handler NAME=RenamePlayer ENTITY=Player COMPONENT=Profile | new-dao NAME=Player ENTITY=Player
 `)
 }

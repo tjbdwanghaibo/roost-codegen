@@ -1,6 +1,8 @@
 // Command loadtest drives this project's player TCP listener with robots.
 //
 //	go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20
+//	go run ./cmd/accountctl upsert-server -sid 1000        # once: account must know the server
+//	go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20 -account-nats nats://127.0.0.1:4222   # real login
 //
 // It is a load test and the demo's regression test in one: every robot logs
 // in with the terminal credential, creates or loads its Player, adds an item,
@@ -29,7 +31,10 @@ import (
 	"{{MODULE}}/loadtest/playertcp"
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/bus"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	natsdriver "github.com/tjbdwanghaibo/roost-core/nats/driver"
 	"github.com/tjbdwanghaibo/roost-core/robot"
 	"github.com/tjbdwanghaibo/roost-core/robot/action"
 	"github.com/tjbdwanghaibo/roost-core/robot/loadtest"
@@ -37,6 +42,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/robot/runner"
 	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	svcaccount "github.com/tjbdwanghaibo/roost-kit/service/account"
 )
 
 const profileName = "demo"
@@ -54,25 +60,40 @@ func main() {
 	// hundred milliseconds is the floor, not a regression.
 	maxP95 := flag.Float64("max-p95", 2.0, "threshold: scenario cost p95, seconds")
 	metricsAddr := flag.String("metrics-addr", "", "serve this process's metrics at http://<addr>/metrics for Prometheus (deploy/dev/observability scrapes 127.0.0.1:9300)")
+	accountNATS := flag.String("account-nats", "", "NATS url of the bus the account service answers on; when set, robots log in for real (Login → CreateRole → SelectRole) and present session tickets instead of player:<id>")
+	natsPrefix := flag.String("nats-prefix", "roost", "bus subject prefix (nats.prefix in the services' configs)")
+	serverID := flag.Int("server-id", 1000, "the game server's sid, which roles are created on")
 	flag.Parse()
 
 	if *metricsAddr != "" {
 		go serveMetrics(*metricsAddr)
 	}
 
-	if err := run(*endpoint, *count, *duration, *scenarioDir, *scenarioName, *firstPlayerID, *maxErrorRate, *maxP95); err != nil {
+	var login *accountLogin
+	if *accountNATS != "" {
+		var err error
+		login, err = newAccountLogin(*accountNATS, *natsPrefix, int32(*serverID))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
+			os.Exit(1)
+		}
+		defer login.Close()
+	}
+
+	if err := run(*endpoint, *count, *duration, *scenarioDir, *scenarioName, *firstPlayerID, *maxErrorRate, *maxP95, login); err != nil {
 		fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(endpoint string, count int, duration time.Duration, scenarioDir, scenarioName string, firstPlayerID int64, maxErrorRate, maxP95 float64) error {
+func run(endpoint string, count int, duration time.Duration, scenarioDir, scenarioName string, firstPlayerID int64, maxErrorRate, maxP95 float64, login *accountLogin) error {
 	playertcp.MustRegister()
 
 	protocols := protocol.NewRegistry(pbCodec{})
 	actions := action.NewRegistry()
 	scenarios := scenario.NewRegistry()
 	registerCalls(actions, protocols)
+	registerPushes(protocols)
 	if err := loadScenarios(scenarios, scenarioDir); err != nil {
 		return err
 	}
@@ -103,11 +124,14 @@ func run(endpoint string, count int, duration time.Duration, scenarioDir, scenar
 			runner.WithIdentityProvider(func(index int) (int64, error) {
 				return firstPlayerID + int64(index), nil
 			}),
-			// The terminal credential from internal/access/player/tcp/auth.go.
-			// A real load test would log in through the account service and
-			// present session:<id>:<token> here instead.
+			// Two credentials, matching internal/access/player/tcp/auth.go.
+			// Without -account-nats the robot presents the terminal shortcut;
+			// with it, a session ticket the account service minted.
 			runner.WithAuthProvider(func(rb *robot.Context) (*transport.Packet, error) {
-				return playertcp.AuthPacket("player:" + strconv.FormatInt(rb.PlayerID, 10)), nil
+				if login == nil {
+					return playertcp.AuthPacket("player:" + strconv.FormatInt(rb.PlayerID, 10)), nil
+				}
+				return login.authPacket(rb)
 			}),
 		},
 	})
@@ -128,6 +152,66 @@ func run(endpoint string, count int, duration time.Duration, scenarioDir, scenar
 		return fmt.Errorf("run %s ended %s (%s)", snapshot.RunID, snapshot.State, snapshot.StopReason)
 	}
 	return nil
+}
+
+// accountLogin is the real credential path: the robot process talks to the
+// account service over the bus exactly the way a login server would, and
+// hands the resulting ticket to the game's TCP handshake. Each run uses fresh
+// open ids (the run nonce is part of the id), because an account may hold one
+// role per server and there is no role listing to recover an old PlayerID.
+type accountLogin struct {
+	bus      *bus.Bus
+	accounts svcaccount.Accounts
+	serverID int32
+	nonce    string
+}
+
+func newAccountLogin(url, prefix string, serverID int32) (*accountLogin, error) {
+	assembly, err := natsdriver.Assemble(fnats.DefaultConfig(url), natsdriver.ClientOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("account login: connect %s: %w", url, err)
+	}
+	b := bus.New(assembly.Client, assembly.RPC, nil, bus.Config{SvcType: "loadtest", Prefix: prefix, WorkerNum: 2, QueueCap: 256})
+	if err := b.Start(); err != nil {
+		return nil, fmt.Errorf("account login: start bus: %w", err)
+	}
+	client, err := svcaccount.NewBusClient(b, "", 0)
+	if err != nil {
+		b.Stop()
+		return nil, fmt.Errorf("account login: %w", err)
+	}
+	return &accountLogin{bus: b, accounts: client, serverID: serverID, nonce: strconv.FormatInt(time.Now().UnixNano()%1_000_000_000, 36)}, nil
+}
+
+func (login *accountLogin) Close() {
+	if login != nil && login.bus != nil {
+		login.bus.Stop()
+	}
+}
+
+// authPacket runs Login → CreateRole → SelectRole for one robot. The demo
+// verifier accepts channel "demo" with credential "demo:<open_id>"; a real
+// channel would hand out a platform token here. The role's PlayerID — the
+// one the account service allocated — replaces the robot's provisional id.
+func (login *accountLogin) authPacket(rb *robot.Context) (*transport.Packet, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	openID := fmt.Sprintf("robot-%s-%d", login.nonce, rb.ID)
+	account, err := login.accounts.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: openID, Credential: "demo:" + openID})
+	if err != nil {
+		return nil, fmt.Errorf("account login: %w", err)
+	}
+	role, err := login.accounts.CreateRole(ctx, account.ID, login.serverID, "robot_"+login.nonce+"_"+strconv.Itoa(rb.ID))
+	if err != nil {
+		return nil, fmt.Errorf("account create role: %w", err)
+	}
+	session, err := login.accounts.SelectRole(ctx, account.ID, role.PlayerID)
+	if err != nil {
+		return nil, fmt.Errorf("account select role: %w", err)
+	}
+	rb.PlayerID = role.PlayerID
+	rb.Blackboard.Set("player_id", role.PlayerID)
+	return playertcp.AuthPacket(fmt.Sprintf("session:%d:%s", role.PlayerID, session.Token)), nil
 }
 
 // serveMetrics exposes the robot-side registry — the only place the scenario
@@ -195,6 +279,11 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			}
 			return nil
 		}))
+}
+
+// registerPushes lets the session decode server pushes the scenario waits on.
+func registerPushes(protocols *protocol.Registry) {
+	protocols.MustRegisterDecoder(msgid.MsgMatchFound, protocol.DecodeTyped(msgid.MsgMatchFound, pb.UnmarshalMatchFoundPush))
 }
 
 func coded(code int32, reason string) error {

@@ -254,6 +254,25 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if spec := read("loadtest/scenarios/demo.yaml"); !strings.Contains(spec, "action: join_queue") || !strings.Contains(spec, "action: poll_match") || !strings.Contains(spec, "action: world_stats") {
 		t.Errorf("demo scenario lacks the matchmaking steps:\n%s", spec)
 	}
+	// Push, real login, server registration: the matchmaker pushes MatchFound
+	// through the transport Runtime and the bind registers the push encoder;
+	// the load test can log in through the account service; the game
+	// announces its server id to account.
+	if matchmaker := read("internal/service/game/matchmaker.go"); !strings.Contains(matchmaker, "transport.PushPlayer(") || !strings.Contains(matchmaker, "msgid.MsgMatchFound") {
+		t.Errorf("matchmaker does not push MatchFound:\n%s", matchmaker)
+	}
+	if bootstrap := read("game/protocol_bootstrap/protocol_gen.go"); !strings.Contains(bootstrap, "RegisterMatchFoundEncoder(") {
+		t.Errorf("the push encoder is not registered by the generated bootstrap:\n%s", bootstrap)
+	}
+	if spec := read("loadtest/scenarios/demo.yaml"); !strings.Contains(spec, "action: wait_push") || !strings.Contains(spec, "msg: 10100") {
+		t.Errorf("scenario does not wait for the MatchFound push:\n%s", spec)
+	}
+	if command := read("cmd/loadtest/main.go"); !strings.Contains(command, "svcaccount.NewBusClient(") || !strings.Contains(command, `"session:%d:%s"`) || !strings.Contains(command, ".SelectRole(") {
+		t.Errorf("loadtest cannot log in through the account service:\n%s", command)
+	}
+	if operator := read("cmd/accountctl/main.go"); !strings.Contains(operator, ".UpsertServer(") || !strings.Contains(operator, `"roost:planet:account"`) {
+		t.Errorf("accountctl does not register a server on the project's account store:\n%s", operator)
+	}
 	// Observability: the dashboard is valid JSON with panels that all query
 	// the provisioned datasource, and the scrape config covers the three
 	// processes and the load test.
@@ -352,3 +371,23 @@ func TestDemoTemplateFollowsTheGameServiceName(t *testing.T) {
 // test asserts on the name rather than the literal so renaming the credential
 // format does not silently pass.
 const demoTokenPrefixName = "demoTokenPrefix"
+
+// Every generated Makefile carries a loadtest target. The target guards on
+// cmd/loadtest existing, so the game template — which ships no load test —
+// keeps the same Makefile and tells the developer what to generate instead.
+func TestGeneratedMakefileHasLoadtestTarget(t *testing.T) {
+	m := DefaultManifest("planet", "example.com/planet", []string{"game"}, nil, nil)
+	plan, err := renderProject(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(plan["Makefile"].Body)
+	for _, want := range []string{"\nloadtest:\n", "LOADTEST_ENDPOINT ?= ", "LOADTEST_COUNT ?= ", "test -d cmd/loadtest", "go run ./cmd/loadtest -endpoint $(LOADTEST_ENDPOINT) -count $(LOADTEST_COUNT)"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Makefile lacks %q", want)
+		}
+	}
+	if !strings.Contains(body, " loadtest ") && !strings.Contains(body, " loadtest\n") {
+		t.Errorf("loadtest is not declared .PHONY")
+	}
+}

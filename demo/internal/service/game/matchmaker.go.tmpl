@@ -11,6 +11,9 @@ import (
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/matchmaking"
+	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
@@ -47,6 +50,12 @@ func startMatchmaker(ctx context.Context, registry *app.Registry) (func(), error
 	if err != nil {
 		return nil, fmt.Errorf("matchmaker: %w", err)
 	}
+	// The transport Runtime is the push side of the player connection. It is
+	// looked up once; PushPlayer fails cleanly while the listener is off.
+	transport, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name)
+	if !ok || transport == nil {
+		return nil, errors.New("matchmaker: player tcp runtime is unavailable")
+	}
 	loopCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
@@ -61,7 +70,7 @@ func startMatchmaker(ctx context.Context, registry *app.Registry) (func(), error
 				return
 			case <-ticker.C:
 			}
-			if err := formMatches(loopCtx, matcher, grouping, recorder, worldID); err != nil && loopCtx.Err() == nil {
+			if err := formMatches(loopCtx, matcher, grouping, recorder, transport, worldID); err != nil && loopCtx.Err() == nil {
 				slog.Warn("matchmaker: pass failed", "queue", matchmaking.DuelQueue.Key(), "err", err)
 			}
 		}
@@ -76,7 +85,7 @@ func startMatchmaker(ctx context.Context, registry *app.Registry) (func(), error
 // of candidates. A Commit that loses a race (a ticket was cancelled or taken
 // meanwhile) is not an error of this pass: the next tick reads fresh
 // candidates.
-func formMatches(ctx context.Context, matcher svcmatch.Matchmaker, grouping svcmatch.Grouping, recorder *syncsender.RecordMatchSender, worldID int64) error {
+func formMatches(ctx context.Context, matcher svcmatch.Matchmaker, grouping svcmatch.Grouping, recorder *syncsender.RecordMatchSender, transport *accessplayertcp.Runtime, worldID int64) error {
 	queue := matchmaking.DuelQueue
 	candidates, err := matcher.Candidates(ctx, queue, matchmakerWindow)
 	if err != nil {
@@ -107,6 +116,21 @@ func formMatches(ctx context.Context, matcher svcmatch.Matchmaker, grouping svcm
 		if err := recorder.Sync_RecordMatch(ctx, worldID); err != nil {
 			// The match exists either way; the counter is bookkeeping.
 			slog.Warn("matchmaker: world did not record the match", "match_id", match.ID, "err", err)
+		}
+		// Tell the players. PushPlayer reaches every authenticated session of
+		// the player; one who has gone offline gets ErrSessionNotFound and
+		// finds the match through PollMatch when they are back — the ticket
+		// keeps the match id either way, so the push is a shortcut, not the
+		// source of truth.
+		members := make([]int64, 0, len(match.Members))
+		for _, member := range match.Members {
+			members = append(members, member.ID)
+		}
+		push := &pb.MatchFoundPush{MatchID: match.ID, Members: members}
+		for _, member := range match.Members {
+			if err := transport.PushPlayer(ctx, member.ID, msgid.MsgMatchFound, push); err != nil {
+				slog.Debug("matchmaker: match push not delivered", "match_id", match.ID, "player_id", member.ID, "err", err)
+			}
 		}
 		remaining := candidates[:0]
 		for _, ticket := range candidates {

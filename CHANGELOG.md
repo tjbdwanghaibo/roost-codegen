@@ -99,6 +99,13 @@
   `cmd/loadtest -metrics-addr` 让压测进程也暴露 `/metrics`——机器人侧的直方图只在那里。仪表盘 JSON 合法性、查询非空、抓取配置覆盖
   由 `TestDemoTemplateGeneratesABuildableWritePath` 钉住；指标名对照真实进程的 `/metrics` 输出核过。
   交接文档写在 roost-core `docs/feature/GAME_DEMO_TEMPLATE.md`。
+  第七批（交接文档 §7.1 / 7.2 / 7.4）：**`make loadtest`**——Makefile 模板加 `loadtest:` 目标（`LOADTEST_ENDPOINT / COUNT /
+  METRICS_ADDR / ARGS` 变量，`test -d cmd/loadtest` 守卫让没有压测的 `game` 模板共用同一份 Makefile 并给出提示），`help-make` 同步。
+  **真实登录**：`cmd/loadtest -account-nats` 在压测进程里起 bus，用 account 的 typed 客户端 `Login → CreateRole → SelectRole`，
+  以 `session:<player_id>:<token>` 握手，每次运行用新 open id。`UpsertServer` 刻意不在 account 的 RPC 接口上（控制面写入，game 无权做），
+  所以新增操作员工具 `cmd/accountctl upsert-server`：用 Redis 凭据直接打开 account 的 store 写服务器记录，环境准备时跑一次。
+  **成组推送**：`MatchFound`（10100，notify）协议，matchmaker Commit 后经传输层 `PushPlayer` 推给成员，场景改为 `wait_push`，
+  `poll_match` 退为 `selector` 里的兜底。
 
 - **生成物自带守卫测试**（U-0124）。远端托管实体的 `*_gen_wire.go` 旁生成 `*_gen_wire_test.go`，在业务工程里钉住生成代码内的三条远端提交守卫
   （无事务内持久化变更、DAO 级删除、别的实体的确认）；nest sender 包旁生成 `*_nest_gen_test.go`，钉住 nil 客户端 → `nest.ErrNestStopped`。

@@ -24,6 +24,7 @@ const demoModulePlaceholder = "{{MODULE}}"
 const (
 	demoGameServicePlaceholder        = "{{GAME_SERVICE}}"
 	demoGameServicePackagePlaceholder = "{{GAME_SERVICE_PKG}}"
+	demoProjectPlaceholder            = "{{PROJECT}}"
 	demoGameServiceDir                = "internal/service/game/"
 )
 
@@ -31,10 +32,12 @@ const (
 type demoVars struct {
 	module      string
 	gameService string
+	project     string
 }
 
 func (vars demoVars) apply(body string) string {
 	body = strings.ReplaceAll(body, demoModulePlaceholder, vars.module)
+	body = strings.ReplaceAll(body, demoProjectPlaceholder, vars.project)
 	body = strings.ReplaceAll(body, demoGameServicePackagePlaceholder, safeIdent(vars.gameService))
 	return strings.ReplaceAll(body, demoGameServicePlaceholder, vars.gameService)
 }
@@ -209,6 +212,8 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "protocol", Name: "WorldStats", Group: "game", Handler: "player"}, why: "the World's counters"},
 		{write: "protocol/def/world_stats.go", why: "two counters"},
 		{write: "game/controllers/player/world_stats.go", why: "a Nest read handler on the World"},
+		{add: &AddOptions{Kind: "protocol", Name: "MatchFound", Group: "game", Handler: "player"}, why: "the server push announcing a match"},
+		{write: "protocol/def/match_found.go", why: "a notify: no request, the bind registers its encoder"},
 		{run: enableDemoMatchSweep, why: "the match process sweeps the duel queue for expired tickets"},
 		{write: "loadtest/playertcp/conn.go", why: "the robot transport that speaks the generated server's frame"},
 		{write: "loadtest/scenarios/demo.yaml", why: "one robot's life, as a scenario tree"},
@@ -221,7 +226,8 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "deploy/dev/observability/README.md", why: "metric ↔ chain step ↔ what to look at"},
 		{write: "internal/service/game/service.go", why: "the game service starts the effect consumer in Init and drains it in Shutdown"},
 		{write: "internal/service/game/level_up_mail.go", why: "the consumer: JetStream durable + Mongo inbox → mail.Send keyed by EffectID"},
-		{write: "internal/service/game/matchmaker.go", why: "Candidates → Grouping → Commit on a ticker, then the World records the match"},
+		{write: "internal/service/game/matchmaker.go", why: "Candidates → Grouping → Commit on a ticker, then the World records the match and the players are pushed MatchFound"},
+		{write: "cmd/accountctl/main.go", why: "the operator surface account keeps off the bus: register the game server so CreateRole works"},
 		{write: "internal/service/account/collaborators.go", why: "an account service that can log a demo user in and mint ids from Redis"},
 	}
 }
@@ -237,7 +243,7 @@ func scaffoldDemoTemplate(root string, m Manifest, gameService string) ([]string
 	if err != nil {
 		return created, err
 	}
-	vars := demoVars{module: m.Project.Module, gameService: gameService}
+	vars := demoVars{module: m.Project.Module, gameService: gameService, project: m.Project.Name}
 	for _, step := range demoScaffoldSteps(gameService) {
 		if step.add != nil {
 			files, addErr := Add(root, *step.add)

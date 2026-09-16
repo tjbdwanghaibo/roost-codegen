@@ -99,11 +99,23 @@ World 有了自己的 DAO（`PlayersEntered` / `MatchesFormed`）和 `Stats` 组
 ## 机器人压测 = 回归测试
 
 ```bash
-go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20
+make loadtest LOADTEST_COUNT=20                                   # 等价于下面这行
+go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20 -metrics-addr 127.0.0.1:9300
+go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20 -account-nats nats://127.0.0.1:4222   # 真实登录
 ```
 
-每个机器人：`connect`（握手凭据 `player:<id>`）→ `enter_game`（GetOrCreate Player）→ `add_item` → `add_exp`（升级，
-触发奖励邮件）→ `join_queue` → 每 250ms `poll_match` 直到 matched（`retry` 节点包一层）→ `world_stats`（两个计数都得大于零）。
+`-account-nats` 给值时机器人走真实凭据：在压测进程里起一条 bus，用 account 的 typed 客户端依次 `Login`（demo 渠道，
+凭据 `demo:<open_id>`）→ `CreateRole`（在 `-server-id` 上）→ `SelectRole`，再以 `session:<player_id>:<token>` 握手；
+每次运行用新的 open id（账号在一个服务器上只能有一个角色，且没有角色列表可查）。不给 `-account-nats` 则仍用 `player:<id>` 捷径。
+
+`CreateRole` 会拒绝未知或未开放的服务器，而 **`UpsertServer` 刻意不在 account 的 RPC 接口上**：登记 / 开关服务器改变的是
+所有玩家能登录什么，game 进程无权做，放在 Login 同一条总线上等于任何能到达 account 的进程都能关服。所以 demo 给了一个
+操作员工具 `cmd/accountctl`：用 Redis 凭据直接打开 account 服务自己的 store 写入服务器记录——
+`go run ./cmd/accountctl -redis 127.0.0.1:6379 upsert-server -sid 1000`，环境准备时跑一次。
+
+每个机器人：`connect`（握手凭据）→ `enter_game`（GetOrCreate Player）→ `add_item` → `add_exp`（升级，触发奖励邮件）
+→ `join_queue` → `wait_push` 等服务端推送的 `MatchFound`（msg 10100，10s 超时后退回每 250ms `poll_match`，`selector` 节点）
+→ `world_stats`（两个计数都得大于零）。
 任何一步返回非零 code、或 `error_rate` / `p95` 超阈值，进程以非零码退出并打印 JSON 报告。**`-count` 要给偶数**：duel 两人一组。
 
 - **runner / 场景树 / 动作注册 / 阈值门**全是 `roost-core/robot`，`cmd/loadtest/main.go` 只做三件事：注册本工程的消息
@@ -115,6 +127,9 @@ go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20
 - **`enter_game` 为什么不是 Nest handler**：Nest 处理的是已存在的实体，第一次登录还没有；创建 Player 是生命周期操作，
   端点直接走 `PlayerLifecycle.GetOrCreate`，所以这条协议只有 `roost add protocol`，控制器方法手写。
 - 生成的 pb 类型没有 `GetCode()`，`RegisterCall` 的自动 code 检查不会生效，每个 call 用 `OnResp` 自己查 `Code`。
+- **成组后推送**：matchmaker 在 Commit 成功后经传输层 `Runtime.PushPlayer` 给每个成员推 `MatchFound`（协议里是一个没有请求的
+  notify 方法，生成的 bind 注册它的编码器）。推送到达的是该玩家**所有**已认证会话；玩家已下线时推送失败只记 debug 日志——票据里
+  仍有 match_id，`PollMatch` 是兜底，推送是捷径而不是事实来源。
 
 ## 可观测性
 
