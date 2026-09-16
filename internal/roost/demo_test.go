@@ -1,6 +1,7 @@
 package roost
 
 import (
+	"encoding/json"
 	"go/parser"
 	"go/token"
 	"os"
@@ -252,6 +253,48 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	}
 	if spec := read("loadtest/scenarios/demo.yaml"); !strings.Contains(spec, "action: join_queue") || !strings.Contains(spec, "action: poll_match") || !strings.Contains(spec, "action: world_stats") {
 		t.Errorf("demo scenario lacks the matchmaking steps:\n%s", spec)
+	}
+	// Observability: the dashboard is valid JSON with panels that all query
+	// the provisioned datasource, and the scrape config covers the three
+	// processes and the load test.
+	var dashboard struct {
+		UID    string `json:"uid"`
+		Panels []struct {
+			Type    string `json:"type"`
+			Targets []struct {
+				Expr string `json:"expr"`
+			} `json:"targets"`
+		} `json:"panels"`
+	}
+	if err := json.Unmarshal([]byte(read("deploy/dev/observability/grafana/dashboards/roost-demo.json")), &dashboard); err != nil {
+		t.Fatalf("dashboard is not valid JSON: %v", err)
+	}
+	queries := 0
+	for _, panel := range dashboard.Panels {
+		if panel.Type == "row" {
+			continue
+		}
+		if len(panel.Targets) == 0 {
+			t.Errorf("dashboard panel of type %s has no query", panel.Type)
+		}
+		for _, target := range panel.Targets {
+			if strings.TrimSpace(target.Expr) == "" {
+				t.Errorf("dashboard has an empty query")
+			}
+			if strings.Contains(target.Expr, demoGameServicePlaceholder) {
+				t.Errorf("dashboard query kept the service placeholder: %s", target.Expr)
+			}
+			queries++
+		}
+	}
+	if dashboard.UID != "roost-demo" || queries < 20 {
+		t.Errorf("dashboard uid=%q queries=%d", dashboard.UID, queries)
+	}
+	if scrape := read("deploy/dev/observability/prometheus.yml"); !strings.Contains(scrape, "job_name: game") || !strings.Contains(scrape, ":9300") {
+		t.Errorf("prometheus.yml does not scrape the game process and the load test:\n%s", scrape)
+	}
+	if command := read("cmd/loadtest/main.go"); !strings.Contains(command, "metrics.PrometheusText(metrics.Snapshot())") {
+		t.Errorf("loadtest does not expose its metrics")
 	}
 	// The whole player-tcp workflow, as doctor judges it: access declared,
 	// transport generated, authenticator real, listener enabled.

@@ -116,6 +116,13 @@ go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20
   端点直接走 `PlayerLifecycle.GetOrCreate`，所以这条协议只有 `roost add protocol`，控制器方法手写。
 - 生成的 pb 类型没有 `GetCode()`，`RegisterCall` 的自动 code 检查不会生效，每个 call 用 `OnResp` 自己查 `Code`。
 
+## 可观测性
+
+`deploy/dev/observability/` 是一套 Prometheus + Grafana：compose、抓取配置（三个进程的 ops 端口 + 压测的 `-metrics-addr`）、
+预置数据源与仪表盘 "Roost game-demo"。仪表盘按链路分组：玩家接入 → Nest 分发与锁 → WAL 落库 → 事件链与配置 →
+跨服务 RPC → 机器人。每个指标对应链路上的哪一步、该看什么，写在同目录 `README.md`。它与生成的 `deploy/dev/docker-compose.yaml`
+分开：那个文件会被重生成，观测是可选的。
+
 ## 本地实跑
 
 用 roost-kit 的隔离环境（`scripts/integration/dataengine-env.sh up`：Mongo 副本集 27117–27119、NATS JetStream 14222–14224、Redis 16379）

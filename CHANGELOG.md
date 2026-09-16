@@ -93,6 +93,12 @@
   match 进程里成组 5 对，`db.world` 计数 players_entered / matches_formed 同步增长，每个升级玩家一封奖励邮件。
   过程中撞到一个环境陷阱并写进 `demo/README.md`：共享 JetStream 里残留的测试流（`ROOST_IT_RPC_REQ_*`）覆盖 `roost.rpc.>`，
   以 PubAck 抢答 RPC 请求，读调用大面积得到 `bus: unsupported rpc response version 0`；每次实跑给三个进程一个独立的 `nats.prefix` 即可。
+  第六批：**可观测性**。`deploy/dev/observability/`：Prometheus + Grafana compose（与会被重生成的 `deploy/dev/docker-compose.yaml`
+  分开）、抓取三个进程的 ops 端口与压测的 `-metrics-addr`、预置数据源与仪表盘 "Roost game-demo"（按链路分组：玩家接入 → Nest 分发与锁
+  → WAL 落库 → 事件链与配置 → 跨服务 RPC → 机器人，18 个面板）、`README.md` 写清每个指标对应链路上的哪一步、该看什么。
+  `cmd/loadtest -metrics-addr` 让压测进程也暴露 `/metrics`——机器人侧的直方图只在那里。仪表盘 JSON 合法性、查询非空、抓取配置覆盖
+  由 `TestDemoTemplateGeneratesABuildableWritePath` 钉住；指标名对照真实进程的 `/metrics` 输出核过。
+  交接文档写在 roost-core `docs/feature/GAME_DEMO_TEMPLATE.md`。
 
 - **生成物自带守卫测试**（U-0124）。远端托管实体的 `*_gen_wire.go` 旁生成 `*_gen_wire_test.go`，在业务工程里钉住生成代码内的三条远端提交守卫
   （无事务内持久化变更、DAO 级删除、别的实体的确认）；nest sender 包旁生成 `*_nest_gen_test.go`，钉住 nil 客户端 → `nest.ErrNestStopped`。

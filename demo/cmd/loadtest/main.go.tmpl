@@ -17,6 +17,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	"{{MODULE}}/loadtest/playertcp"
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/metrics"
 	"github.com/tjbdwanghaibo/roost-core/robot"
 	"github.com/tjbdwanghaibo/roost-core/robot/action"
 	"github.com/tjbdwanghaibo/roost-core/robot/loadtest"
@@ -51,7 +53,12 @@ func main() {
 	// the matchmaker ticks every 500ms), so a whole-scenario p95 of a few
 	// hundred milliseconds is the floor, not a regression.
 	maxP95 := flag.Float64("max-p95", 2.0, "threshold: scenario cost p95, seconds")
+	metricsAddr := flag.String("metrics-addr", "", "serve this process's metrics at http://<addr>/metrics for Prometheus (deploy/dev/observability scrapes 127.0.0.1:9300)")
 	flag.Parse()
+
+	if *metricsAddr != "" {
+		go serveMetrics(*metricsAddr)
+	}
 
 	if err := run(*endpoint, *count, *duration, *scenarioDir, *scenarioName, *firstPlayerID, *maxErrorRate, *maxP95); err != nil {
 		fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
@@ -121,6 +128,20 @@ func run(endpoint string, count int, duration time.Duration, scenarioDir, scenar
 		return fmt.Errorf("run %s ended %s (%s)", snapshot.RunID, snapshot.State, snapshot.StopReason)
 	}
 	return nil
+}
+
+// serveMetrics exposes the robot-side registry — the only place the scenario
+// and per-call histograms live — the same way every roost process does.
+func serveMetrics(addr string) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		_, _ = w.Write(metrics.PrometheusText(metrics.Snapshot()))
+	})
+	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		fmt.Fprintf(os.Stderr, "loadtest: metrics endpoint: %v\n", err)
+	}
 }
 
 // registerCalls turns the project's request/response pairs into actions a
