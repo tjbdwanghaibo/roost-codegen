@@ -117,6 +117,9 @@ go run ./cmd/loadtest -endpoint 127.0.0.1:7000 -count 20 -metrics-addr 127.0.0.1
 → `join_queue` → `wait_push` 等服务端推送的 `MatchFound`（msg 10100，10s 超时后退回每 250ms `poll_match`，`selector` 节点）
 → `world_stats`（两个计数都得大于零）。
 任何一步返回非零 code、或 `error_rate` / `p95` 超阈值，进程以非零码退出并打印 JSON 报告。**`-count` 要给偶数**：duel 两人一组。
+**`-count` 不要超过 `player_access.tcp.max_connections_per_ip`（默认 128）**：机器人全从一个 IP 来，超出的连接在握手前就被
+server 关掉，机器人报 `connect: auth send: robot session: closed`，server 侧计入 `player_tcp_connection_rejected_total{reason}`。
+600 个机器人的实跑正好 128 成功、472 这样失败——这是上限在工作，不是缺陷；要压更大就在 game 配置里调高它。
 
 - **runner / 场景树 / 动作注册 / 阈值门**全是 `roost-core/robot`，`cmd/loadtest/main.go` 只做三件事：注册本工程的消息
   （`action.MustRegisterCall` + 一个把泛型 Marshal 路由到生成的 pb 函数的 codec）、加载 `loadtest/scenarios/*.yaml`、

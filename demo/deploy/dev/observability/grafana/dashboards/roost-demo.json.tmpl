@@ -79,7 +79,7 @@
       "type": "timeseries",
       "title": "请求速率 / 错误",
       "id": 3,
-      "description": "dispatch error 非零说明有端点把业务错误当 error 返回了——它应当换成响应里的 Code。",
+      "description": "dispatch error 非零说明有端点把业务错误当 error 返回了——它应当换成响应里的 Code。rejected 是连接被上限拒绝：同一 IP 超过 player_access.tcp.max_connections_per_ip（默认 128）时握手前就被关掉，压测机器人全从一个 IP 来，-count 超过它就会大面积 'auth send: robot session: closed'。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -141,6 +141,15 @@
           "expr": "sum(rate(player_tcp_frame_error_total{job=\"{{GAME_SERVICE}}\"}[1m]))",
           "legendFormat": "frame errors/s",
           "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (reason)(rate(player_tcp_connection_rejected_total{job=\"{{GAME_SERVICE}}\"}[1m]))",
+          "legendFormat": "rejected/s {{reason}}",
+          "refId": "E"
         }
       ]
     },

@@ -111,6 +111,9 @@
   `cmd/loadtest -account-nats` 默认 `nats://127.0.0.1:4222`、`make loadtest` 传 `LOADTEST_ACCOUNT_NATS`。**`demo-publish.yml`**：
   main 上 demo / internal / cmd 有变更时，按 source-head 生成工程、build / vet / test / generate --check / id check 通过后
   force-push 到本仓 `demo-generated` 分支（带 GENERATED.md 说明来源 SHA），给人一个可直接 clone 来读的完整工程。
+  第九批（交接文档 §7.6）：在本机 docker 里用发布的 compose 原样起 Prometheus + Grafana，数据源与仪表盘自动预置，33 条查询
+  0 条 PromQL 错误、No data 的面板逐条可解释。仪表盘"请求速率 / 错误"面板加 `player_tcp_connection_rejected_total{reason}`：
+  600 机器人的实跑正好 128 成功、472 被 `max_connections_per_ip`（默认 128）在握手前关掉——上限在工作而非缺陷，两处 README 写明。
 
   **成组推送**：`MatchFound`（10100，notify）协议，matchmaker Commit 后经传输层 `PushPlayer` 推给成员，场景改为 `wait_push`，
   `poll_match` 退为 `selector` 里的兜底。
