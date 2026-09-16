@@ -3,7 +3,10 @@ package roost
 import (
 	"errors"
 	"fmt"
+	"go/ast"
 	"go/format"
+	"go/parser"
+	"go/token"
 	"io"
 	"path/filepath"
 	"sort"
@@ -227,7 +230,15 @@ func renderFrameworkCollaborators(m Manifest, name string) string {
 	if needsStrings {
 		imports = append(imports, `"strings"`)
 	}
-	imports = append(imports, "", `"github.com/tjbdwanghaibo/roost-kit/service/servicemetrics"`, fmt.Sprintf("%q", frameworkServiceModule+"/"+spec.Package))
+	imports = append(imports, "", `"github.com/tjbdwanghaibo/roost-kit/service/servicemetrics"`)
+	// The service package is imported only when the collaborators body
+	// references it. A body that supplies nothing but Metrics() — match, since
+	// U-0217 removed its Grouping() — would otherwise ship an unused import,
+	// and the generated project would not compile (U-0218). Comments that
+	// mention `match.Grouping` do not count: the check is on the AST.
+	if bodyUsesPackage(body, spec.Package) {
+		imports = append(imports, fmt.Sprintf("%q", frameworkServiceModule+"/"+spec.Package))
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "// Package %s supplies the collaborators the %s service needs from this\n// project. roost-codegen created this file once and will not overwrite it.\n", safeIdent(name), spec.Package)
 	fmt.Fprintf(&b, "package %s\n\nimport (\n", safeIdent(name))
@@ -242,6 +253,31 @@ func renderFrameworkCollaborators(m Manifest, name string) string {
 	b.WriteString(body)
 	b.WriteString("\n// Metrics receives the service's counters. nil means no reporting and never\n// fails an operation; wire the project's servicemetrics.Reporter here.\nfunc Metrics() servicemetrics.Reporter { return nil }\n")
 	return b.String()
+}
+
+// bodyUsesPackage reports whether the Go declarations in body refer to
+// pkg through a selector expression (pkg.Something). It parses rather than
+// searches text so that a mention inside a comment does not count.
+func bodyUsesPackage(body, pkg string) bool {
+	file, err := parser.ParseFile(token.NewFileSet(), "collaborators.go", "package p\n"+body, 0)
+	if err != nil {
+		// An unparsable body is caught by the caller's format.Source; be
+		// conservative and keep the import so the error is the real one.
+		return true
+	}
+	used := false
+	ast.Inspect(file, func(n ast.Node) bool {
+		if used {
+			return false
+		}
+		if sel, ok := n.(*ast.SelectorExpr); ok {
+			if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == pkg {
+				used = true
+			}
+		}
+		return true
+	})
+	return used
 }
 
 // renderFrameworkClients is the generated accessor file for a business

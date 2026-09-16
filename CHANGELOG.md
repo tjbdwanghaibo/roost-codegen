@@ -6,6 +6,9 @@
 
 ### Fixed
 
+- **托管服务的 collaborators 文件不再无条件 import 服务包**（U-0218，C4，发版验证发现，codegen v1.15.6 补丁）。U-0217 删掉 match 的 `Grouping()` 之后正文只剩 `Metrics()`，`renderFrameworkCollaborators` 仍写入 `"roost-kit/service/match"`，生成的 `internal/service/match/collaborators.go` "imported and not used"，**整个工程编译不过**；codegen 自己的测试不编译生成物，v1.15.5 带着它发了出去。现在按 AST 判断正文是否有 `<pkg>.` 选择表达式再决定是否 import（注释里的 `match.Grouping` 不算）。`collaborators_imports_promises_test.go` 对目录里每个托管服务断言"每个 import 都被引用"，修前 match 红。用 v1.15.5 生成过工程的：删掉那一行 import 即可，文件是业务所有不会回写。
+- **framework-compat 的 demo scenario 现在也排 `released`**：生成的 game-demo 工程对 core v1.15.3 / kit v1.14.4 已能不带 go.work 编译、vet、测试与 `generate --check`，只剩 `minimum` 仍排除。
+
 - **`roost add endpoint` 生成的端点把 `context.PlayerID` 直接当实体 id 交给 Sender**。Nest 寻址的是完整实体 id（unique id + kind
   + 锁档），`PlayerID` 只是 unique id，第一条真实请求就在 Nest 里死于 `entity id: invalid: kind N category is not registered`；
   脚手架能编译，此前没有任何一步真的把它跑起来——是 game-demo 的机器人压测第一次实跑发现的。端点现在解析 Nest handler 第一个形参的
