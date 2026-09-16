@@ -59,15 +59,15 @@ func NewProject(options NewOptions) (SyncResult, string, error) {
 	switch strings.TrimSpace(options.Template) {
 	case "":
 	case "game":
-		services := options.Services
-		if len(services) == 0 {
-			services = []string{"game"}
+		if err := applyGameTemplate(&manifest, templateGameService(options)); err != nil {
+			return SyncResult{}, "", err
 		}
-		if err := applyGameTemplate(&manifest, toSnake(services[0])); err != nil {
+	case demoTemplateName:
+		if err := applyDemoTemplate(&manifest, templateGameService(options)); err != nil {
 			return SyncResult{}, "", err
 		}
 	default:
-		return SyncResult{}, "", fmt.Errorf("unknown template %q; supported: game", options.Template)
+		return SyncResult{}, "", fmt.Errorf("unknown template %q; supported: game, %s", options.Template, demoTemplateName)
 	}
 	if err := manifest.Validate(); err != nil {
 		return SyncResult{}, "", err
@@ -111,18 +111,31 @@ func NewProject(options NewOptions) (SyncResult, string, error) {
 	if err := renameProjectStage(stage, absTarget); err != nil {
 		return SyncResult{}, "", fmt.Errorf("commit project: %w", err)
 	}
-	if strings.TrimSpace(options.Template) == "game" {
-		services := options.Services
-		if len(services) == 0 {
-			services = []string{"game"}
+	switch strings.TrimSpace(options.Template) {
+	case "game":
+		created, err := scaffoldGameTemplate(absTarget, manifest, templateGameService(options))
+		result.Created = append(result.Created, created...)
+		if err != nil {
+			return result, absTarget, err
 		}
-		created, err := scaffoldGameTemplate(absTarget, manifest, toSnake(services[0]))
+	case demoTemplateName:
+		created, err := scaffoldDemoTemplate(absTarget, manifest, templateGameService(options))
 		result.Created = append(result.Created, created...)
 		if err != nil {
 			return result, absTarget, err
 		}
 	}
 	return result, absTarget, nil
+}
+
+// templateGameService is the service a template builds on: the first declared
+// one, which is "game" by default.
+func templateGameService(options NewOptions) string {
+	services := options.Services
+	if len(services) == 0 {
+		services = []string{"game"}
+	}
+	return toSnake(services[0])
 }
 
 // renameProjectStage is the project creation commit point. Windows virus

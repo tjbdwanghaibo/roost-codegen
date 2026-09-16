@@ -1,0 +1,10 @@
+package dbdef
+
+//roost:dao coll=player db=game
+type PlayerDao struct {
+	Name  string          `bson:"name" dao:"persist,sync"`
+	Level int32           `bson:"level" dao:"persist,sync"`
+	Exp   int64           `bson:"exp" dao:"persist,sync"`
+	Gold  int64           `bson:"gold" dao:"persist,sync"`
+	Items map[int64]int32 `bson:"items" dao:"persist,sync,map=fast"`
+}

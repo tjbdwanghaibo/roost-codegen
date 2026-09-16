@@ -30,8 +30,17 @@ jobs:
       fail-fast: false
       matrix:
         dependency-set: [minimum, released, source-head]
-        scenario: [minimal, full]
+        scenario: [minimal, full, demo]
         consumer-go: ["1.27.x"]
+        exclude:
+          # The demo template, like `game`, scaffolds Entities whose generated
+          # wiring uses entity categories from the current framework source.
+          # Only source-head is a coherent combination for it; minimum and
+          # released pin older core tags on purpose.
+          - scenario: demo
+            dependency-set: minimum
+          - scenario: demo
+            dependency-set: released
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -54,6 +63,15 @@ jobs:
           mods=configdata
           services=game
           template_args=()
+          if [ "$SCENARIO" = demo ]; then
+            # game-demo is the whole point of this cell: the template performs
+            # its own add sequence (components, DAO, handler, access,
+            # transport, protocol, endpoint) and ships the bodies, so the
+            # scenario only generates and compiles. A template whose output
+            # stops building fails here rather than in someone's first hour.
+            mods=configdata,mongo,nats,dataengine,nest
+            template_args=(-template game-demo)
+          fi
           if [ "$SCENARIO" = full ]; then
             mods=configdata,etcd,redis,mongo,nats,sync,remote_entity,dataengine,nest,saga
             services=game,gate

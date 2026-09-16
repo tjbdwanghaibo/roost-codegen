@@ -25,6 +25,22 @@
 
 ### Added
 
+- **`roost project new … -template game-demo`：一条能跑起来的写入链路，源码放在 `demo/` 目录里**。`game` 模板给的是骨架，
+  新人拿到之后仍要自己想"实体、组件、DAO、Nest 事务、协议、端点怎么串"。`game-demo` 在 `game` 之上按真实顺序跑一遍
+  `roost add`（component Profile / Bag → dao Player → handler AddItem → access player → transport tcp → protocol AddItem →
+  endpoint AddItem），并把六个业务文件的内容一起写进去：`db/def/player.go`（含 `map=fast` 的 `Items`）、两个组件的业务方法、
+  `game/handler/add_item.go`、`protocol/def/add_item.go`、以及一个 demo 认证器。生成出来的工程直接有
+  "TCP 登录 → AddItem 端点 → Nest 锁 Player → 生成的 map mutator → dataengine 落库"这一条完整链路。
+  步骤顺序本身是契约的一部分：`add endpoint` 会比对 handler 形参与协议字段，两边的文件必须都先落盘，
+  这一点写在 `demoScaffoldSteps` 的注释里。
+  六个文件以 `.tmpl` 后缀存放在仓库根的 `demo/` 下、路径与生成后一致，`go:embed` 进来、只替换 `{{MODULE}}`。
+  它们 import roost-core，而 codegen 对运行时零依赖，所以不在 codegen 里编译；正确性由 CI 的
+  `framework-compat` 新增 `demo` scenario 保证（生成工程 → build / vet / test）。该 scenario 只排在 `source-head` 上：
+  codegen HEAD 生成的实体接线用 M-04 之后的 entity category，已发布的 core v1.15.2 里还没有，
+  因此 `demo × minimum` 与 `demo × released` 被 exclude。
+  写进工程的全部是业务文件（无 `Code generated` 头），`project sync` / `project upgrade` 不会回写。
+  生成的 `internal/access/player/tcp/auth.go` 认 `player:<id>` 字符串，**不是认证**，文件头与 `demo/README.md` 都写明上线前必须替换。
+
 - **生成物自带守卫测试**（U-0124）。远端托管实体的 `*_gen_wire.go` 旁生成 `*_gen_wire_test.go`，在业务工程里钉住生成代码内的三条远端提交守卫
   （无事务内持久化变更、DAO 级删除、别的实体的确认）；nest sender 包旁生成 `*_nest_gen_test.go`，钉住 nil 客户端 → `nest.ErrNestStopped`。
   这些守卫在模板字符串里，生成器自己的单测触不到（gap map 反复标 GREEN），只能在编译它们的工程里跑。未改动的一次普通 `roost generate` 也会补出配套测试；

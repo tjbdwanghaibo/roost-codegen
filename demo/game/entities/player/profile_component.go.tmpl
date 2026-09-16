@@ -1,0 +1,87 @@
+package player
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/tjbdwanghaibo/roost-core/entity"
+)
+
+//roost:component type=2000
+const CompTypeProfile entity.ComponentType = 2000
+
+// ProfileComponent owns Player gameplay logic. Persistent or replicated state should
+// be changed through generated DAO methods so dirty tracking remains correct.
+type ProfileComponent struct {
+	entity.ComponentBase
+	owner *Player
+}
+
+// IProfileEntity is the narrow lock-safe view for Nest handlers using this
+// component. The generated Entity wire implements the getter.
+type IProfileEntity interface {
+	entity.IThreadSafeEntity
+	ProfileComp() *ProfileComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeProfile, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("profile component: owner %T is not *Player", owner)
+		}
+		return &ProfileComponent{owner: typed}, nil
+	})
+}
+
+func (component *ProfileComponent) Name() string { return "profile" }
+
+// Owner is available only while the Entity is alive and locked by Nest.
+func (component *ProfileComponent) Owner() *Player { return component.owner }
+
+// Add business methods below. Do not add mutexes here: Nest enters business
+// handlers only after locking the owning Entity.
+
+// ExpPerLevel is the demo's level curve: flat, so the example stays about the
+// framework rather than about balancing.
+const ExpPerLevel int64 = 100
+
+// ErrEmptyName rejects a blank rename before any state moves.
+var ErrEmptyName = errors.New("profile: name must not be empty")
+
+// Rename sets the display name through the generated mutator.
+func (component *ProfileComponent) Rename(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return ErrEmptyName
+	}
+	component.Owner().Dao().SetName(name)
+	return nil
+}
+
+// AddExp grants experience and levels the player up while the curve allows it.
+// Both fields move through generated mutators, so a handler that fails later
+// has both rolled back together.
+func (component *ProfileComponent) AddExp(amount int64) (int32, error) {
+	if amount <= 0 {
+		return 0, nil
+	}
+	dao := component.Owner().Dao()
+	exp := dao.GetExp() + amount
+	gained := int32(0)
+	for exp >= ExpPerLevel {
+		exp -= ExpPerLevel
+		gained++
+	}
+	dao.SetExp(exp)
+	if gained > 0 {
+		dao.SetLevel(dao.GetLevel() + gained)
+	}
+	return gained, nil
+}
+
+// DisplayName and Level read current state for callers holding the Entity
+// lock. The plain Name() above is the framework's component name, so the
+// player-facing one needs its own.
+func (component *ProfileComponent) DisplayName() string { return component.Owner().Dao().GetName() }
+func (component *ProfileComponent) Level() int32        { return component.Owner().Dao().GetLevel() }

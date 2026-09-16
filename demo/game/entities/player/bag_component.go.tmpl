@@ -1,0 +1,65 @@
+package player
+
+import (
+	"errors"
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/entity"
+)
+
+//roost:component type=2001
+const CompTypeBag entity.ComponentType = 2001
+
+// BagComponent owns Player gameplay logic. Persistent or replicated state should
+// be changed through generated DAO methods so dirty tracking remains correct.
+type BagComponent struct {
+	entity.ComponentBase
+	owner *Player
+}
+
+// IBagEntity is the narrow lock-safe view for Nest handlers using this
+// component. The generated Entity wire implements the getter.
+type IBagEntity interface {
+	entity.IThreadSafeEntity
+	BagComp() *BagComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeBag, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("bag component: owner %T is not *Player", owner)
+		}
+		return &BagComponent{owner: typed}, nil
+	})
+}
+
+func (component *BagComponent) Name() string { return "bag" }
+
+// Owner is available only while the Entity is alive and locked by Nest.
+func (component *BagComponent) Owner() *Player { return component.owner }
+
+// Add business methods below. Do not add mutexes here: Nest enters business
+// handlers only after locking the owning Entity.
+
+// ErrItemCount rejects a non-positive amount before any state moves.
+var ErrItemCount = errors.New("bag: item count must be positive")
+
+// AddItem adds count of itemID to the bag. It goes through the generated DAO
+// mutators so dirty tracking, the Nest undo log and the persist patch all see
+// the change; never assign to DAO storage directly.
+func (component *BagComponent) AddItem(itemID int64, count int32) error {
+	if count <= 0 {
+		return ErrItemCount
+	}
+	dao := component.Owner().Dao()
+	current, _ := dao.GetItems(itemID)
+	dao.SetItems(itemID, current+count)
+	return nil
+}
+
+// ItemCount is the current amount held for itemID.
+func (component *BagComponent) ItemCount(itemID int64) int32 {
+	count, _ := component.Owner().Dao().GetItems(itemID)
+	return count
+}

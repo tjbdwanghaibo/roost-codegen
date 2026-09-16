@@ -402,7 +402,7 @@ nats 自动补齐；Mod 需要的协作者写在 internal/service/<name>/collabo
 默认全部拒绝）。services.<name>.uses 列出业务 Service 要调用的托管服务，生成器给该进程装配
 对应 ClientMod（并补 nats），并在 internal/service/<name>/framework_clients_gen.go 生成类型化
 访问器。roost project new … -template game 一次生成这四个托管服务并把第一个业务 Service
-接上它们。托管服务随 roost-kit 发布，版本由 versions.kit 控制。
+接上它们；-template game-demo 在此之上再带一条可运行的写入链路（Player 的 Profile / Bag 组件与 DAO、一个 Nest 加道具事务、player TCP 接入与协议端点），这些都是业务文件，生成后由你维护。托管服务随 roost-kit 发布，版本由 versions.kit 控制。
 
 access.player.service 指定玩家协议接入层安装到哪个 Service。当前仅支持 player；它要求 protocol
 feature，并要求目标 Service 有 nest Mod。access.player.transports 是显式启用的客户端传输列表；当前

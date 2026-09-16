@@ -1,0 +1,48 @@
+package tcp
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/gateway"
+)
+
+// demoTokenPrefix is the only credential this demo understands: a client
+// connects with "player:<id>" and becomes that player.
+//
+// THIS IS NOT AUTHENTICATION. It trusts an id the socket supplies, which is
+// exactly what the generated fail-closed skeleton refuses to do. It exists so
+// the demo can be driven end to end from a terminal; replace the body of
+// Authenticate with a real verifier (signed, expiring token; key material from
+// config or Secret storage) before this project takes outside traffic.
+const demoTokenPrefix = "player:"
+
+// applicationAuthenticator is application-owned: codegen writes it once and
+// never rewrites it, so editing it here is the intended workflow.
+type applicationAuthenticator struct{}
+
+func newApplicationAuthenticator(_ *viper.Viper) (Authenticator, error) {
+	return applicationAuthenticator{}, nil
+}
+
+func (applicationAuthenticator) Authenticate(_ context.Context, token string, _ net.Addr) (gateway.Principal, error) {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(token), demoTokenPrefix)
+	if !ok {
+		return gateway.Principal{}, gateway.ErrUnauthenticated
+	}
+	playerID, err := strconv.ParseInt(rest, 10, 64)
+	if err != nil || playerID <= 0 {
+		return gateway.Principal{}, gateway.ErrUnauthenticated
+	}
+	// SessionID must be unique per connection: the access layer uses it to
+	// tell two logins of the same player apart.
+	return gateway.Principal{
+		PlayerID:  playerID,
+		SessionID: fmt.Sprintf("demo-%d-%d", playerID, time.Now().UnixNano()),
+	}, nil
+}
