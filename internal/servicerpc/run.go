@@ -29,13 +29,33 @@ func Run(args []string, stdout io.Writer) error {
 	// that cannot cross a bus faithfully is a design problem, and an author
 	// fixing an interface wants that answer rather than a diff.
 	check := flags.Bool("check", false, "validate the interfaces and verify the generated files match, writing nothing")
+	// emit and out exist for an interface that lives in a different package
+	// from its assembly (M-11): the core domain package that owns the interface
+	// runs `-emit transport`, and the kit package that assembles it runs
+	// `-emit assembly -dir <core package> -out .`, resolving the interface's
+	// types through its own aliases.
+	emit := flags.String("emit", string(HalfAll), "which half to emit: transport, assembly or all")
+	out := flags.String("out", "", "directory to write into (default: -dir)")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	half := Half(*emit)
+	switch half {
+	case HalfAll, HalfTransport, HalfAssembly:
+	default:
+		return fmt.Errorf("-emit %q: want transport, assembly or all", *emit)
 	}
 	absDir, err := filepath.Abs(*dir)
 	if err != nil {
 		return fmt.Errorf("resolve dir: %w", err)
 	}
+	outDir := absDir
+	if *out != "" {
+		if outDir, err = filepath.Abs(*out); err != nil {
+			return fmt.Errorf("resolve out: %w", err)
+		}
+	}
+	regenerate := regenerateCommand(*dir, *out, half)
 	services, err := ParseDir(absDir)
 	if err != nil {
 		return err
@@ -62,12 +82,12 @@ func Run(args []string, stdout io.Writer) error {
 	}
 	var stale []string
 	for _, service := range services {
-		files, err := Generate(service)
+		files, err := GenerateWith(service, Options{Half: half, Regenerate: regenerate})
 		if err != nil {
 			return err
 		}
 		for _, file := range files {
-			path := filepath.Join(absDir, file.Name)
+			path := filepath.Join(outDir, file.Name)
 			existing, readErr := os.ReadFile(path)
 			current := readErr == nil && bytes.Equal(existing, file.Content)
 			if current {
@@ -97,7 +117,21 @@ func Run(args []string, stdout io.Writer) error {
 			"Run `go generate ./...` and commit the result — a hand-edited generated file is "+
 			"reverted by the next run, and a file produced by a different version of this "+
 			"generator means the committed transport is not the one this interface describes",
-			absDir, strings.Join(stale, ", "))
+			outDir, strings.Join(stale, ", "))
 	}
 	return nil
+}
+
+// regenerateCommand is what the generated header tells a reader to run: the
+// flags as given, so a file generated from another package's interface
+// records where that interface is.
+func regenerateCommand(dir, out string, half Half) string {
+	cmd := "go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir " + dir
+	if half != HalfAll {
+		cmd += " -emit " + string(half)
+	}
+	if out != "" {
+		cmd += " -out " + out
+	}
+	return cmd
 }

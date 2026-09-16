@@ -33,7 +33,7 @@ var transportTemplate = template.Must(template.New("transport").Funcs(templateFu
 //
 // Regenerate with:
 //
-//	go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir .
+//	{{.Regenerate}}
 
 package {{.Package}}
 
@@ -296,7 +296,7 @@ var assemblyTemplate = template.Must(template.New("assembly").Funcs(templateFunc
 //
 // Regenerate with:
 //
-//	go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir .
+//	{{.Regenerate}}
 
 package {{.Package}}
 

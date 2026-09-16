@@ -23,6 +23,36 @@ func AssemblyFileName(iface string) string {
 	return strings.ToLower(iface) + "_rpc_assembly_gen.go"
 }
 
+// Half selects which generated files Generate emits.
+type Half string
+
+const (
+	// HalfAll emits both files into one package: the default, and what every
+	// package that owns its interface wants.
+	HalfAll Half = "all"
+	// HalfTransport emits only the transport half. A core domain package that
+	// owns the interface uses it: the file depends on roost-core only, so the
+	// package stays inside the core dependency boundary.
+	HalfTransport Half = "transport"
+	// HalfAssembly emits only the assembly half. A kit package whose interface
+	// lives in core uses it, pointing -dir at the core package and -out at
+	// itself: the types it names resolve through the kit package's aliases.
+	HalfAssembly Half = "assembly"
+)
+
+// DefaultRegenerate is the command the generated headers cite when the
+// generator ran with no flags but -dir .
+const DefaultRegenerate = "go run github.com/tjbdwanghaibo/roost-codegen/cmd/servicerpc -dir ."
+
+// Options steers Generate; the zero value is HalfAll with DefaultRegenerate.
+type Options struct {
+	Half Half
+	// Regenerate is the command the generated header tells a reader to run.
+	// It is recorded rather than derived so a package generated from another
+	// package's interface says how it was produced.
+	Regenerate string
+}
+
 // Generate renders the transport for one service as two files: the transport
 // half (roost-core imports only) and the assembly half (Server, ClientMod,
 // OwnerCapabilities; imports roost-kit/mods). Both land in the same package,
@@ -32,23 +62,40 @@ func AssemblyFileName(iface string) string {
 // It is built with text/template rather than string concatenation, and the
 // output is run through go/format, so a template mistake surfaces as a parse
 // error here rather than as an unbuildable file in someone's package.
-func Generate(service Service) ([]File, error) {
+func Generate(service Service) ([]File, error) { return GenerateWith(service, Options{}) }
+
+// GenerateWith is Generate with a choice of half and header command (M-11).
+func GenerateWith(service Service, opts Options) ([]File, error) {
 	view, err := newView(service)
 	if err != nil {
 		return nil, err
 	}
-	transport, err := render(transportTemplate, "transport", service, view)
-	if err != nil {
-		return nil, err
+	if opts.Regenerate != "" {
+		view.Regenerate = opts.Regenerate
 	}
-	assembly, err := render(assemblyTemplate, "assembly", service, view)
-	if err != nil {
-		return nil, err
+	half := opts.Half
+	if half == "" {
+		half = HalfAll
 	}
-	return []File{
-		{Name: TransportFileName(service.Interface), Content: transport},
-		{Name: AssemblyFileName(service.Interface), Content: assembly},
-	}, nil
+	var files []File
+	if half == HalfAll || half == HalfTransport {
+		transport, err := render(transportTemplate, "transport", service, view)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, File{Name: TransportFileName(service.Interface), Content: transport})
+	}
+	if half == HalfAll || half == HalfAssembly {
+		assembly, err := render(assemblyTemplate, "assembly", service, view)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, File{Name: AssemblyFileName(service.Interface), Content: assembly})
+	}
+	if len(files) == 0 {
+		return nil, fmt.Errorf("servicerpc: unknown half %q (want transport, assembly or all)", half)
+	}
+	return files, nil
 }
 
 func render(tmpl *template.Template, half string, service Service, view view) ([]byte, error) {
@@ -85,6 +132,8 @@ type view struct {
 	// FileBase is the interface name lowercased, the stem both generated
 	// file names share; the headers name the sibling file with it.
 	FileBase string
+	// Regenerate is the command the header cites; see Options.Regenerate.
+	Regenerate string
 	// Methods carries the derived per-method names.
 	Methods []methodView
 }
@@ -124,10 +173,11 @@ type methodView struct {
 
 func newView(service Service) (view, error) {
 	v := view{
-		Service:  service,
-		Iface:    service.Interface,
-		Lower:    lowerFirst(service.Interface),
-		FileBase: strings.ToLower(service.Interface),
+		Service:    service,
+		Iface:      service.Interface,
+		Lower:      lowerFirst(service.Interface),
+		FileBase:   strings.ToLower(service.Interface),
+		Regenerate: DefaultRegenerate,
 	}
 	for _, method := range service.Methods {
 		mv := methodView{
