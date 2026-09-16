@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`servicerpc -emit transport|assembly|all`、`-out <dir>`，`-dir` 接受 import path**（M-11，ARCH-01 / ARCH-04 收尾）。接口住在 roost-core 领域包时，core 包跑 `-emit transport`（生成物只依赖 core），kit 包跑 `-emit assembly -dir github.com/tjbdwanghaibo/roost-core/service/<x> -out .`（在 `-out` 的模块上下文里用 `go list` 解析 import path，不用写模块缓存路径）。文件头的"Regenerate with"记录实际命令。`GenerateWith(service, Options{Half, Regenerate})`；`-check` 对 `-out` 目录判定。测试：`halves_promises_test.go`。kit 的 mail / session / match 已按此生成。
+
 ### Changed
 
 - **`servicerpc` 生成的传输拆成两个文件**（M-10，ARCH-04 生成器部分；来源 `roost-core/docs/bug/REVIEW-2026-09-16-04.md` §7）。`<接口名小写>_rpc_gen.go` 现在只含常量、wire 类型、handler 表、`BusClient`、capability 包装与 `CapabilityName` / `LocalCapabilityName`，只 import roost-core；`Server`、`OwnerCapabilities`、`ClientMod` 移到新文件 `<接口名小写>_rpc_assembly_gen.go`，它是唯一 import `roost-kit/mods` 的生成文件。两个文件落在同一个包，调用方不用改；拆分是为了让 RPC 接口能连同 wire / handler / BusClient 一起搬进 core 的领域包（M-06～M-08 的下一步）。`-check` 对两个文件分别判定，老仓库第一次跑会报装配文件 `(missing)`——跑一次 `go generate ./...` 即可。`Generate` 的签名从 `([]byte, error)` 变为 `([]servicerpc.File, error)`（内部包）。测试：`split_promises_test.go`；golden 拆成 `shop_rpc_gen.go.txt` + `shop_rpc_assembly_gen.go.txt`。记录：`roost-core/docs/bugfix/M-10-servicerpc-split.md`。
