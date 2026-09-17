@@ -167,7 +167,7 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
 - **边界**：步骤的幂等靠 Mongo inbox 先占命令 id；debit / 退回是 Nest 事务，不在那个 Mongo 事务里——进程死在 Nest 提交与 inbox 提交之间，重投会再扣一次
   （和 claim token 那条一样的边界）。saga 包的原生路径（`SubscribeDataEngineStep` + `inbox.Bind` 进 Nest 事务）把回执和变更一起提交，能关掉这个窟窿，
   但它的完成效果目前没有消费者（roost-core `docs/bug/WANTED.md` W-2026-09-17-04），demo 没用。
-- **需要 core ≥ v1.15.6**：此前 Mongo 存储上任何步骤拒绝都进不了补偿（U-0225，`step result timeout` 反复出现），送给玩家 1 那一段会卡住。
+- **需要 core ≥ v1.15.6 / kit ≥ v1.14.7**：此前 Mongo 存储上任何步骤拒绝都进不了补偿（U-0225，`step result timeout` 反复出现），送给玩家 1 那一段会卡住。
 
 ## 技能目录：启动时编译，客户端可查
 
@@ -309,6 +309,14 @@ chat 的 Redis 里 world 频道的流每次登录多一条系统公告、每个�
 所有生成工程的 `dataengine.database` 默认都是 `game`，上一轮工程留下的 effect outbox 行没有消费者会 ack（前缀不同、流不同），超过 30 分钟就触发
 Data Engine 的硬积压熔断——这是它该有的行为（积压不该静默增长），不是 demo 的 bug。处置：`mongosh --eval 'db.getSiblingDB("game").dropDatabase()'`，
 或给每个工程改 `dataengine.database`。
+
+**换工程重跑后 game 日志里有 `saga: consumer processing failed … kind=completion … err="saga: not found"`**：
+`saga.subject_prefix`（`roost.saga`）与 `saga.stream`（`ROOST_SAGA`）不跟着 `nats.prefix` 走，`dataengine.effects` 的
+`roost.effect` / `ROOST_EFFECTS` 也一样——同一个 NATS 上两个工程共用这两条流。上一轮的完成消息还在流里，
+而它的 saga 记录随 `saga` 库一起被删了，于是协调器对每条都答 not found，按 `result_max_deliver` 重投几次后丢弃。
+不影响本轮（本轮自己的 saga 照常走完），但要干净就把这两组也改掉：
+`-e 's#subject_prefix: roost.saga#subject_prefix: roost-mysmoke.saga#' -e 's#stream: ROOST_SAGA#stream: ROOST_SAGA_MYSMOKE#'`，
+effects 同形；或者 `mongosh --eval 'db.getSiblingDB("saga").dropDatabase()'` 之外再删流。
 
 **连续两次压测间隔不到 60s 时可能有一个机器人 `poll_match: ticket still waiting`**：上一轮失败机器人的 duel 票还在队列里（TicketTTL 60s），
 被这一轮的第一个机器人配走了，剩下奇数个。这是 match 服务的正确行为，不是 bug；等 sweep 把过期票清掉再跑，或起偶数个再加一个。

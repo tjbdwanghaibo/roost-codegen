@@ -33,20 +33,13 @@ jobs:
         scenario: [minimal, full, demo]
         consumer-go: ["1.27.x"]
         exclude:
-          # The demo template needs core >= v1.15.3 / kit >= v1.14.4 (entity
-          # categories, account.RegistryBound, match.NewMod(reporter)); the
-          # minimum set pins older tags on purpose. released and source-head
-          # both carry it: a generated demo compiles against the tags since
-          # v1.15.3 / v1.14.4 (verified 2026-09-16, no go.work).
+          # The demo template needs core >= v1.15.6 / kit >= v1.14.7 (entity
+          # categories, account.RegistryBound, match.NewMod(reporter), and the
+          # gift saga's step refusal → compensation, U-0225); the minimum set
+          # pins older tags on purpose. released and source-head both carry it
+          # (verified 2026-09-17, no go.work).
           - scenario: demo
             dependency-set: minimum
-          # The demo's gift saga exercises step refusal → compensation, which
-          # core ≤ v1.15.5 cannot apply on the Mongo store (U-0225, fixed on
-          # core main). Until core v1.15.6 is tagged the released set would
-          # fail this cell for a reason that is not the generator's; the
-          # source-head set still runs it. Remove this line at that release.
-          - scenario: demo
-            dependency-set: released
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
