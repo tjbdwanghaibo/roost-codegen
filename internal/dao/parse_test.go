@@ -309,7 +309,7 @@ func TestGenerateNested(t *testing.T) {
 	}
 
 	outFile := filepath.Join(outDir, "gen_position_nested.go")
-	changed, err := generateNested(posDef, "testdata", outFile, true)
+	changed, err := generateNested(posDef, defs, "testdata", outFile, true)
 	if err != nil {
 		t.Fatalf("generateNested: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestGenerateNested(t *testing.T) {
 func TestGenerateNestedPointerGetterDoesNotAddPointerLevel(t *testing.T) {
 	outFile := filepath.Join(t.TempDir(), "gen_pointer_holder_nested.go")
 	nested := NestedDef{Name: "PointerHolder", Fields: []FieldDef{{Name: "Child", TypeStr: "*Position", Kind: KindStruct, IsPtr: true}}}
-	if _, err := generateNested(nested, "testdata", outFile, true); err != nil {
+	if _, err := generateNested(nested, &Definitions{}, "testdata", outFile, true); err != nil {
 		t.Fatal(err)
 	}
 	content, err := os.ReadFile(outFile)

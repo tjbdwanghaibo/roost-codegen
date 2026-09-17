@@ -20,33 +20,65 @@ type GemInfo struct {
 	level                int32
 }
 
-// --- BSON (persistence, rollback capture, sync) ---
+// --- wire form (persistence, rollback capture, sync) ---
 //
 // The fields are unexported so every mutation goes through the setters below
 // — that is what makes dirty tracking and undo impossible to bypass — and the
-// reflection-based codec cannot see unexported fields. Without these two
-// methods the parent DAO's document carried {"<field>": {"dirtyhook": {}}}:
-// no data at all (U-0224). MarshalBSON has a value receiver because the
-// parent places the struct itself, not a pointer, into its bson.M.
+// reflection-based codec cannot see unexported fields. GemInfo therefore
+// has a WIRE FORM, gemInfoBSONDoc, with exported fields: the
+// parent DAO places that into its own document and reflection encodes it
+// inline, with no per-value Marshaler round trip (U-0224 and its follow-up:
+// the bson.Marshaler route cost about four allocations per nested value).
+// MarshalBSON / UnmarshalBSON are kept for a GemInfo encoded on its own.
 type gemInfoBSONDoc struct {
 	ID    int32 `bson:"id"`
 	Level int32 `bson:"level"`
 }
 
-func (s GemInfo) MarshalBSON() ([]byte, error) {
-	return bson.Marshal(gemInfoBSONDoc{
+// bsonDoc is the value receiver on purpose: containers hold GemInfo values
+// as well as pointers, and a method expression GemInfo.bsonDoc maps over both.
+func (s GemInfo) bsonDoc() gemInfoBSONDoc {
+	return gemInfoBSONDoc{
 		ID:    s.id,
 		Level: s.level,
-	})
+	}
 }
+
+func (s *GemInfo) setBSONDoc(doc gemInfoBSONDoc) {
+	s.id = doc.ID
+	s.level = doc.Level
+}
+
+func gemInfoFromBSONDoc(doc gemInfoBSONDoc) GemInfo {
+	var s GemInfo
+	s.setBSONDoc(doc)
+	return s
+}
+
+func gemInfoPtrBSONDoc(v *GemInfo) *gemInfoBSONDoc {
+	if v == nil {
+		return nil
+	}
+	doc := v.bsonDoc()
+	return &doc
+}
+
+func gemInfoPtrFromBSONDoc(doc *gemInfoBSONDoc) *GemInfo {
+	if doc == nil {
+		return nil
+	}
+	v := gemInfoFromBSONDoc(*doc)
+	return &v
+}
+
+func (s GemInfo) MarshalBSON() ([]byte, error) { return bson.Marshal(s.bsonDoc()) }
 
 func (s *GemInfo) UnmarshalBSON(raw []byte) error {
 	var doc gemInfoBSONDoc
 	if err := bson.Unmarshal(raw, &doc); err != nil {
 		return err
 	}
-	s.id = doc.ID
-	s.level = doc.Level
+	s.setBSONDoc(doc)
 	return nil
 }
 

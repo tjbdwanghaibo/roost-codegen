@@ -46,9 +46,28 @@ func generateDao(dao DaoDef, defs *Definitions, pkg string, outFile string, forc
 	return writeIfChanged(content, outFile, force)
 }
 
+// generateBSONHelpers writes the package's shared container conversions
+// (bsonHelpersFileName); it is only written when the package has nested
+// structs, since only their wire forms use it.
+func generateBSONHelpers(pkg string, outFile string, force bool) (bool, error) {
+	tmpl, err := template.New("bsonhelpers").Parse(bsonHelpersTemplate)
+	if err != nil {
+		return false, fmt.Errorf("template parse: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, struct{ Package string }{Package: pkg}); err != nil {
+		return false, fmt.Errorf("template exec: %w", err)
+	}
+	content, err := format.Source(buf.Bytes())
+	if err != nil {
+		return false, fmt.Errorf("format generated bson helpers: %w", err)
+	}
+	return writeIfChanged(content, outFile, force)
+}
+
 // nestedFuncMap is the nested template's helper set; a test renders the
 // template with it to pin the generated shape.
-func nestedFuncMap() template.FuncMap {
+func nestedFuncMap(defs *Definitions) template.FuncMap {
 	return template.FuncMap{
 		"snakeCase":  toSnake,
 		"lower1":     lower1,
@@ -59,17 +78,132 @@ func nestedFuncMap() template.FuncMap {
 		"mapNewExpr": mapNewExpr,
 		"rawMapType": rawMapType,
 		"hasMaps":    hasMapFields,
+		"isNested":   func(typeName string) bool { return isNestedType(defs, typeName) },
+		"wireType":   func(f FieldDef) string { return wireType(defs, f) },
+		"toWire":     func(f FieldDef, expr string) string { return toWire(defs, f, expr) },
+		"fromWire":   func(f FieldDef, expr string) string { return fromWire(defs, f, expr) },
 	}
 }
 
-func generateNested(nested NestedDef, pkg string, outFile string, force bool) (bool, error) {
+// --- wire form (U-0224 补修) ---
+//
+// A nested struct's fields are unexported, so the BSON codec cannot encode it
+// by reflection. The first fix gave every nested type MarshalBSON, but the
+// bson.Marshaler contract returns a fresh []byte per value that the parent
+// then copies — about four allocations per nested value, three times the
+// reflection floor for a document with a few of them. So the parent DAO does
+// not encode nested values through Marshaler at all: it places their WIRE
+// FORM — a generated struct with exported fields (`<name>BSONDoc`) — into its
+// own document and lets reflection encode it inline. These helpers name the
+// wire type of a field and the conversion expressions in each direction;
+// non-nested fields pass through unchanged.
+
+// wireDocName is the wire struct's type name for a nested type.
+func wireDocName(typeName string) string {
+	return lower1(strings.TrimPrefix(typeName, "*")) + "BSONDoc"
+}
+
+func wireType(defs *Definitions, f FieldDef) string {
+	switch f.Kind {
+	case KindStruct:
+		if isNestedType(defs, f.TypeStr) {
+			if strings.HasPrefix(f.TypeStr, "*") {
+				return "*" + wireDocName(f.TypeStr)
+			}
+			return wireDocName(f.TypeStr)
+		}
+		return f.TypeStr
+	case KindSlice:
+		if isNestedType(defs, f.SliceElem) {
+			return "[]" + ptrPrefix(f) + wireDocName(f.SliceElem)
+		}
+		return f.TypeStr
+	case KindMap:
+		if isNestedType(defs, f.MapVal) {
+			return "map[" + f.MapKey + "]" + ptrPrefix(f) + wireDocName(f.MapVal)
+		}
+		return rawMapType(f)
+	default:
+		return f.TypeStr
+	}
+}
+
+func ptrPrefix(f FieldDef) string {
+	if f.IsPtr {
+		return "*"
+	}
+	return ""
+}
+
+// toWire is the Go expression converting the stored value expr into its wire
+// form; fromWire is the inverse. Element conversions are the per-type
+// functions the nested template generates (`X.bsonDoc`, `xPtrBSONDoc`,
+// `xFromBSONDoc`, `xPtrFromBSONDoc`), mapped over containers by the generic
+// daoMapDocs / daoSliceDocs helpers written once per package.
+func toWire(defs *Definitions, f FieldDef, expr string) string {
+	switch f.Kind {
+	case KindStruct:
+		if isNestedType(defs, f.TypeStr) {
+			if strings.HasPrefix(f.TypeStr, "*") {
+				return lower1(strings.TrimPrefix(f.TypeStr, "*")) + "PtrBSONDoc(" + expr + ")"
+			}
+			return expr + ".bsonDoc()"
+		}
+	case KindSlice:
+		if isNestedType(defs, f.SliceElem) {
+			return "daoSliceDocs(" + expr + ", " + elemToWire(f.SliceElem, f.IsPtr) + ")"
+		}
+	case KindMap:
+		if isNestedType(defs, f.MapVal) {
+			return "daoMapDocs(" + expr + ", " + elemToWire(f.MapVal, f.IsPtr) + ")"
+		}
+	}
+	return expr
+}
+
+func fromWire(defs *Definitions, f FieldDef, expr string) string {
+	switch f.Kind {
+	case KindStruct:
+		if isNestedType(defs, f.TypeStr) {
+			if strings.HasPrefix(f.TypeStr, "*") {
+				return lower1(strings.TrimPrefix(f.TypeStr, "*")) + "PtrFromBSONDoc(" + expr + ")"
+			}
+			return lower1(f.TypeStr) + "FromBSONDoc(" + expr + ")"
+		}
+	case KindSlice:
+		if isNestedType(defs, f.SliceElem) {
+			return "daoSliceDocs(" + expr + ", " + elemFromWire(f.SliceElem, f.IsPtr) + ")"
+		}
+	case KindMap:
+		if isNestedType(defs, f.MapVal) {
+			return "daoMapDocs(" + expr + ", " + elemFromWire(f.MapVal, f.IsPtr) + ")"
+		}
+	}
+	return expr
+}
+
+func elemToWire(typeName string, ptr bool) string {
+	if ptr {
+		return lower1(typeName) + "PtrBSONDoc"
+	}
+	return typeName + ".bsonDoc"
+}
+
+func elemFromWire(typeName string, ptr bool) string {
+	if ptr {
+		return lower1(typeName) + "PtrFromBSONDoc"
+	}
+	return lower1(typeName) + "FromBSONDoc"
+}
+
+func generateNested(nested NestedDef, defs *Definitions, pkg string, outFile string, force bool) (bool, error) {
 	if err := validateGeneratedStorageFields(nested.Name, nested.Fields); err != nil {
 		return false, err
 	}
 	if err := validateGeneratedMapFields(nested.Fields); err != nil {
 		return false, err
 	}
-	tmpl, err := template.New("nested").Funcs(nestedFuncMap()).Parse(nestedTemplate)
+	tmpl, err := template.New("nested").Funcs(nestedFuncMap(defs)).Parse(nestedTemplate)
 	if err != nil {
 		return false, fmt.Errorf("template parse: %w", err)
 	}
@@ -150,6 +284,9 @@ func funcMap(defs *Definitions) template.FuncMap {
 		"daoCollConst":  daoCollectionConstName,
 		"dbScope":       databaseScopeExpr,
 		"isNested":      func(typeName string) bool { return isNestedType(defs, typeName) },
+		"wireType":      func(f FieldDef) string { return wireType(defs, f) },
+		"toWire":        func(f FieldDef, expr string) string { return toWire(defs, f, expr) },
+		"fromWire":      func(f FieldDef, expr string) string { return fromWire(defs, f, expr) },
 		"persistFields": func(fields []FieldDef) []FieldDef { return filterPersist(fields) },
 		"syncFields":    func(fields []FieldDef) []FieldDef { return filterSync(fields) },
 		"dirtyFields":   func(fields []FieldDef) []FieldDef { return filterDirty(fields) },

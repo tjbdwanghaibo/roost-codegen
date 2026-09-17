@@ -502,15 +502,15 @@ func (d *HeroDao) setEquipsRawMap(src map[int64]*EquipInfo) {
 // sync-only fields. Persistence changes live in RollbackTx, not in the DAO.
 func (d *HeroDao) CaptureRollbackState() ([]byte, error) {
 	type rollbackDoc struct {
-		Id      int64                `bson:"_id"`
-		Name    string               `bson:"name"`
-		Level   int32                `bson:"level"`
-		Exp     int64                `bson:"exp"`
-		LoginAt int64                `bson:"login_at"`
-		Items   map[int64]int32      `bson:"items"`
-		Friends []int64              `bson:"friends"`
-		Pos     Position             `bson:"pos"`
-		Equips  map[int64]*EquipInfo `bson:"equips"`
+		Id      int64                       `bson:"_id"`
+		Name    string                      `bson:"name"`
+		Level   int32                       `bson:"level"`
+		Exp     int64                       `bson:"exp"`
+		LoginAt int64                       `bson:"login_at"`
+		Items   map[int64]int32             `bson:"items"`
+		Friends []int64                     `bson:"friends"`
+		Pos     positionBSONDoc             `bson:"pos"`
+		Equips  map[int64]*equipInfoBSONDoc `bson:"equips"`
 	}
 	doc := rollbackDoc{
 		Id:      d.id,
@@ -520,23 +520,23 @@ func (d *HeroDao) CaptureRollbackState() ([]byte, error) {
 		LoginAt: d.loginAt,
 		Items:   d.heroDaoItemsRawMap(),
 		Friends: d.friends,
-		Pos:     d.pos,
-		Equips:  d.heroDaoEquipsRawMap(),
+		Pos:     d.pos.bsonDoc(),
+		Equips:  daoMapDocs(d.heroDaoEquipsRawMap(), equipInfoPtrBSONDoc),
 	}
 	return bson.Marshal(doc)
 }
 
 func (d *HeroDao) RestoreRollbackState(raw []byte) error {
 	type rollbackDoc struct {
-		Id      int64                `bson:"_id"`
-		Name    string               `bson:"name"`
-		Level   int32                `bson:"level"`
-		Exp     int64                `bson:"exp"`
-		LoginAt int64                `bson:"login_at"`
-		Items   map[int64]int32      `bson:"items"`
-		Friends []int64              `bson:"friends"`
-		Pos     Position             `bson:"pos"`
-		Equips  map[int64]*EquipInfo `bson:"equips"`
+		Id      int64                       `bson:"_id"`
+		Name    string                      `bson:"name"`
+		Level   int32                       `bson:"level"`
+		Exp     int64                       `bson:"exp"`
+		LoginAt int64                       `bson:"login_at"`
+		Items   map[int64]int32             `bson:"items"`
+		Friends []int64                     `bson:"friends"`
+		Pos     positionBSONDoc             `bson:"pos"`
+		Equips  map[int64]*equipInfoBSONDoc `bson:"equips"`
 	}
 	var doc rollbackDoc
 	if err := bson.Unmarshal(raw, &doc); err != nil {
@@ -549,8 +549,8 @@ func (d *HeroDao) RestoreRollbackState(raw []byte) error {
 	d.loginAt = doc.LoginAt
 	d.setItemsRawMap(doc.Items)
 	d.friends = doc.Friends
-	d.pos = doc.Pos
-	d.setEquipsRawMap(doc.Equips)
+	d.pos = positionFromBSONDoc(doc.Pos)
+	d.setEquipsRawMap(daoMapDocs(doc.Equips, equipInfoPtrFromBSONDoc))
 	d.Init()
 	return nil
 }
@@ -565,8 +565,8 @@ func (d *HeroDao) marshalCommitState() ([]byte, error) {
 		"login_at": d.loginAt,
 		"items":    d.heroDaoItemsRawMap(),
 		"friends":  d.friends,
-		"pos":      d.pos,
-		"equips":   d.heroDaoEquipsRawMap(),
+		"pos":      d.pos.bsonDoc(),
+		"equips":   daoMapDocs(d.heroDaoEquipsRawMap(), equipInfoPtrBSONDoc),
 	}
 	return bson.Marshal(doc)
 }
@@ -625,8 +625,8 @@ func (d *HeroDao) marshalPersistData(mask uint64) []byte {
 		"login_at": d.loginAt,
 		"items":    d.heroDaoItemsRawMap(),
 		"friends":  d.friends,
-		"pos":      d.pos,
-		"equips":   d.heroDaoEquipsRawMap(),
+		"pos":      d.pos.bsonDoc(),
+		"equips":   daoMapDocs(d.heroDaoEquipsRawMap(), equipInfoPtrBSONDoc),
 	}
 	data, err := bson.Marshal(doc)
 	if err != nil {
@@ -688,12 +688,12 @@ func (d *HeroDao) marshalPersistPatchBSON(change nest.PersistChange) (dataengine
 		set["friends"] = d.friends
 	}
 	if change.Mask&heroDaoFieldPos != 0 {
-		set["pos"] = d.pos
+		set["pos"] = d.pos.bsonDoc()
 	}
 	if change.Mask&heroDaoFieldEquips != 0 {
 		_, full := change.FullFields["equips"]
 		if full || !d.persistChangeHasPath(change, "equips") {
-			set["equips"] = d.heroDaoEquipsRawMap()
+			set["equips"] = daoMapDocs(d.heroDaoEquipsRawMap(), equipInfoPtrBSONDoc)
 		}
 	}
 	for path, value := range change.Set {
@@ -741,10 +741,10 @@ func (d *HeroDao) MarshalSync(mask uint64) []byte {
 		doc["friends"] = d.friends
 	}
 	if mask&heroDaoFieldPos != 0 {
-		doc["pos"] = d.pos
+		doc["pos"] = d.pos.bsonDoc()
 	}
 	if mask&heroDaoFieldEquips != 0 {
-		doc["equips"] = d.heroDaoEquipsRawMap()
+		doc["equips"] = daoMapDocs(d.heroDaoEquipsRawMap(), equipInfoPtrBSONDoc)
 	}
 	if len(doc) == 1 {
 		return nil
@@ -834,12 +834,12 @@ func (d *HeroDao) ApplySync(raw []byte) error {
 			return err
 		}
 		var wrap struct {
-			V Position `bson:"v"`
+			V positionBSONDoc `bson:"v"`
 		}
 		if err := bson.Unmarshal(data, &wrap); err != nil {
 			return err
 		}
-		d.pos = wrap.V
+		d.pos = positionFromBSONDoc(wrap.V)
 	}
 	if v, ok := doc["equips"]; ok {
 		data, err := bson.Marshal(bson.M{"v": v})
@@ -847,12 +847,12 @@ func (d *HeroDao) ApplySync(raw []byte) error {
 			return err
 		}
 		var wrap struct {
-			V map[int64]*EquipInfo `bson:"v"`
+			V map[int64]*equipInfoBSONDoc `bson:"v"`
 		}
 		if err := bson.Unmarshal(data, &wrap); err != nil {
 			return err
 		}
-		d.setEquipsRawMap(wrap.V)
+		d.setEquipsRawMap(daoMapDocs(wrap.V, equipInfoPtrFromBSONDoc))
 	}
 	d.Init()
 	return nil
@@ -862,15 +862,15 @@ func (d *HeroDao) ApplySync(raw []byte) error {
 
 func (d *HeroDao) Unmarshal(raw []byte) error {
 	type rawDoc struct {
-		Id      int64                `bson:"_id"`
-		Name    string               `bson:"name"`
-		Level   int32                `bson:"level"`
-		Exp     int64                `bson:"exp"`
-		LoginAt int64                `bson:"login_at"`
-		Items   map[int64]int32      `bson:"items"`
-		Friends []int64              `bson:"friends"`
-		Pos     Position             `bson:"pos"`
-		Equips  map[int64]*EquipInfo `bson:"equips"`
+		Id      int64                       `bson:"_id"`
+		Name    string                      `bson:"name"`
+		Level   int32                       `bson:"level"`
+		Exp     int64                       `bson:"exp"`
+		LoginAt int64                       `bson:"login_at"`
+		Items   map[int64]int32             `bson:"items"`
+		Friends []int64                     `bson:"friends"`
+		Pos     positionBSONDoc             `bson:"pos"`
+		Equips  map[int64]*equipInfoBSONDoc `bson:"equips"`
 	}
 	var dd rawDoc
 	if err := bson.Unmarshal(raw, &dd); err != nil {
@@ -883,8 +883,8 @@ func (d *HeroDao) Unmarshal(raw []byte) error {
 	d.loginAt = dd.LoginAt
 	d.setItemsRawMap(dd.Items)
 	d.friends = dd.Friends
-	d.pos = dd.Pos
-	d.setEquipsRawMap(dd.Equips)
+	d.pos = positionFromBSONDoc(dd.Pos)
+	d.setEquipsRawMap(daoMapDocs(dd.Equips, equipInfoPtrFromBSONDoc))
 	d.Init()
 	return nil
 }

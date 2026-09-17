@@ -26,40 +26,76 @@ type {{.Nested.Name}} struct {
 {{- end}}
 }
 
-// --- BSON (persistence, rollback capture, sync) ---
+// --- wire form (persistence, rollback capture, sync) ---
 //
 // The fields are unexported so every mutation goes through the setters below
 // — that is what makes dirty tracking and undo impossible to bypass — and the
-// reflection-based codec cannot see unexported fields. Without these two
-// methods the parent DAO's document carried {"<field>": {"dirtyhook": {}}}:
-// no data at all (U-0224). MarshalBSON has a value receiver because the
-// parent places the struct itself, not a pointer, into its bson.M.
+// reflection-based codec cannot see unexported fields. {{.Nested.Name}} therefore
+// has a WIRE FORM, {{lower1 .Nested.Name}}BSONDoc, with exported fields: the
+// parent DAO places that into its own document and reflection encodes it
+// inline, with no per-value Marshaler round trip (U-0224 and its follow-up:
+// the bson.Marshaler route cost about four allocations per nested value).
+// MarshalBSON / UnmarshalBSON are kept for a {{.Nested.Name}} encoded on its own.
 type {{lower1 .Nested.Name}}BSONDoc struct {
 {{- range .Nested.Fields}}
-	{{.Name}} {{if eq .Kind 2}}{{rawMapType .}}{{else}}{{.TypeStr}}{{end}} ` + "`" + `bson:"{{bsonKey .Name}}"` + "`" + `
+	{{.Name}} {{wireType .}} ` + "`" + `bson:"{{bsonKey .Name}}"` + "`" + `
 {{- end}}
 }
 
-func (s {{.Nested.Name}}) MarshalBSON() ([]byte, error) {
-	return bson.Marshal({{lower1 .Nested.Name}}BSONDoc{
+// bsonDoc is the value receiver on purpose: containers hold {{.Nested.Name}} values
+// as well as pointers, and a method expression {{.Nested.Name}}.bsonDoc maps over both.
+func (s {{.Nested.Name}}) bsonDoc() {{lower1 .Nested.Name}}BSONDoc {
+	return {{lower1 .Nested.Name}}BSONDoc{
 {{- range .Nested.Fields}}
-		{{.Name}}: {{if eq .Kind 2}}s.{{fieldVar .Name}}RawMap(){{else}}s.{{fieldVar .Name}}{{end}},
+{{- if eq .Kind 2}}
+		{{.Name}}: {{toWire . (printf "s.%sRawMap()" (fieldVar .Name))}},
+{{- else}}
+		{{.Name}}: {{toWire . (printf "s.%s" (fieldVar .Name))}},
 {{- end}}
-	})
+{{- end}}
+	}
 }
+
+func (s *{{.Nested.Name}}) setBSONDoc(doc {{lower1 .Nested.Name}}BSONDoc) {
+{{- range .Nested.Fields}}
+{{- if eq .Kind 2}}
+	s.set{{.Name}}RawMap({{fromWire . (printf "doc.%s" .Name)}})
+{{- else}}
+	s.{{fieldVar .Name}} = {{fromWire . (printf "doc.%s" .Name)}}
+{{- end}}
+{{- end}}
+}
+
+func {{lower1 .Nested.Name}}FromBSONDoc(doc {{lower1 .Nested.Name}}BSONDoc) {{.Nested.Name}} {
+	var s {{.Nested.Name}}
+	s.setBSONDoc(doc)
+	return s
+}
+
+func {{lower1 .Nested.Name}}PtrBSONDoc(v *{{.Nested.Name}}) *{{lower1 .Nested.Name}}BSONDoc {
+	if v == nil {
+		return nil
+	}
+	doc := v.bsonDoc()
+	return &doc
+}
+
+func {{lower1 .Nested.Name}}PtrFromBSONDoc(doc *{{lower1 .Nested.Name}}BSONDoc) *{{.Nested.Name}} {
+	if doc == nil {
+		return nil
+	}
+	v := {{lower1 .Nested.Name}}FromBSONDoc(*doc)
+	return &v
+}
+
+func (s {{.Nested.Name}}) MarshalBSON() ([]byte, error) { return bson.Marshal(s.bsonDoc()) }
 
 func (s *{{.Nested.Name}}) UnmarshalBSON(raw []byte) error {
 	var doc {{lower1 .Nested.Name}}BSONDoc
 	if err := bson.Unmarshal(raw, &doc); err != nil {
 		return err
 	}
-{{- range .Nested.Fields}}
-{{- if eq .Kind 2}}
-	s.set{{.Name}}RawMap(doc.{{.Name}})
-{{- else}}
-	s.{{fieldVar .Name}} = doc.{{.Name}}
-{{- end}}
-{{- end}}
+	s.setBSONDoc(doc)
 	return nil
 }
 {{range .Nested.Fields}}

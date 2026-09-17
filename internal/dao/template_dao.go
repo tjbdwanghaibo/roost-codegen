@@ -403,16 +403,16 @@ func (d *{{.Dao.Name}}) CaptureRollbackState() ([]byte, error) {
 	type rollbackDoc struct {
 		Id int64 ` + "`" + `bson:"_id"` + "`" + `
 {{- range .Dao.Fields}}
-		{{.Name}} {{if eq .Kind 2}}{{rawMapType .}}{{else}}{{.TypeStr}}{{end}} ` + "`" + `bson:"{{bsonKey .Name}}"` + "`" + `
+		{{.Name}} {{wireType .}} ` + "`" + `bson:"{{bsonKey .Name}}"` + "`" + `
 {{- end}}
 	}
 	doc := rollbackDoc{
 		Id: d.id,
 {{- range .Dao.Fields}}
 {{- if eq .Kind 2}}
-		{{.Name}}: d.{{mapHelperName $.Dao.Name .Name}}(),
+		{{.Name}}: {{toWire . (printf "d.%s()" (mapHelperName $.Dao.Name .Name))}},
 {{- else}}
-		{{.Name}}: d.{{fieldVar .Name}},
+		{{.Name}}: {{toWire . (printf "d.%s" (fieldVar .Name))}},
 {{- end}}
 {{- end}}
 	}
@@ -423,7 +423,7 @@ func (d *{{.Dao.Name}}) RestoreRollbackState(raw []byte) error {
 	type rollbackDoc struct {
 		Id int64 ` + "`" + `bson:"_id"` + "`" + `
 {{- range .Dao.Fields}}
-		{{.Name}} {{if eq .Kind 2}}{{rawMapType .}}{{else}}{{.TypeStr}}{{end}} ` + "`" + `bson:"{{bsonKey .Name}}"` + "`" + `
+		{{.Name}} {{wireType .}} ` + "`" + `bson:"{{bsonKey .Name}}"` + "`" + `
 {{- end}}
 	}
 	var doc rollbackDoc
@@ -431,9 +431,9 @@ func (d *{{.Dao.Name}}) RestoreRollbackState(raw []byte) error {
 	d.id = doc.Id
 {{- range .Dao.Fields}}
 {{- if eq .Kind 2}}
-	d.set{{.Name}}RawMap(doc.{{.Name}})
+	d.set{{.Name}}RawMap({{fromWire . (printf "doc.%s" .Name)}})
 {{- else}}
-	d.{{fieldVar .Name}} = doc.{{.Name}}
+	d.{{fieldVar .Name}} = {{fromWire . (printf "doc.%s" .Name)}}
 {{- end}}
 {{- end}}
 	d.Init()
@@ -446,9 +446,9 @@ func (d *{{.Dao.Name}}) marshalCommitState() ([]byte, error) {
 		"_schema": {{.Dao.Name}}SchemaVersion,
 {{- range persistFields .Dao.Fields}}
 {{- if eq .Kind 2}}
-		"{{bsonKey .Name}}": d.{{mapHelperName $.Dao.Name .Name}}(),
+		"{{bsonKey .Name}}": {{toWire . (printf "d.%s()" (mapHelperName $.Dao.Name .Name))}},
 {{- else}}
-		"{{bsonKey .Name}}": d.{{fieldVar .Name}},
+		"{{bsonKey .Name}}": {{toWire . (printf "d.%s" (fieldVar .Name))}},
 {{- end}}
 {{- end}}
 	}
@@ -501,9 +501,9 @@ func (d *{{.Dao.Name}}) marshalPersistData(mask uint64) []byte {
 		"_schema": {{.Dao.Name}}SchemaVersion,
 {{- range persistFields .Dao.Fields}}
 {{- if eq .Kind 2}}
-		"{{bsonKey .Name}}": d.{{mapHelperName $.Dao.Name .Name}}(),
+		"{{bsonKey .Name}}": {{toWire . (printf "d.%s()" (mapHelperName $.Dao.Name .Name))}},
 {{- else}}
-		"{{bsonKey .Name}}": d.{{fieldVar .Name}},
+		"{{bsonKey .Name}}": {{toWire . (printf "d.%s" (fieldVar .Name))}},
 {{- end}}
 {{- end}}
 	}
@@ -544,10 +544,10 @@ func (d *{{.Dao.Name}}) marshalPersistPatchBSON(change nest.PersistChange) (data
 {{- if eq .Kind 2}}
 		_, full := change.FullFields["{{bsonKey .Name}}"]
 		if full || !d.persistChangeHasPath(change, "{{bsonKey .Name}}") {
-			set["{{bsonKey .Name}}"] = d.{{mapHelperName $.Dao.Name .Name}}()
+			set["{{bsonKey .Name}}"] = {{toWire . (printf "d.%s()" (mapHelperName $.Dao.Name .Name))}}
 		}
 {{- else}}
-		set["{{bsonKey .Name}}"] = d.{{fieldVar .Name}}
+		set["{{bsonKey .Name}}"] = {{toWire . (printf "d.%s" (fieldVar .Name))}}
 {{- end}}
 	}
 {{- end}}
@@ -575,9 +575,9 @@ func (d *{{.Dao.Name}}) MarshalSync(mask uint64) []byte {
 {{- range syncFields .Dao.Fields}}
 	if mask&{{fieldMaskName $.Dao.Name .Name}} != 0 {
 {{- if eq .Kind 2}}
-		doc["{{bsonKey .Name}}"] = d.{{mapHelperName $.Dao.Name .Name}}()
+		doc["{{bsonKey .Name}}"] = {{toWire . (printf "d.%s()" (mapHelperName $.Dao.Name .Name))}}
 {{- else}}
-		doc["{{bsonKey .Name}}"] = d.{{fieldVar .Name}}
+		doc["{{bsonKey .Name}}"] = {{toWire . (printf "d.%s" (fieldVar .Name))}}
 {{- end}}
 	}
 {{- end}}
@@ -605,15 +605,15 @@ func (d *{{.Dao.Name}}) ApplySync(raw []byte) error {
 			return err
 		}
 		var wrap struct {
-			V {{if eq .Kind 2}}{{rawMapType .}}{{else}}{{.TypeStr}}{{end}} ` + "`" + `bson:"v"` + "`" + `
+			V {{wireType .}} ` + "`" + `bson:"v"` + "`" + `
 		}
 		if err := bson.Unmarshal(data, &wrap); err != nil {
 			return err
 		}
 {{- if eq .Kind 2}}
-		d.set{{.Name}}RawMap(wrap.V)
+		d.set{{.Name}}RawMap({{fromWire . "wrap.V"}})
 {{- else}}
-		d.{{fieldVar .Name}} = wrap.V
+		d.{{fieldVar .Name}} = {{fromWire . "wrap.V"}}
 {{- end}}
 	}
 {{- end}}
@@ -627,7 +627,7 @@ func (d *{{.Dao.Name}}) Unmarshal(raw []byte) error {
 	type rawDoc struct {
 		Id int64 ` + "`" + `bson:"_id"` + "`" + `
 {{- range persistFields .Dao.Fields}}
-		{{.Name}} {{if eq .Kind 2}}{{rawMapType .}}{{else}}{{.TypeStr}}{{end}} ` + "`" + `bson:"{{bsonKey .Name}}"` + "`" + `
+		{{.Name}} {{wireType .}} ` + "`" + `bson:"{{bsonKey .Name}}"` + "`" + `
 {{- end}}
 	}
 	var dd rawDoc
@@ -637,9 +637,9 @@ func (d *{{.Dao.Name}}) Unmarshal(raw []byte) error {
 	d.id = dd.Id
 {{- range persistFields .Dao.Fields}}
 {{- if eq .Kind 2}}
-	d.set{{.Name}}RawMap(dd.{{.Name}})
+	d.set{{.Name}}RawMap({{fromWire . (printf "dd.%s" .Name)}})
 {{- else}}
-	d.{{fieldVar .Name}} = dd.{{.Name}}
+	d.{{fieldVar .Name}} = {{fromWire . (printf "dd.%s" .Name)}}
 {{- end}}
 {{- end}}
 	d.Init()

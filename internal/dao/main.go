@@ -121,9 +121,22 @@ func Run(args []string, stdout io.Writer) error {
 	for _, nested := range defs.Nested {
 		outFile := filepath.Join(absOutDir, fmt.Sprintf("gen_%s_nested.go", toSnake(nested.Name)))
 		expected[filepath.Base(outFile)] = true
-		changed, err := generateNested(nested, *pkg, outFile, *force)
+		changed, err := generateNested(nested, defs, *pkg, outFile, *force)
 		if err != nil {
 			return fmt.Errorf("generate nested %s: %w", nested.Name, err)
+		}
+		if changed {
+			_, _ = fmt.Fprintf(stdout, "generated: %s\n", outFile)
+		} else {
+			_, _ = fmt.Fprintf(stdout, "unchanged: %s\n", outFile)
+		}
+	}
+	if len(defs.Nested) > 0 {
+		outFile := filepath.Join(absOutDir, bsonHelpersFileName)
+		expected[filepath.Base(outFile)] = true
+		changed, err := generateBSONHelpers(*pkg, outFile, *force)
+		if err != nil {
+			return fmt.Errorf("generate bson helpers: %w", err)
 		}
 		if changed {
 			_, _ = fmt.Fprintf(stdout, "generated: %s\n", outFile)
