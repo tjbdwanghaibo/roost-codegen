@@ -1,5 +1,6 @@
 # One robot's life: connect and hand over the credential, make sure the Player
-# exists, chat on the world channel and read it back, add an item, earn enough exp to level up (which sends a reward mail
+# exists, chat on the world channel and read it back, add an item, earn
+# exp (the reward mail it sends is then listed and claimed), earn enough exp to level up (which sends a reward mail
 # through the effect chain), queue for a duel until matched, read the World's
 # counters. Run an even number of robots: duels need pairs. Param keys are the request fields' snake_case
 # names; a value can also come from the robot's blackboard.
@@ -44,6 +45,19 @@ scenarios:
         - action: add_exp
           param:
             amount: 150
+        # The level-up sent a reward mail through the effect chain
+        # (asynchronous, usually well under a second). Poll the mailbox until
+        # it is there, then claim the attachment into the Bag: the mail
+        # service's exactly-once claim around one Nest transaction.
+        - retry:
+            times: 20
+            node:
+              sequence:
+                - wait: 250ms
+                - action: list_mail
+                  param:
+                    limit: 20
+        - action: claim_mail
         # Matchmaking: join the duel queue, then poll until the game's
         # matchmaker has paired this robot with another one. The ticket id
         # comes from the blackboard, where join_queue's OnResp put it.

@@ -205,10 +205,18 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		t.Errorf("chat collaborators do not grant the system path and register the text type:\n%s", chatCollaborators)
 	}
 	for _, rel := range []string{"game/chatroom/chatroom.go", "protocol/def/send_chat.go", "protocol/def/chat_history.go", "protocol/def/chat_message.go",
-		"game/controllers/player/send_chat.go", "game/controllers/player/chat_history.go", "game/controllers/player/chat_push.go", "deploy/dev/run.sh"} {
+		"game/controllers/player/send_chat.go", "game/controllers/player/chat_history.go", "game/controllers/player/chat_push.go", "deploy/dev/run.sh",
+		"game/rewards/rewards.go", "protocol/def/list_mail.go", "protocol/def/claim_mail.go",
+		"game/controllers/player/list_mail.go", "game/controllers/player/claim_mail.go"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("demo did not write %s: %v", rel, err)
 		}
+	}
+	if mailer := read("internal/service/game/level_up_mail.go"); !strings.Contains(mailer, "rewards.Encode(rewards.LevelUpReward(") {
+		t.Errorf("the level-up mail carries no reward attachment, so ClaimMail has nothing to claim")
+	}
+	if claim := read("game/controllers/player/claim_mail.go"); !strings.Contains(claim, ".ReserveClaim(") || !strings.Contains(claim, ".Sync_AddItem(") || !strings.Contains(claim, ".CommitClaim(") {
+		t.Errorf("claim_mail does not run the reserve → grant → commit sequence")
 	}
 	if conn := read("loadtest/playertcp/conn.go"); !strings.Contains(conn, "header[3]&flagServerPush == 0 && wire != 0") {
 		t.Errorf("the robot transport does not classify frames by the server-push flag; a push carrying a pending wire sequence would be taken for the response")

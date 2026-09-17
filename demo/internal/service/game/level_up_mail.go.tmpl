@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"{{MODULE}}/game/effects"
+	"{{MODULE}}/game/rewards"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
@@ -70,11 +71,19 @@ func startLevelUpMailer(ctx context.Context, registry *app.Registry) (fnats.IJet
 		if err := json.Unmarshal(envelope.Payload, &event); err != nil {
 			return fmt.Errorf("level-up mail: decode effect %s: %w", envelope.EffectID, err)
 		}
-		_, err := mail.Send(ctx, svcmail.SendRequest{
+		// The reward rides in the attachment; the player claims it through
+		// the ClaimMail endpoint, which grants it into the Bag exactly once
+		// per mail (mail's ReserveClaim / CommitClaim).
+		attachment, err := rewards.Encode(rewards.LevelUpReward(event.Level))
+		if err != nil {
+			return fmt.Errorf("level-up mail: effect %s: %w", envelope.EffectID, err)
+		}
+		_, err = mail.Send(ctx, svcmail.SendRequest{
 			Audience:         svcmail.AudienceDirect,
 			Recipients:       []int64{event.PlayerID},
 			Subject:          fmt.Sprintf("Level %d reached", event.Level),
 			Body:             fmt.Sprintf("Congratulations on reaching level %d. Here is your reward.", event.Level),
+			Attachment:       attachment,
 			ExpiresInSeconds: levelUpMailExpiresIn,
 			RequestID:        envelope.EffectID,
 		})

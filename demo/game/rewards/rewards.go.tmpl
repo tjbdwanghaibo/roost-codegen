@@ -1,0 +1,44 @@
+// Package rewards is the game's encoding of a mail attachment. The mail
+// service carries attachments as opaque bytes and delivers each one exactly
+// once (ReserveClaim → CommitClaim); what the bytes mean is the game's
+// business, so the producer (the level-up mailer) and the consumer (the
+// ClaimMail endpoint) share this package rather than agreeing informally.
+package rewards
+
+import (
+	"encoding/json"
+	"fmt"
+)
+
+// Reward is what a mail attachment grants: one stack of one item.
+type Reward struct {
+	ItemID int64 `json:"item_id"`
+	Count  int32 `json:"count"`
+}
+
+// LevelUpReward is what reaching a level is worth: one Mana Potion (item
+// 1002 in configs/table/item.csv) per level-up. A real game reads a reward
+// table; the point here is that the reward is decided where the mail is
+// sent, not where it is claimed.
+func LevelUpReward(level int32) Reward { return Reward{ItemID: 1002, Count: 1} }
+
+// Encode renders a reward as the attachment bytes.
+func Encode(reward Reward) ([]byte, error) {
+	if reward.ItemID <= 0 || reward.Count <= 0 {
+		return nil, fmt.Errorf("rewards: item %d x%d is not a grantable reward", reward.ItemID, reward.Count)
+	}
+	return json.Marshal(reward)
+}
+
+// Decode parses attachment bytes; anything that is not a grantable reward is
+// refused, so a claim never grants a zero or negative stack.
+func Decode(attachment []byte) (Reward, error) {
+	var reward Reward
+	if err := json.Unmarshal(attachment, &reward); err != nil {
+		return Reward{}, fmt.Errorf("rewards: attachment is not a reward: %w", err)
+	}
+	if reward.ItemID <= 0 || reward.Count <= 0 {
+		return Reward{}, fmt.Errorf("rewards: item %d x%d is not a grantable reward", reward.ItemID, reward.Count)
+	}
+	return reward, nil
+}

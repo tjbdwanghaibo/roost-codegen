@@ -72,6 +72,24 @@ internal/service/game/level_up_mail.go     durable consumer + Mongo inbox（每�
   产生分歧。
 - 消费者在 `Service.Init` 里订阅、`Shutdown` 里 `Drain`：进程宕机期间提交的升级，回来时会补投。
 
+## 邮件：列表与领附件（客户端这一半）
+
+升级奖励邮件现在带附件——`game/rewards/` 是附件的编码（一个道具一叠，JSON），发件方（`level_up_mail.go`）与领取方共用它：
+
+```
+ListMail 端点  ─ List(playerID, cursor, limit) ─▶ mail 服务（按认证玩家作用域，服务端不需要端点再查归属）
+ClaimMail 端点 ─ ReserveClaim(mailID, "") ─▶ mail 服务：交出附件 + 对 (玩家, 邮件) 恒定的 token
+               ─ Sync_AddItem(reward)      ─▶ Nest 锁 Player 的一笔事务（与 AddItem 端点同一个 Sender）
+               ─ CommitClaim(token)        ─▶ mail 服务：标记已领；重试同 token 幂等
+```
+
+- `Claimable` 是 mail 服务对"现在领会成功吗"的回答，客户端不用从 Status 猜（Status 表达不了"被在途投递占着"）。
+- 附件解不出奖励、或 AddItem 被拒（背包满）时 `CancelClaim` 归还预留，邮件不会卡在"held"直到租约到期。
+- **demo 明确没做的一步**：把 claim token 带进 Nest 事务当幂等键。进程在 AddItem 之后、CommitClaim 之前死掉，租约到期后重试会再发一次
+  （mail 侧记成重复 *尝试*，背包却多一叠）。生产做法是在同一事务里把 token 记到 Player 上，第二次拒发。
+- 机器人脚本：add_exp 之后 `retry × 20 { wait 250ms; list_mail }`（效果链是异步的：WAL → outbox → JetStream → consumer → mail.Send），
+  拿到第一封可领邮件的 id 再 `claim_mail`，断言背包计数 ≥ 领到的数量。
+
 ## 跨服务：game → match 组队
 
 match 服务是通用的：队列由 `Queue{Mode, GroupSize, Partition}` 定义、subject 的 kind 对它不透明，它负责的是队列本身与

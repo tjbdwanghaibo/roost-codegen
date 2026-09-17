@@ -57,7 +57,7 @@ func main() {
 	// The scenario deliberately waits for matchmaking (poll every 250ms while
 	// the matchmaker ticks every 500ms), so a whole-scenario p95 of a few
 	// hundred milliseconds is the floor, not a regression.
-	maxP95 := flag.Float64("max-p95", 2.0, "threshold: scenario cost p95, seconds")
+	maxP95 := flag.Float64("max-p95", 3.0, "threshold: scenario cost p95, seconds (the scenario waits on two asynchronous chains: the reward mail and the match)")
 	metricsAddr := flag.String("metrics-addr", "", "serve this process's metrics at http://<addr>/metrics for Prometheus (deploy/dev/observability scrapes 127.0.0.1:9300)")
 	accountNATS := flag.String("account-nats", "nats://127.0.0.1:4222", "NATS url of the bus the account service answers on; robots log in for real (Login → CreateRole → SelectRole) and present session tickets")
 	natsPrefix := flag.String("nats-prefix", "roost", "bus subject prefix (nats.prefix in the services' configs)")
@@ -285,6 +285,33 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			}
 			return nil
 		}))
+	// list_mail fails until the level-up reward has arrived (the effect chain
+	// is asynchronous: WAL → outbox → JetStream → consumer → mail.Send), so a
+	// Retry node around it is the wait; the first claimable mail's id goes on
+	// the blackboard under claim_mail's request field (mail_id).
+	action.MustRegisterCall[pb.ListMailRequest, pb.ListMailResponse](actions, protocols, "list_mail", msgid.MsgListMail,
+		action.OnResp(func(rb *robot.Context, resp *pb.ListMailResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			for _, mail := range resp.Mails {
+				if mail.Claimable && mail.HasAttachment {
+					rb.Blackboard.Set("mail_id", mail.MailID)
+					return nil
+				}
+			}
+			return fmt.Errorf("no claimable mail yet (%d in the box)", len(resp.Mails))
+		}))
+	action.MustRegisterCall[pb.ClaimMailRequest, pb.ClaimMailResponse](actions, protocols, "claim_mail", msgid.MsgClaimMail,
+		action.OnResp(func(_ *robot.Context, resp *pb.ClaimMailResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.ItemID <= 0 || resp.Count <= 0 || resp.BagCount < resp.Count {
+				return fmt.Errorf("claim granted nothing: item=%d count=%d bag=%d", resp.ItemID, resp.Count, resp.BagCount)
+			}
+			return nil
+		}))
 	action.MustRegisterCall[pb.WorldStatsRequest, pb.WorldStatsResponse](actions, protocols, "world_stats", msgid.MsgWorldStats,
 		action.OnResp(func(_ *robot.Context, resp *pb.WorldStatsResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
@@ -373,6 +400,10 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalSendChatRequest(message)
 	case *pb.ChatHistoryRequest:
 		return pb.MarshalChatHistoryRequest(message)
+	case *pb.ListMailRequest:
+		return pb.MarshalListMailRequest(message)
+	case *pb.ClaimMailRequest:
+		return pb.MarshalClaimMailRequest(message)
 	default:
 		return nil, fmt.Errorf("pb codec: no marshal for %T", value)
 	}
@@ -424,6 +455,18 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 		*message = *decoded
 	case *pb.ChatHistoryResponse:
 		decoded, err := pb.UnmarshalChatHistoryResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.ListMailResponse:
+		decoded, err := pb.UnmarshalListMailResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.ClaimMailResponse:
+		decoded, err := pb.UnmarshalClaimMailResponse(data)
 		if err != nil {
 			return err
 		}

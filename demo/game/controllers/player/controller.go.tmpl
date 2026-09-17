@@ -13,6 +13,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	svcchat "github.com/tjbdwanghaibo/roost-kit/service/chat"
+	svcmail "github.com/tjbdwanghaibo/roost-kit/service/mail"
 	svcmatch "github.com/tjbdwanghaibo/roost-kit/service/match"
 )
 
@@ -28,6 +29,7 @@ type Controller struct {
 	players    *lifecycle.PlayerLifecycle
 	matcher    svcmatch.Matchmaker
 	messaging  svcchat.Messaging
+	mailer     svcmail.Mail
 	presence   *chatroom.Presence
 	transport  atomic.Pointer[pushTransport]
 	worldID    int64
@@ -71,13 +73,17 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if !ok || messaging == nil {
 		return nil, fmt.Errorf("player controller: capability %q not found; list chat under services.<game>.uses", svcchat.CapabilityName)
 	}
+	mailer, ok := app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)
+	if !ok || mailer == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; list mail under services.<game>.uses", svcmail.CapabilityName)
+	}
 	worldID, err := entity.BuildEntityID(lifecycle.WorldUniqueID, world.EntityKindWorld)
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
 	return &Controller{
 		registry: registry, nestClient: client, players: players,
-		matcher: matcher, messaging: messaging, presence: chatroom.NewPresence(), worldID: worldID,
+		matcher: matcher, messaging: messaging, mailer: mailer, presence: chatroom.NewPresence(), worldID: worldID,
 	}, nil
 }
 
@@ -110,6 +116,14 @@ func (controller *Controller) Messaging() svcchat.Messaging {
 		return nil
 	}
 	return controller.messaging
+}
+
+// Mailer is the mail service, reached over the bus.
+func (controller *Controller) Mailer() svcmail.Mail {
+	if controller == nil {
+		return nil
+	}
+	return controller.mailer
 }
 
 // Presence is the set of players online in this process.

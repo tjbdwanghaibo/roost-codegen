@@ -1,0 +1,78 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	player_agent "{{MODULE}}/game/player_agent"
+	"{{MODULE}}/game/rewards"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	svcmail "github.com/tjbdwanghaibo/roost-kit/service/mail"
+)
+
+// HandleClaimMail delivers a mail's attachment into the Bag: the mail
+// service's three-step claim around one Nest transaction.
+//
+//	ReserveClaim  — the mail service hands over the attachment under a token
+//	                that is the same on every retry of this (player, mail)
+//	Sync_AddItem  — the grant, a locked Player transaction like any other
+//	CommitClaim   — the mail is marked claimed; a retry after a lost response
+//	                commits again with the same token and succeeds
+//
+// What the demo does not do: carry the claim token into the Nest transaction
+// as an idempotency key. If this process dies between the grant and the
+// commit, the reservation lapses, a retry re-reserves under the same token
+// and grants again — the mail service counts it as a duplicate ATTEMPT, but
+// the Bag has two stacks. A production game records the token on the Player
+// inside the same transaction and refuses a second grant for it.
+func (controller *Controller) HandleClaimMail(context *player_agent.Context, request *pb.ClaimMailRequest) (*pb.ClaimMailResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("claim_mail endpoint: context and request are required")
+	}
+	refuse := func(err error, stage string) (*pb.ClaimMailResponse, error) {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("claim_mail failed", "player_id", context.PlayerID, "mail_id", request.MailID, "stage", stage, "err", err)
+		}
+		return &pb.ClaimMailResponse{Code: code, Reason: reason}, nil
+	}
+	ctx := context.Context()
+	claim, err := controller.Mailer().ReserveClaim(ctx, context.PlayerID, request.MailID, "")
+	if err != nil {
+		return refuse(err, "reserve")
+	}
+	reward, err := rewards.Decode(claim.Attachment)
+	if err != nil {
+		// Not this game's reward: give the reservation back so the mail is
+		// not stuck "held" until the lease lapses, and answer with a code.
+		if _, cancelErr := controller.Mailer().CancelClaim(ctx, context.PlayerID, request.MailID, claim.Token); cancelErr != nil {
+			slog.Warn("claim_mail: reservation not released", "mail_id", request.MailID, "err", cancelErr)
+		}
+		return refuse(fmt.Errorf("%w: %v", svcmail.ErrMailInvalid, err), "decode")
+	}
+	entityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, fmt.Errorf("claim_mail endpoint: %w", err)
+	}
+	bagCount, err := syncsender.NewAddItemSender(controller.NestClient()).Sync_AddItem(ctx, entityID, reward.ItemID, reward.Count)
+	if err != nil {
+		// The grant did not happen (the transaction rolled back), so the
+		// reservation can be released; a full bag is a coded refusal.
+		if _, cancelErr := controller.Mailer().CancelClaim(ctx, context.PlayerID, request.MailID, claim.Token); cancelErr != nil {
+			slog.Warn("claim_mail: reservation not released", "mail_id", request.MailID, "err", cancelErr)
+		}
+		return refuse(err, "grant")
+	}
+	if _, err := controller.Mailer().CommitClaim(ctx, context.PlayerID, request.MailID, claim.Token); err != nil {
+		// The item is in the Bag; only the bookkeeping failed. Answer
+		// success — the client has its item — and log: the lease lapses and
+		// the next claim of this mail is the duplicate this demo accepts (see
+		// the comment above).
+		slog.Error("claim_mail: granted but not committed", "player_id", context.PlayerID, "mail_id", request.MailID, "err", err)
+	}
+	return &pb.ClaimMailResponse{ItemID: reward.ItemID, Count: reward.Count, BagCount: bagCount}, nil
+}
