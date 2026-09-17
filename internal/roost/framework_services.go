@@ -100,6 +100,23 @@ func Broadcast() mail.Deliverer { return nil }
 			return "match:\n  key_prefix: roost:" + project + ":match\n  ticket_ttl: 60s\n  sweep_queues: []\n"
 		},
 	},
+	"session": {
+		Package: "session", Interface: "Session", Depends: []string{"redis", "nats"},
+		ModArgs: []string{"Release()", "Metrics()"},
+		Collabs: `// Release frees a resource a run attached — a dungeon instance, a seat, a
+// reservation on another service — when the run finishes, is left or expires.
+// The session service calls it exactly once per attached resource; the default
+// refuses, so a run cannot look released while the instance is still held.
+func Release() session.Releaser {
+	return session.ReleaserFunc(func(context.Context, session.Run, session.Resource) error {
+		return errors.New("session: releaser is not configured; implement Release() in internal/service/%[1]s/collaborators.go")
+	})
+}
+`,
+		ConfigFunc: func(project string) string {
+			return "session:\n  key_prefix: roost:" + project + ":session\n  run_ttl: 30m\n  request_ttl: 1h\n"
+		},
+	},
 	"chat": {
 		Package: "chat", Interface: "Messaging", Depends: []string{"redis", "nats"},
 		ModArgs: []string{"Policy()", "Bodies()", "System()", "Rules()", "Metrics()"},
@@ -312,7 +329,7 @@ func %[1]s(r *app.Registry) (svc%[2]s.%[4]s, error) {
 }
 
 // applyGameTemplate turns a fresh manifest into the game template: the
-// business service calls account, mail, match and chat, each hosted as its own
+// business service calls account, chat, mail, match and session, each hosted as its own
 // process. It is opt-in (`roost project new … -template game`).
 func applyGameTemplate(m *Manifest, gameService string) error {
 	service, ok := m.Services[gameService]

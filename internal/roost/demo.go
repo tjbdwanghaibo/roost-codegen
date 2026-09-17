@@ -232,6 +232,12 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "protocol", Name: "ClaimMail", Group: "game", Handler: "player"}, why: "the attachment into the Bag"},
 		{write: "protocol/def/claim_mail.go", why: "mail id in, what was granted out"},
 		{write: "game/controllers/player/claim_mail.go", why: "ReserveClaim → Sync_AddItem → CommitClaim: exactly-once delivery around one Nest transaction"},
+		{add: &AddOptions{Kind: "protocol", Name: "EnterDungeon", Group: "game", Handler: "player"}, why: "the cross-service call: game → session"},
+		{write: "protocol/def/enter_dungeon.go", why: "a bounded run: id, state, deadline"},
+		{write: "game/controllers/player/enter_dungeon.go", why: "Enter through the typed session client, frame sequence as idempotency key"},
+		{add: &AddOptions{Kind: "protocol", Name: "FinishDungeon", Group: "game", Handler: "player"}, why: "resolving the run"},
+		{write: "protocol/def/finish_dungeon.go", why: "the verdict in, terminal state and the clear's exp out"},
+		{write: "game/controllers/player/finish_dungeon.go", why: "Finish through the session client, then the clear's exp through the AddExp transaction"},
 		{run: enableDemoMatchSweep, why: "the match process sweeps the duel queue for expired tickets"},
 		{write: "loadtest/playertcp/conn.go", why: "the robot transport that speaks the generated server's frame"},
 		{write: "loadtest/scenarios/demo.yaml", why: "one robot's life, as a scenario tree"},
@@ -248,6 +254,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "cmd/accountctl/main.go", why: "the operator surface account keeps off the bus: register the game server so CreateRole works"},
 		{write: "internal/service/account/collaborators.go", why: "an account service that can log a demo user in and mint ids from Redis"},
 		{write: "internal/service/chat/collaborators.go", why: "a chat service with a written-down policy, one text type and a granted system path"},
+		{write: "internal/service/session/collaborators.go", why: "a session service whose releaser frees the demo's (resource-less) dungeon"},
 	}
 }
 

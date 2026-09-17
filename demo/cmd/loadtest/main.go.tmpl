@@ -57,7 +57,7 @@ func main() {
 	// The scenario deliberately waits for matchmaking (poll every 250ms while
 	// the matchmaker ticks every 500ms), so a whole-scenario p95 of a few
 	// hundred milliseconds is the floor, not a regression.
-	maxP95 := flag.Float64("max-p95", 3.0, "threshold: scenario cost p95, seconds (the scenario waits on two asynchronous chains: the reward mail and the match)")
+	maxP95 := flag.Float64("max-p95", 5.0, "threshold: scenario cost p95, seconds; a regression bound, not an SLO — the scenario waits on two asynchronous chains (reward mail, match) and the cost histogram has power-of-two buckets")
 	metricsAddr := flag.String("metrics-addr", "", "serve this process's metrics at http://<addr>/metrics for Prometheus (deploy/dev/observability scrapes 127.0.0.1:9300)")
 	accountNATS := flag.String("account-nats", "nats://127.0.0.1:4222", "NATS url of the bus the account service answers on; robots log in for real (Login → CreateRole → SelectRole) and present session tickets")
 	natsPrefix := flag.String("nats-prefix", "roost", "bus subject prefix (nats.prefix in the services' configs)")
@@ -312,6 +312,29 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			}
 			return nil
 		}))
+	// enter_dungeon opens a run with the session service and remembers its
+	// id for finish_dungeon (request field run_id).
+	action.MustRegisterCall[pb.EnterDungeonRequest, pb.EnterDungeonResponse](actions, protocols, "enter_dungeon", msgid.MsgEnterDungeon,
+		action.OnResp(func(rb *robot.Context, resp *pb.EnterDungeonResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.RunID == "" || resp.State != "open" {
+				return fmt.Errorf("dungeon run not opened: id=%q state=%q", resp.RunID, resp.State)
+			}
+			rb.Blackboard.Set("run_id", resp.RunID)
+			return nil
+		}))
+	action.MustRegisterCall[pb.FinishDungeonRequest, pb.FinishDungeonResponse](actions, protocols, "finish_dungeon", msgid.MsgFinishDungeon,
+		action.OnResp(func(_ *robot.Context, resp *pb.FinishDungeonResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.State != "succeeded" || resp.ExpGranted <= 0 {
+				return fmt.Errorf("dungeon not resolved as a clear: state=%q exp=%d", resp.State, resp.ExpGranted)
+			}
+			return nil
+		}))
 	action.MustRegisterCall[pb.WorldStatsRequest, pb.WorldStatsResponse](actions, protocols, "world_stats", msgid.MsgWorldStats,
 		action.OnResp(func(_ *robot.Context, resp *pb.WorldStatsResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
@@ -404,6 +427,10 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalListMailRequest(message)
 	case *pb.ClaimMailRequest:
 		return pb.MarshalClaimMailRequest(message)
+	case *pb.EnterDungeonRequest:
+		return pb.MarshalEnterDungeonRequest(message)
+	case *pb.FinishDungeonRequest:
+		return pb.MarshalFinishDungeonRequest(message)
 	default:
 		return nil, fmt.Errorf("pb codec: no marshal for %T", value)
 	}
@@ -467,6 +494,18 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 		*message = *decoded
 	case *pb.ClaimMailResponse:
 		decoded, err := pb.UnmarshalClaimMailResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.EnterDungeonResponse:
+		decoded, err := pb.UnmarshalEnterDungeonResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.FinishDungeonResponse:
+		decoded, err := pb.UnmarshalFinishDungeonResponse(data)
 		if err != nil {
 			return err
 		}

@@ -22,16 +22,16 @@ func gameTemplateManifest(t *testing.T) Manifest {
 	return m
 }
 
-// The game template hosts the four framework services as their own processes
+// The game template hosts every catalogued framework service as its own process
 // and wires the business service to all of them.
-func TestGameTemplateHostsTheFourServicesAndWiresTheGame(t *testing.T) {
+func TestGameTemplateHostsEveryFrameworkServiceAndWiresTheGame(t *testing.T) {
 	m := gameTemplateManifest(t)
-	for _, name := range []string{"account", "mail", "match", "chat"} {
+	for _, name := range []string{"account", "mail", "match", "chat", "session"} {
 		if m.Services[name].Framework != name {
 			t.Errorf("service %s is not hosted: %+v", name, m.Services[name])
 		}
 	}
-	if got := strings.Join(m.Services["game"].Uses, ","); got != "account,chat,mail,match" {
+	if got := strings.Join(m.Services["game"].Uses, ","); got != "account,chat,mail,match,session" {
 		t.Fatalf("game uses %q", got)
 	}
 	if !m.usesFrameworkServices() {

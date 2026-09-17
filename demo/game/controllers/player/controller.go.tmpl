@@ -15,6 +15,7 @@ import (
 	svcchat "github.com/tjbdwanghaibo/roost-kit/service/chat"
 	svcmail "github.com/tjbdwanghaibo/roost-kit/service/mail"
 	svcmatch "github.com/tjbdwanghaibo/roost-kit/service/match"
+	svcsession "github.com/tjbdwanghaibo/roost-kit/service/session"
 )
 
 // Controller hosts the player protocol endpoints. It holds what an endpoint
@@ -30,6 +31,7 @@ type Controller struct {
 	matcher    svcmatch.Matchmaker
 	messaging  svcchat.Messaging
 	mailer     svcmail.Mail
+	sessions   svcsession.Session
 	presence   *chatroom.Presence
 	transport  atomic.Pointer[pushTransport]
 	worldID    int64
@@ -77,13 +79,17 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if !ok || mailer == nil {
 		return nil, fmt.Errorf("player controller: capability %q not found; list mail under services.<game>.uses", svcmail.CapabilityName)
 	}
+	sessions, ok := app.Lookup[svcsession.Session](registry, svcsession.CapabilityName)
+	if !ok || sessions == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; list session under services.<game>.uses", svcsession.CapabilityName)
+	}
 	worldID, err := entity.BuildEntityID(lifecycle.WorldUniqueID, world.EntityKindWorld)
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
 	return &Controller{
 		registry: registry, nestClient: client, players: players,
-		matcher: matcher, messaging: messaging, mailer: mailer, presence: chatroom.NewPresence(), worldID: worldID,
+		matcher: matcher, messaging: messaging, mailer: mailer, sessions: sessions, presence: chatroom.NewPresence(), worldID: worldID,
 	}, nil
 }
 
@@ -124,6 +130,14 @@ func (controller *Controller) Mailer() svcmail.Mail {
 		return nil
 	}
 	return controller.mailer
+}
+
+// Sessions is the session service (bounded runs), reached over the bus.
+func (controller *Controller) Sessions() svcsession.Session {
+	if controller == nil {
+		return nil
+	}
+	return controller.sessions
 }
 
 // Presence is the set of players online in this process.

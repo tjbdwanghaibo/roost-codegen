@@ -1,6 +1,6 @@
 # One robot's life: connect and hand over the credential, make sure the Player
 # exists, chat on the world channel and read it back, add an item, earn
-# exp (the reward mail it sends is then listed and claimed), earn enough exp to level up (which sends a reward mail
+# exp (the reward mail it sends is then listed and claimed), clear a dungeon run, earn enough exp to level up (which sends a reward mail
 # through the effect chain), queue for a duel until matched, read the World's
 # counters. Run an even number of robots: duels need pairs. Param keys are the request fields' snake_case
 # names; a value can also come from the robot's blackboard.
@@ -58,6 +58,16 @@ scenarios:
                   param:
                     limit: 20
         - action: claim_mail
+        # A dungeon run with the session service: open it (one live run per
+        # player, idempotent per frame), then resolve it as a clear — which
+        # grants exp through the same AddExp transaction and releases what
+        # the run held.
+        - action: enter_dungeon
+          param:
+            kind: dungeon
+        - action: finish_dungeon
+          param:
+            success: true
         # Matchmaking: join the duel queue, then poll until the game's
         # matchmaker has paired this robot with another one. The ticket id
         # comes from the blackboard, where join_queue's OnResp put it.

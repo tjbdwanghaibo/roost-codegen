@@ -1,0 +1,69 @@
+package player
+
+import (
+	"fmt"
+	"log/slog"
+
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	player_agent "{{MODULE}}/game/player_agent"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	svcsession "github.com/tjbdwanghaibo/roost-kit/service/session"
+)
+
+// DungeonClearExp is what a cleared dungeon is worth. It is enough to level
+// the demo's Player up, so a clear also exercises the level-up → reward mail
+// chain.
+const DungeonClearExp int64 = 100
+
+// HandleFinishDungeon resolves the run with the session service, then grants
+// the clear's exp through the Player + World transaction the AddExp endpoint
+// uses. The order is deliberate: the session service checks the run is this
+// player's and still open (a finished or expired run is a coded refusal), so
+// the grant only happens for a run that was really resolved by this call.
+//
+// The two steps are not one transaction: a crash between them leaves a
+// finished run without its exp. That is the safe direction — a retry of
+// FinishDungeon is refused (ErrRunTerminal), so the exp is granted at most
+// once; a production game that must grant exactly once records the run id on
+// the Player inside the AddExp transaction and grants from there.
+func (controller *Controller) HandleFinishDungeon(context *player_agent.Context, request *pb.FinishDungeonRequest) (*pb.FinishDungeonResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("finish_dungeon endpoint: context and request are required")
+	}
+	state, outcome := svcsession.StateFailed, "wiped"
+	if request.Success {
+		state, outcome = svcsession.StateSucceeded, "cleared"
+	}
+	run, err := controller.Sessions().Finish(context.Context(), context.PlayerID, request.RunID, state, outcome)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("finish_dungeon failed", "player_id", context.PlayerID, "run_id", request.RunID, "err", err)
+		}
+		return &pb.FinishDungeonResponse{Code: code, Reason: reason}, nil
+	}
+	response := &pb.FinishDungeonResponse{State: string(run.State), Outcome: run.Outcome}
+	if !request.Success {
+		return response, nil
+	}
+	entityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, fmt.Errorf("finish_dungeon endpoint: %w", err)
+	}
+	gained, err := syncsender.NewAddExpSender(controller.NestClient()).MultiSync_AddExp(context.Context(), entityID, controller.WorldID(), DungeonClearExp)
+	if err != nil {
+		// The run is resolved either way; the reward failing is its own
+		// coded answer so the client can tell the two apart.
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("finish_dungeon: clear reward not granted", "player_id", context.PlayerID, "run_id", request.RunID, "err", err)
+		}
+		response.Code, response.Reason = code, reason
+		return response, nil
+	}
+	response.ExpGranted, response.LevelsGained = DungeonClearExp, gained
+	return response, nil
+}

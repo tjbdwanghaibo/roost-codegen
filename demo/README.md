@@ -129,6 +129,24 @@ ChatHistory 端点 ─ History(viewer, after_seq, limit) ─▶ chat 服务（�
 - 机器人 transport（`loadtest/playertcp/conn.go`）靠帧头的 server-push 标志位识别推送——服务端给推送编的是自己的会话序号，与客户端序号同起点，
   只看序号会把一条世界频道推送当成正在等的响应。
 
+## 跨服务：game → session 副本
+
+session 服务是通用的"有界 run 原语"：每个 owner 同时只有一个活 run、Enter 按 RequestID 幂等、run 有截止时间、附着的资源恰好释放一次。
+什么算一局、清了给什么，是游戏的事：
+
+```
+EnterDungeon 端点  ─ Enter(playerID, {Kind, RequestID=帧序号}) ─▶ session 服务（typed servicerpc，经生成的 Session() 客户端）
+FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─▶ session 服务：状态机 + 释放（调这个工程的 Release()）
+                   └─ 清了：MultiSync_AddExp(Player, World, 100) —— 与 AddExp 端点同一笔两实体事务，够升一级，于是又走一遍升级 → 奖励邮件
+```
+
+- `internal/service/session/collaborators.go`：`Release()` 是 session 服务对每个附着资源恰好调一次的钩子；demo 的副本不占外部资源，所以是一行日志 + nil。
+  真实游戏在这里释放实例 / 座位，返回 error 会让服务保留待释放并在下次 Enter / sweep 重试。
+- 第二局要等第一局结束：一个 owner 一个活 run 是服务的契约，重复 Enter 得到 `ErrAlreadyRunning` 的 coded 响应，不是第二个 run。
+- **Finish 与发奖不是一个事务**：进程死在两步之间，run 已终态、exp 没给；这是安全的方向——重试 Finish 被拒（`ErrRunTerminal`），exp 至多给一次。
+  要"恰好一次"的做法是在 AddExp 事务里把 run id 记到 Player 上再发。
+- session 进程默认不扫过期 run（`sweepOwners` 返回空并在日志里说明）：过期 run 由同一 owner 的下一次 Enter 懒解决。要及时释放资源的部署自己接 owner 列表。
+
 ## World 的职责
 
 World 有了自己的 DAO（`PlayersEntered` / `MatchesFormed`）和 `Stats` 组件：`RecordEnter` 在 EnterGame 之后、

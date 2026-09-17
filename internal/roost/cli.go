@@ -107,7 +107,7 @@ func runProject(args []string, stdout, stderr io.Writer) error {
 		skill := fs.String("roost-skill-version", "", "roost-skill version")
 		serviceVersion := fs.String("roost-service-version", "", "roost-service version")
 		codegen := fs.String("codegen-version", "", "roost-codegen version")
-		template := fs.String("template", "", "opt-in starting shape: game (hosts account, mail, match, chat and wires the first service to them), or game-demo (game plus a working Player write path: Profile/Bag components, a DAO, one Nest transaction and a TCP endpoint)")
+		template := fs.String("template", "", "opt-in starting shape: game (hosts account, chat, mail, match, session and wires the first service to them), or game-demo (game plus a working Player write path: Profile/Bag components, a DAO, one Nest transaction and a TCP endpoint)")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}

@@ -87,7 +87,7 @@ func TestDemoTemplateKeepsTheGameTemplateAndItsFeatures(t *testing.T) {
 	if err := applyDemoTemplate(&m, "game"); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"account", "mail", "match", "chat"} {
+	for _, name := range []string{"account", "mail", "match", "chat", "session"} {
 		if m.Services[name].Framework != name {
 			t.Errorf("demo dropped hosted service %s: %+v", name, m.Services[name])
 		}
@@ -196,7 +196,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// the stub marker, so the demo's own texts must not contain it either
 	// (account's verifier once said "channel %q is not configured" and read as
 	// a stub).
-	for _, service := range []string{"account", "chat", "mail", "match"} {
+	for _, service := range []string{"account", "chat", "mail", "match", "session"} {
 		if collaborators := read("internal/service/" + service + "/collaborators.go"); strings.Contains(collaborators, collaboratorUnconfiguredMarker) {
 			t.Errorf("%s collaborators still read as unconfigured to doctor:\n%s", service, collaborators)
 		}
@@ -207,7 +207,9 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	for _, rel := range []string{"game/chatroom/chatroom.go", "protocol/def/send_chat.go", "protocol/def/chat_history.go", "protocol/def/chat_message.go",
 		"game/controllers/player/send_chat.go", "game/controllers/player/chat_history.go", "game/controllers/player/chat_push.go", "deploy/dev/run.sh",
 		"game/rewards/rewards.go", "protocol/def/list_mail.go", "protocol/def/claim_mail.go",
-		"game/controllers/player/list_mail.go", "game/controllers/player/claim_mail.go"} {
+		"game/controllers/player/list_mail.go", "game/controllers/player/claim_mail.go",
+		"internal/service/session/collaborators.go", "protocol/def/enter_dungeon.go", "protocol/def/finish_dungeon.go",
+		"game/controllers/player/enter_dungeon.go", "game/controllers/player/finish_dungeon.go"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("demo did not write %s: %v", rel, err)
 		}
@@ -223,7 +225,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	}
 	// Five processes on one machine: each config has its own ops port, in the
 	// order run.sh and prometheus.yml assume.
-	for service, port := range map[string]string{"game": "9100", "account": "9101", "chat": "9102", "mail": "9103", "match": "9104"} {
+	for service, port := range map[string]string{"game": "9100", "account": "9101", "chat": "9102", "mail": "9103", "match": "9104", "session": "9105"} {
 		if cfg := read("configs/service/config." + service + ".yaml"); !strings.Contains(cfg, "addr: 127.0.0.1:"+port) {
 			t.Errorf("config.%s.yaml does not listen ops on %s", service, port)
 		}
