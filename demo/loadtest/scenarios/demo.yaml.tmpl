@@ -14,6 +14,8 @@ scenarios:
       sequence:
         - action: connect
         - action: enter_game
+        # The server compiled its skill catalog at startup; list it.
+        - action: skill_catalog
         # Chat: say hello on the world channel (a bus call into the chat
         # service). The game fans the stored line back as a push (msg 10101)
         # to every online player, the sender included — but it pushes before

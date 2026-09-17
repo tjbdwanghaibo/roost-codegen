@@ -13,6 +13,7 @@
 package main
 
 import (
+	"strings"
 	"context"
 	"encoding/json"
 	"errors"
@@ -335,6 +336,22 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			}
 			return nil
 		}))
+	// skill_catalog: the server compiled game/skills/*.json at startup and
+	// lists the ids; the demo ships one, and a warning-free compile is part
+	// of the regression.
+	action.MustRegisterCall[pb.SkillCatalogRequest, pb.SkillCatalogResponse](actions, protocols, "skill_catalog", msgid.MsgSkillCatalog,
+		action.OnResp(func(_ *robot.Context, resp *pb.SkillCatalogResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if len(resp.Skills) == 0 || !strings.HasPrefix(resp.Skills[0], "skill.") {
+				return fmt.Errorf("skill catalog is empty or malformed: %v", resp.Skills)
+			}
+			if resp.Warnings != 0 {
+				return fmt.Errorf("skill catalog compiled with %d warnings", resp.Warnings)
+			}
+			return nil
+		}))
 	action.MustRegisterCall[pb.WorldStatsRequest, pb.WorldStatsResponse](actions, protocols, "world_stats", msgid.MsgWorldStats,
 		action.OnResp(func(_ *robot.Context, resp *pb.WorldStatsResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
@@ -431,6 +448,8 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalEnterDungeonRequest(message)
 	case *pb.FinishDungeonRequest:
 		return pb.MarshalFinishDungeonRequest(message)
+	case *pb.SkillCatalogRequest:
+		return pb.MarshalSkillCatalogRequest(message)
 	default:
 		return nil, fmt.Errorf("pb codec: no marshal for %T", value)
 	}
@@ -506,6 +525,12 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 		*message = *decoded
 	case *pb.FinishDungeonResponse:
 		decoded, err := pb.UnmarshalFinishDungeonResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.SkillCatalogResponse:
+		decoded, err := pb.UnmarshalSkillCatalogResponse(data)
 		if err != nil {
 			return err
 		}

@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"{{MODULE}}/game/chatroom"
 	world "{{MODULE}}/game/entities/world"
 	lifecycle "{{MODULE}}/game/lifecycle"
+	"{{MODULE}}/game/skills"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
@@ -35,6 +37,11 @@ type Controller struct {
 	presence   *chatroom.Presence
 	transport  atomic.Pointer[pushTransport]
 	worldID    int64
+
+	// The skill catalog, compiled from game/skills/*.json on first use.
+	skillsOnce   sync.Once
+	skillCatalog *skills.Catalog
+	skillErr     error
 }
 
 // pushTransport is the slice of the player TCP Runtime the endpoints use.
