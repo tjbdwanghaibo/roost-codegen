@@ -47,6 +47,12 @@ jobs:
         # pushes them through the real BSON codec (U-0224 was invisible to text).
         name: dao goldens through the real codec
         run: sh scripts/dao-golden-runtime.sh
+      - if: runner.os == 'Linux'
+        # Same exposure, same gate for cfggen: its json tags, key types, index
+        # and ref metadata are only ever compared as text here. This loads
+        # real data through roost-core/configdata.
+        name: cfggen output through the real config runtime
+        run: sh scripts/cfggen-golden-runtime.sh
 
   generated-project-release-smoke:
     runs-on: ubuntu-latest
