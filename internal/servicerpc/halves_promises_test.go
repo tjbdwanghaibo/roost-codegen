@@ -41,6 +41,15 @@ func TestEitherHalfCanBeEmittedAloneIntoAnotherDirectory(t *testing.T) {
 	if err := Run([]string{"-dir", src, "-emit", "assembly", "-out", out, "-check"}, &log); err != nil {
 		t.Fatalf("-check right after generating reports drift: %v", err)
 	}
+	// A CRLF checkout of the very same file is current: newlines are the
+	// working tree's business (Windows, core.autocrlf), not the transport's.
+	assemblyPath := filepath.Join(out, "shop_rpc_assembly_gen.go")
+	if err := os.WriteFile(assemblyPath, []byte(strings.ReplaceAll(string(assembly), "\n", "\r\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"-dir", src, "-emit", "assembly", "-out", out, "-check"}, &log); err != nil {
+		t.Fatalf("-check reports a CRLF checkout of an unchanged file as stale: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(out, "shop_rpc_assembly_gen.go"), []byte("package shop\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

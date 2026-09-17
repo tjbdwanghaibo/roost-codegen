@@ -439,7 +439,9 @@ func snapshotGenerated(root string) (map[string][sha256.Size]byte, error) {
 		if err != nil {
 			return err
 		}
-		out[filepath.ToSlash(rel)] = sha256.Sum256(raw)
+		// Newlines are not content: a CRLF checkout of an LF-generated file is
+		// current, not stale (the generator always writes LF).
+		out[filepath.ToSlash(rel)] = sha256.Sum256(bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n")))
 		return nil
 	})
 	return out, err

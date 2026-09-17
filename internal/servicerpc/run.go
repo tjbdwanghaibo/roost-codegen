@@ -94,7 +94,10 @@ func Run(args []string, stdout io.Writer) error {
 		for _, file := range files {
 			path := filepath.Join(outDir, file.Name)
 			existing, readErr := os.ReadFile(path)
-			current := readErr == nil && bytes.Equal(existing, file.Content)
+			// A CRLF checkout of the LF the generator writes is current, not
+			// stale: newlines are the working tree's business, not the
+			// transport's.
+			current := readErr == nil && bytes.Equal(bytes.ReplaceAll(existing, []byte("\r\n"), []byte("\n")), file.Content)
 			if current {
 				_, _ = fmt.Fprintf(stdout, "up to date: %s\n", file.Name)
 				continue

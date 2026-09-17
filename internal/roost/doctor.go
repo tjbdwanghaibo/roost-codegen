@@ -285,6 +285,12 @@ func PrintNextStep(root, requestedWorkflow string, stdout io.Writer) error {
 	} else {
 		fmt.Fprintln(stdout, "next: make ci")
 		fmt.Fprintln(stdout, "next: follow docs/DEPLOYMENT.zh-CN.md for release")
+		// Past the required chain, the framework has more the project has not
+		// used; list it as suggestions, most valuable first.
+		for _, hint := range optionalNextHints(root, manifest) {
+			fmt.Fprintf(stdout, "optional: %s\n", hint.Command)
+			fmt.Fprintf(stdout, "why: %s\n", hint.Why)
+		}
 	}
 	fmt.Fprintf(stdout, "guide: %s\n", workflowGuide(workflow))
 	return nil

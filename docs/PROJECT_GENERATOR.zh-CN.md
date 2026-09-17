@@ -499,6 +499,10 @@ Core 已经通过 RegisterServer 自动创建 Cobra 子命令，业务层不需�
     make build VERSION=v1.7.0
     make ci
 
+生成工程自带 `.gitattributes`，把生成的 `.go` / `.yaml` / `.json` / `.proto` / `.csv` / `.sh` / `.md` / `Makefile` 钉成 LF；
+`make check-generated`（`roost generate --check`）与 servicerpc 的 `-check` 比对前会把 CRLF 规范成 LF，所以 Windows 上
+`core.autocrlf=true` 的检出不会被误报为 stale。
+
 build 使用 ldflags 注入 Core buildinfo 的 Version、Commit、BuildTime 和 Dirty。
 
 CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 检查。
