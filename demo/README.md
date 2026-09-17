@@ -22,6 +22,9 @@ roost-core 自己的 `examples/` 模块就是反例：不在任何 CI 里，`go.
 
 ## 链路
 
+本节是这条写入链的逐层说明；六条路径（同步写、事件链、跨服务、saga、帧同步、配置）横向的对比——
+每层守什么、失败在哪一层处理、重放靠什么幂等——见 codegen 仓的 `docs/DATA_FLOW.zh-CN.md`。
+
 ```
 TCP (player access)
   → game/controllers/player/add_item.go      端点（本目录）：错误边界，coded error → 响应里的 Code/Reason

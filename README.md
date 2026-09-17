@@ -13,7 +13,9 @@ roost 框架的项目脚手架与代码生成工具链：用源码里的标记�
 完全第一次使用先看 [小白逐步操作手册](docs/BEGINNER_WORKBOOK.zh-CN.md)；
 逐个命令、marker、输入输出和完整用例见 [全功能使用手册与用例](docs/CODEGEN_REFERENCE.zh-CN.md)；
 玩家 TCP listener、鉴权、主动推送与生产验收见 [Player TCP 接入](docs/PLAYER_ACCESS_TCP.zh-CN.md)；
-cfggen 的 schema 字段级参考见 [CFGGEN_META](docs/CFGGEN_META.zh-CN.md)。
+cfggen 的 schema 字段级参考见 [CFGGEN_META](docs/CFGGEN_META.zh-CN.md)；
+生成工程里"一次请求的字节往哪走、每层守什么、失败在哪一层处理、重放靠什么幂等"见
+[数据流：六条路径](docs/DATA_FLOW.zh-CN.md)。
 
 ## 生成器总览
 
