@@ -102,7 +102,9 @@ internal/service/game/matchmaker.go  每 500ms：Candidates → Grouping.Group �
 PollMatch 端点 ─ Ticket / Match ─▶ match 服务（带 subject，服务端校验票的归属）
 ```
 
-- `game/matchmaking/queue.go` 是游戏对 match 说的话：duel 队列两人一组、subject kind 是 `player`。
+- `game/matchmaking/queue.go` 是游戏对 match 说的话：duel 队列两人一组按到达顺序（`FirstComeGrouping`），ranked 队列按等级配（`ScoreWindowGrouping`：
+  等级差 5 以内立刻配，窗口随最老候选的等待每秒放宽 5，上限 50）；ticket 的 Score 在 JoinQueue 时经 `PlayerLevel` 读 handler 取（Player 锁内），
+  PollMatch 带 `mode` 选队列。subject kind 是 `player`。matchmaker 每 500ms 扫两个 pool，各用自己的策略。
 - 所有对 match 的调用都从端点或普通 goroutine 发出，**从不在实体锁里**——World 只在 Commit 成功之后经自己的 Nest handler 记一笔。
 - `configs/service/config.match.yaml` 的 `sweep_queues` 列出 duel 队列：match 进程只负责扫过期票，不负责成组。
 - `Grouping` 是调用方的工具，不是 match 服务的配置：kit 的 match Mod 曾接受一个 `Grouping` collaborator 却从不执行它
@@ -248,6 +250,11 @@ chat 的 Redis 里 world 频道的流每次登录多一条系统公告、每个�
 且它的 subject 过滤覆盖 `roost.rpc.>`，JetStream 会用 PubAck 回应每一个 RPC 请求，与真正的服务端抢先——先到的赢，于是
 读调用大面积得到 `bus: unsupported rpc response version 0`（PubAck 被当作响应信封解码），写调用偶尔成功。kit
 集成测试留下的 `ROOST_IT_RPC_REQ_*` 流就是一例；换前缀即可，无需删流。
+
+**同一个 Mongo 上换工程名 / 换 `nats.prefix` 重跑，game 进程会在就绪后几秒 fail-stop**：`dataengine outbox: hard backlog limit exceeded: oldest_age=… max=30m`。
+所有生成工程的 `dataengine.database` 默认都是 `game`，上一轮工程留下的 effect outbox 行没有消费者会 ack（前缀不同、流不同），超过 30 分钟就触发
+Data Engine 的硬积压熔断——这是它该有的行为（积压不该静默增长），不是 demo 的 bug。处置：`mongosh --eval 'db.getSiblingDB("game").dropDatabase()'`，
+或给每个工程改 `dataengine.database`。
 
 **连续两次压测间隔不到 60s 时可能有一个机器人 `poll_match: ticket still waiting`**：上一轮失败机器人的 duel 票还在队列里（TicketTTL 60s），
 被这一轮的第一个机器人配走了，剩下奇数个。这是 match 服务的正确行为，不是 bug；等 sweep 把过期票清掉再跑，或起偶数个再加一个。

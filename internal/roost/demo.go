@@ -134,7 +134,7 @@ func enableDemoMatchSweep(root, _ string) error {
 	if err != nil {
 		return err
 	}
-	const before, after = "  sweep_queues: []\n", "  sweep_queues:\n    - duel:2:default\n"
+	const before, after = "  sweep_queues: []\n", "  sweep_queues:\n    - duel:2:default\n    - ranked:2:default\n"
 	if !strings.Contains(string(raw), before) {
 		return fmt.Errorf("%s: expected %q to replace", path, strings.TrimSpace(before))
 	}
@@ -165,7 +165,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "db/def/world.go", why: "PlayersEntered and MatchesFormed"},
 		{write: "game/entities/world/stats_component.go", why: "count logins and matches through generated mutators; snapshot for reads"},
 		{write: "game/entities/world/entity.go", why: "EntityCategoryWorld: locked before Player in the two-entity AddExp"},
-		{write: "game/matchmaking/queue.go", why: "the duel queue and how a player is named in it"},
+		{write: "game/matchmaking/queue.go", why: "the duel and ranked queues, their grouping policies, and how a player is named in them"},
 		{add: &AddOptions{Kind: "table", Name: "Item"}, why: "the item config table"},
 		{write: "configs/schema/item.go", why: "the table's columns and rules"},
 		{write: "configs/table/item.csv", why: "the rows; converted to configs/data/item.json by generate"},
@@ -189,6 +189,8 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/handler/record_match.go", why: "called by the matchmaker after the remote Commit"},
 		{add: &AddOptions{Kind: "handler", Name: "WorldStats", Entity: "World", Component: "Stats"}, why: "a read under the lock"},
 		{write: "game/handler/world_stats.go", why: "returns a value, not the Entity"},
+		{add: &AddOptions{Kind: "handler", Name: "PlayerLevel", Entity: "Player", Component: "Profile"}, why: "the ranked queue's score, read under the Player's lock"},
+		{write: "game/handler/player_level.go", why: "a read handler on the Player"},
 		{add: &AddOptions{Kind: "access", Name: "player", Service: gameService}, why: "the player request boundary"},
 		{add: &AddOptions{Kind: "transport", Name: "tcp"}, why: "a transport a client can actually connect to"},
 		{write: "internal/access/player/tcp/auth.go", why: "session tickets validated by the account service, plus a terminal shortcut"},

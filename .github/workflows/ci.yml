@@ -42,6 +42,11 @@ jobs:
         run: go test -race ./internal/nest ./internal/project ./internal/protocol ./internal/roost
       - if: runner.os == 'Linux'
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+      - if: runner.os == 'Linux'
+        # The dao goldens are text; this compiles them against roost-core and
+        # pushes them through the real BSON codec (U-0224 was invisible to text).
+        name: dao goldens through the real codec
+        run: sh scripts/dao-golden-runtime.sh
 
   generated-project-release-smoke:
     runs-on: ubuntu-latest

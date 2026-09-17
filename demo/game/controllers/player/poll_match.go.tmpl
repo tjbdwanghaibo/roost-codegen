@@ -18,8 +18,13 @@ func (controller *Controller) HandlePollMatch(context *player_agent.Context, req
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("poll_match endpoint: context and request are required")
 	}
-	queue := matchmaking.DuelQueue
-	subject := matchmaking.PlayerSubject(context.PlayerID)
+	queue, ok := matchmaking.QueueFor(request.Mode)
+	if !ok {
+		code, reason := errcode.ClientError(fmt.Errorf("%w: mode %q", svcmatch.ErrQueueInvalid, request.Mode))
+		return &pb.PollMatchResponse{Code: code, Reason: reason}, nil
+	}
+	// Ownership is checked by kind and id; the score plays no part in a read.
+	subject := matchmaking.PlayerSubject(context.PlayerID, 0)
 	ticket, found, err := controller.Matcher().Ticket(context.Context(), queue, request.TicketID, subject)
 	if err == nil && !found {
 		err = svcmatch.ErrTicketMissing

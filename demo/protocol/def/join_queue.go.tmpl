@@ -2,8 +2,9 @@
 
 package protocoldef
 
-// JoinQueueRequest asks to wait for a duel. Mode is accepted for symmetry with
-// a real game; the demo has one queue and ignores anything else.
+// JoinQueueRequest asks to wait for a match. Mode selects the queue: "duel"
+// (arrival order; also the default) or "ranked" (by level, widening window);
+// anything else is a coded refusal.
 type JoinQueueRequest struct {
 	Mode string `pb:"1"`
 }

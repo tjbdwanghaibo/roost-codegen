@@ -63,15 +63,20 @@ func startMatchmaker(ctx context.Context, registry *app.Registry) (func(), error
 		ticker := time.NewTicker(matchmakerInterval)
 		defer ticker.Stop()
 		recorder := syncsender.NewRecordMatchSender(nestClient)
-		var grouping svcmatch.Grouping = svcmatch.FirstComeGrouping{}
+		// Two pools, two policies: duel in arrival order, ranked by level
+		// inside a widening window. The policies live here, in the game
+		// process, not in the match service.
+		pools := matchmaking.Pools(func() int64 { return time.Now().Unix() })
 		for {
 			select {
 			case <-loopCtx.Done():
 				return
 			case <-ticker.C:
 			}
-			if err := formMatches(loopCtx, matcher, grouping, recorder, transport, worldID); err != nil && loopCtx.Err() == nil {
-				slog.Warn("matchmaker: pass failed", "queue", matchmaking.DuelQueue.Key(), "err", err)
+			for _, pool := range pools {
+				if err := formMatches(loopCtx, matcher, pool.Queue, pool.Grouping, recorder, transport, worldID); err != nil && loopCtx.Err() == nil {
+					slog.Warn("matchmaker: pass failed", "queue", pool.Queue.Key(), "err", err)
+				}
 			}
 		}
 	}()
@@ -85,8 +90,7 @@ func startMatchmaker(ctx context.Context, registry *app.Registry) (func(), error
 // of candidates. A Commit that loses a race (a ticket was cancelled or taken
 // meanwhile) is not an error of this pass: the next tick reads fresh
 // candidates.
-func formMatches(ctx context.Context, matcher svcmatch.Matchmaker, grouping svcmatch.Grouping, recorder *syncsender.RecordMatchSender, transport *accessplayertcp.Runtime, worldID int64) error {
-	queue := matchmaking.DuelQueue
+func formMatches(ctx context.Context, matcher svcmatch.Matchmaker, queue svcmatch.Queue, grouping svcmatch.Grouping, recorder *syncsender.RecordMatchSender, transport *accessplayertcp.Runtime, worldID int64) error {
 	candidates, err := matcher.Candidates(ctx, queue, matchmakerWindow)
 	if err != nil {
 		return fmt.Errorf("candidates: %w", err)

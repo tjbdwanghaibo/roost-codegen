@@ -208,7 +208,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		"game/controllers/player/send_chat.go", "game/controllers/player/chat_history.go", "game/controllers/player/chat_push.go", "deploy/dev/run.sh",
 		"game/rewards/rewards.go", "protocol/def/list_mail.go", "protocol/def/claim_mail.go",
 		"game/controllers/player/list_mail.go", "game/controllers/player/claim_mail.go",
-		"internal/service/session/collaborators.go", "protocol/def/enter_dungeon.go", "protocol/def/finish_dungeon.go",
+		"internal/service/session/collaborators.go", "protocol/def/enter_dungeon.go", "protocol/def/finish_dungeon.go", "game/handler/player_level.go",
 		"game/controllers/player/enter_dungeon.go", "game/controllers/player/finish_dungeon.go"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("demo did not write %s: %v", rel, err)

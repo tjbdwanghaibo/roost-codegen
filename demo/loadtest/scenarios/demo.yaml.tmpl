@@ -1,6 +1,7 @@
 # One robot's life: connect and hand over the credential, make sure the Player
 # exists, chat on the world channel and read it back, add an item, earn
-# exp (the reward mail it sends is then listed and claimed), clear a dungeon run, earn enough exp to level up (which sends a reward mail
+# exp (the reward mail it sends is then listed and claimed), clear a dungeon run,
+# queue for a duel and then a ranked match, earn enough exp to level up (which sends a reward mail
 # through the effect chain), queue for a duel until matched, read the World's
 # counters. Run an even number of robots: duels need pairs. Param keys are the request fields' snake_case
 # names; a value can also come from the robot's blackboard.
@@ -88,4 +89,23 @@ scenarios:
                   sequence:
                     - wait: 250ms
                     - action: poll_match
+        # Ranked: the same dance on the level-scored queue. Every robot is
+        # at the same level here, so the window is trivially satisfied; the
+        # point is that the second queue and its ScoreWindow policy run.
+        - action: join_queue
+          param:
+            mode: ranked
+        - selector:
+            - action: wait_push
+              param:
+                msg: 10100
+                timeout: 10s
+            - retry:
+                times: 20
+                node:
+                  sequence:
+                    - wait: 250ms
+                    - action: poll_match
+                      param:
+                        mode: ranked
         - action: world_stats
