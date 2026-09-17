@@ -36,12 +36,21 @@ type Controller struct {
 	sessions   svcsession.Session
 	presence   *chatroom.Presence
 	transport  atomic.Pointer[pushTransport]
+	battles    atomic.Pointer[battleRouter]
 	worldID    int64
 
 	// The skill catalog, compiled from game/skills/*.json on first use.
 	skillsOnce   sync.Once
 	skillCatalog *skills.Catalog
 	skillErr     error
+}
+
+// battleRouter is the slice of the game service's battle manager the
+// endpoints use: one call, plain parameters. It is an interface here, and
+// looked up by capability name, for the same reason pushTransport is — the
+// service package imports the controller, not the other way round.
+type battleRouter interface {
+	SubmitBattleInput(ctx context.Context, battleID string, playerID int64, frame uint32, payload []byte, hashFrame uint32, hash uint64, catchupFrom uint32) error
 }
 
 // pushTransport is the slice of the player TCP Runtime the endpoints use.
@@ -56,6 +65,12 @@ type pushTransport interface {
 // playerTCPCapability is internal/access/player/tcp's Name: the capability
 // the transport Mod publishes its Runtime under.
 const playerTCPCapability app.ModName = "access.player.tcp"
+
+// battleCapability is what internal/service/<game> publishes its battle
+// manager under (BattleCapability there). It is registered in the service's
+// Init, which runs after this controller is constructed, so the lookup is
+// lazy like the transport's.
+const battleCapability app.ModName = "{{GAME_SERVICE}}.battle"
 
 // FromRegistry is what the generated protocol binding calls once per
 // process; keep its signature.
@@ -171,6 +186,23 @@ func (controller *Controller) Transport() (pushTransport, error) {
 	}
 	controller.transport.Store(&runtime)
 	return runtime, nil
+}
+
+// Battles is the battle manager, looked up lazily: the service registers it
+// in Init, after the protocol binding has built this controller.
+func (controller *Controller) Battles() (battleRouter, error) {
+	if controller == nil {
+		return nil, errors.New("player controller: nil")
+	}
+	if router := controller.battles.Load(); router != nil {
+		return *router, nil
+	}
+	router, ok := app.Lookup[battleRouter](controller.registry, battleCapability)
+	if !ok || router == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; the battle manager is not running", battleCapability)
+	}
+	controller.battles.Store(&router)
+	return router, nil
 }
 
 // WorldID is the full entity id of this process's World.

@@ -176,6 +176,33 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
 不死在第一个客户端请求里），warning 数进日志；`SkillCatalog` 端点（10012）把编译出的 id 列给客户端，机器人断言至少一个且 0 warning。
 技能**执行**（Host 读已锁 Entity、确定性 tick、checkpoint / replay）刻意没进 demo，见 `roost help skill`。
 
+## 实时战斗：lockstep 帧同步（匹配之后的那一段）
+
+Nest 是"服务器说了算"的状态：客户端请求、服务器改实体、结果落库。lockstep 是另一半——**确定性模拟**：
+服务器只把所有人的输入排成编号的帧广播出去，每个客户端用同一份输入跑同一套模拟，得到同一份状态，服务器一个字节的状态都不发。
+demo 把两者都给出来：匹配成功后，形成这场比赛的 game 进程开一个 `lockstep.Room`，两名玩家打满 45 帧（30 Hz，1.5 秒）。
+
+- **框架给的**（`roost-core/lockstep`）：把输入按提交窗口排进帧、每个座位的重放保护、每个广播包携带最近几帧（丢一个包由后续包自愈，不重传）、
+  给掉线重连的会话分页补发历史、把关键帧的哈希报告按法定人数判成 desync 裁决。
+- **工程写的**（`internal/service/<game>/battle.go`）：房间的生命周期、驱动它的那条串行 goroutine、以及线。
+  `lockstep.Room` 是单所有者状态（内部没有锁），所以所有调用都在一条 goroutine 上；端点把消息投进 channel，不直接碰房间。
+- **线是 demo 已有的 player TCP 连接**：广播就是一条普通服务器推送（`BattleFrame`，10102），输入回来是一条普通请求（`BattleInput`，10015）。
+  lockstep 不要求数据报通道，它要求帧能到；包里的冗余是让有损通道能用的东西。换成 UDP / KCP 部署时替换 `battleSender` 这个适配器即可，房间一行不动。
+- **一条消息三件事**：`BattleInput` 同时带本帧输入、关键帧的模拟哈希、以及"从第 N 帧开始补发"的请求——这三样都是每帧节奏的东西。
+- **收尾窗口**：房间切完最后一帧不会立刻关。客户端只有应用了关键帧才能报出那一帧的哈希，所以最后一个关键帧的报告必然晚于模拟结束；
+  切完就关的房间会正好拒掉 desync 裁决需要的那批报告。战绩结算、反作弊校验也在这个窗口里做。
+- **两端共享帧预算**：`game/battle` 里的 `Frames` 双方都读，所以客户端到最后一帧就停，而不是给一个刚关闭的房间发输入然后被拒。
+  按条件结束的战斗要显式下发结果——房间的最后一帧不自带"我是最后一帧"。
+- **机器人是真客户端**：`cmd/loadtest` 的 `battle` 动作用 `roost-core/robot` 的 `LockstepBot` 跑完整条链——推送喂给 bot，bot 按序应用帧到
+  `battle.State`，再把本座位下一帧的输入和关键帧哈希发回。推送处理器只负责把包转交：它跑在会话读循环上，而应用一帧要在同一条会话上发请求，
+  在那里应用会把读循环堵死在自己的响应上。
+- **座位**：`poll_match` 返回的 members 顺序就是座位顺序，服务端开房间和客户端算自己座位用的是同一份顺序。
+- **desync 长什么样**：两个客户端的模拟不一致时，房间在关键帧判出 outlier，game 日志里是一条 `battle: desync verdict` 的 ERROR。
+  真实游戏在这里踢人或强制重同步；demo 只记录——所有客户端都诚实时它不该出现。
+- **边界**：房间是进程内状态，只有形成比赛的那个 game 进程持有它。多 game 进程部署要把战斗做成自己的服务、按 match id 寻址；
+  进程重启会结束它托管的战斗（框架能给重连会话补发历史，但只在房间还活着时）。ranked 匹配也会开房间，但 demo 的机器人只打 duel 那一场，
+  没人进的房间在 `battleStartGrace + battleIdleTimeout` 后自己退出。
+
 ## GM 运维面：admin 命令，不是另一个 HTTP 服务
 
 `internal/service/game/gm.go` 把四条 GM 命令注册进 app 发布的 admin 命令表（`app.ModAdmin`），ops Mod 把它们经 HTTP 端出来：

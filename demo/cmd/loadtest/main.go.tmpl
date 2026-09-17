@@ -28,10 +28,12 @@ import (
 	"syscall"
 	"time"
 
+	"{{MODULE}}/game/battle"
 	"{{MODULE}}/loadtest/playertcp"
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/bus"
+	"github.com/tjbdwanghaibo/roost-core/lockstep"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	natsdriver "github.com/tjbdwanghaibo/roost-core/nats/driver"
@@ -41,6 +43,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
 	"github.com/tjbdwanghaibo/roost-core/robot/runner"
 	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
+	"github.com/tjbdwanghaibo/roost-core/robot/session"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 	svcaccount "github.com/tjbdwanghaibo/roost-kit/service/account"
 )
@@ -58,7 +61,7 @@ func main() {
 	// The scenario deliberately waits for matchmaking (poll every 250ms while
 	// the matchmaker ticks every 500ms), so a whole-scenario p95 of a few
 	// hundred milliseconds is the floor, not a regression.
-	maxP95 := flag.Float64("max-p95", 10.0, "threshold: scenario cost p95, seconds; a regression bound, not an SLO — the scenario waits on four asynchronous chains (reward mail, two gift sagas, match) and the cost histogram has power-of-two buckets, so a healthy run sits in the 4s bucket and the next one is 8s")
+	maxP95 := flag.Float64("max-p95", 16.0, "threshold: scenario cost p95, seconds; a regression bound, not an SLO. The scenario waits on four asynchronous chains (reward mail, two gift sagas, match) and then plays a lockstep battle for its full frame budget, and the cost histogram has power-of-two buckets — a healthy run lands in the 8s bucket, so the bound is the next one")
 	metricsAddr := flag.String("metrics-addr", "", "serve this process's metrics at http://<addr>/metrics for Prometheus (deploy/dev/observability scrapes 127.0.0.1:9300)")
 	accountNATS := flag.String("account-nats", "nats://127.0.0.1:4222", "NATS url of the bus the account service answers on; robots log in for real (Login → CreateRole → SelectRole) and present session tickets")
 	natsPrefix := flag.String("nats-prefix", "roost", "bus subject prefix (nats.prefix in the services' configs)")
@@ -258,6 +261,10 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 				return fmt.Errorf("ticket still %s", resp.State)
 			}
 			rb.Blackboard.Set("match_id", resp.MatchID)
+			// The members, in the order the match service returned them:
+			// that order is the lockstep seat order, so the battle action
+			// can work out which seat this robot holds.
+			rb.Blackboard.Set("match_members", append([]int64(nil), resp.Members...))
 			return nil
 		}))
 	// send_chat publishes through the chat service; the world channel fans
@@ -358,6 +365,16 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 		}
 		return nil
 	}})
+	// battle: the lockstep half. The scenario reaches it with match_id on
+	// the blackboard (join_queue → the matchmaker's MatchFound push), and
+	// this action runs a real client of roost-core/lockstep for the length
+	// of one battle: it feeds every BattleFrame push into a LockstepBot,
+	// the bot applies the frames to the demo simulation in order, and the
+	// bot's sink sends this client's input (and its keyframe hashes) back
+	// through the BattleInput request. The run fails if the bot turns
+	// terminal (a gap it could not heal, a simulation that diverged) or if
+	// the battle does not reach its frame budget in time.
+	actions.MustRegister(action.Func{ActionName: "battle", Handle: runBattle})
 	action.MustRegisterCall[pb.EnterDungeonRequest, pb.EnterDungeonResponse](actions, protocols, "enter_dungeon", msgid.MsgEnterDungeon,
 		action.OnResp(func(rb *robot.Context, resp *pb.EnterDungeonResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
@@ -411,6 +428,12 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 func registerPushes(protocols *protocol.Registry) {
 	protocols.MustRegisterDecoder(msgid.MsgMatchFound, protocol.DecodeTyped(msgid.MsgMatchFound, pb.UnmarshalMatchFoundPush))
 	protocols.MustRegisterDecoder(msgid.MsgChatMessage, protocol.DecodeTyped(msgid.MsgChatMessage, pb.UnmarshalChatMessagePush))
+	protocols.MustRegisterDecoder(msgid.MsgBattleFrame, protocol.DecodeTyped(msgid.MsgBattleFrame, pb.UnmarshalBattleFramePush))
+	// BattleInput is sent by the battle action, not by a registered call, so
+	// its codec entries are installed here: the request encoder and the
+	// response decoder both route through pbCodec like every other message.
+	protocols.MustRegisterEncoder(msgid.MsgBattleInput, func(value any) ([]byte, error) { return pbCodec{}.Marshal(value) })
+	protocols.MustRegisterDecoder(msgid.MsgBattleInput, protocol.DecodeTyped(msgid.MsgBattleInput, pb.UnmarshalBattleInputResponse))
 }
 
 func coded(code int32, reason string) error {
@@ -497,6 +520,8 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalSendGiftRequest(message)
 	case *pb.GiftStatusRequest:
 		return pb.MarshalGiftStatusRequest(message)
+	case *pb.BattleInputRequest:
+		return pb.MarshalBattleInputRequest(message)
 	default:
 		return nil, fmt.Errorf("pb codec: no marshal for %T", value)
 	}
@@ -594,8 +619,171 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 			return err
 		}
 		*message = *decoded
+	case *pb.BattleInputResponse:
+		decoded, err := pb.UnmarshalBattleInputResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
 	default:
 		return fmt.Errorf("pb codec: no unmarshal for %T", target)
 	}
 	return nil
+}
+
+
+// battleSink is the LockstepBot's outbound half: one BattleInput request
+// carries an input, a keyframe hash report or a catch-up request, so all
+// three of the sink's methods are the same call with different fields set.
+// The bot calls them from whatever goroutine is applying frames; the robot
+// session is safe for concurrent calls.
+type battleSink struct {
+	ctx      context.Context
+	session  *session.Session
+	battleID string
+	// state is this client's simulation. The bot applies frames into it and
+	// samples its hash at keyframes; the server never sends state, which is
+	// the whole point of lockstep.
+	state *battle.State
+	seats []lockstep.PlayerID
+}
+
+func (sink *battleSink) send(request *pb.BattleInputRequest) error {
+	message, err := sink.session.Call(sink.ctx, msgid.MsgBattleInput, msgid.MsgBattleInput, request)
+	if err != nil {
+		return err
+	}
+	response, ok := message.Value.(*pb.BattleInputResponse)
+	if !ok {
+		return fmt.Errorf("battle: unexpected response %T", message.Value)
+	}
+	return coded(response.Code, response.Reason)
+}
+
+func (sink *battleSink) SubmitInput(frame lockstep.FrameID, payload []byte) error {
+	// The battle's length is part of the contract both sides read, so the
+	// client stops at the last frame rather than being refused for a room
+	// that has just closed.
+	if battle.Over(frame) {
+		return nil
+	}
+	return sink.send(&pb.BattleInputRequest{BattleID: sink.battleID, Frame: uint32(frame), Payload: payload})
+}
+
+func (sink *battleSink) ReportHash(frame lockstep.FrameID, hash uint64) error {
+	if battle.Over(frame) {
+		return nil
+	}
+	return sink.send(&pb.BattleInputRequest{BattleID: sink.battleID, HashFrame: uint32(frame), Hash: hash})
+}
+
+func (sink *battleSink) RequestCatchup(from lockstep.FrameID) error {
+	// Frames ride on the player's TCP connection here, so a gap means the
+	// server dropped one, not the network. Ask for history anyway: the room
+	// pages it over the same lane, and a demo that hid this would hide the
+	// one thing catch-up exists for.
+	return sink.send(&pb.BattleInputRequest{BattleID: sink.battleID, CatchupFrom: uint32(from)})
+}
+
+// runBattle plays one lockstep battle to its frame budget.
+//
+// Params: "frames" (how many applied frames to wait for, default the
+// contract's budget), "timeout" (default 15s). The battle id is the match id
+// join_queue/poll_match left on the blackboard.
+func runBattle(ctx context.Context, rb *robot.Context, param any) error {
+	params := action.ParamsOf(rb, param)
+	want := lockstep.FrameID(params.Int64("frames", int64(battle.Frames)))
+	timeout := params.Duration("timeout", 15*time.Second)
+	raw, ok := rb.Blackboard.Get("match_id")
+	battleID, _ := raw.(string)
+	if !ok || battleID == "" {
+		return errors.New("battle: no match_id on the blackboard; join_queue must run first")
+	}
+	rawMembers, _ := rb.Blackboard.Get("match_members")
+	members, _ := rawMembers.([]int64)
+	rawPlayer, _ := rb.Blackboard.Get("player_id")
+	playerID, _ := rawPlayer.(int64)
+	// The seat is this robot's index among the members, the same mapping the
+	// game service made when it opened the room. A robot that cannot find
+	// itself in the match has no business submitting inputs.
+	seat := lockstep.PlayerID(0)
+	for index, member := range members {
+		if member == playerID {
+			seat = battle.Seat(index)
+			break
+		}
+	}
+	if seat == 0 {
+		return fmt.Errorf("battle: player %d is not among the %d members of match %s", playerID, len(members), battleID)
+	}
+	robotSession := rb.Session()
+	if robotSession == nil {
+		return session.ErrClosed
+	}
+	battleCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	sink := &battleSink{ctx: battleCtx, session: robotSession, battleID: battleID, state: battle.NewState(), seats: battle.Seats(len(members))}
+	// A tiny deterministic input: everyone walks right one unit per frame.
+	// Deterministic on purpose — two clients that apply the same frames must
+	// reach the same state, and the keyframe hashes prove they did.
+	bot, err := robot.NewLockstepBot(robot.LockstepBotConfig{
+		Player:           seat,
+		Sink:             sink,
+		Simulate:         func(frame lockstep.Frame) error { return sink.state.Apply(frame) },
+		Input:            func(lockstep.FrameID) []byte { return battle.Encode(battle.Input{DX: 1}) },
+		Hash:             func(lockstep.FrameID) uint64 { return sink.state.Hash(sink.seats) },
+		KeyframeInterval: battle.KeyframeInterval,
+	})
+	if err != nil {
+		return fmt.Errorf("battle: %w", err)
+	}
+	// The push handler only hands the packet over: it runs on the session's
+	// read loop, and applying a frame sends this seat's next input on the
+	// same session — doing that here would block the reader against its own
+	// response. The loop below owns the bot. A full queue drops the packet,
+	// which is exactly what a lossy lane does: the next packet carries the
+	// frame again (redundancy), and a gap too wide for that asks the room
+	// for history.
+	packets := make(chan []byte, 256)
+	if err := rb.EnsurePushCapture("battle:"+battleID, msgid.MsgBattleFrame, func(message *session.Message) {
+		push, ok := message.Value.(*pb.BattleFramePush)
+		if !ok || push.BattleID != battleID {
+			return
+		}
+		select {
+		case packets <- push.Packet:
+		default:
+		}
+	}); err != nil {
+		return fmt.Errorf("battle: capture frames: %w", err)
+	}
+	// The first input opens the room: it starts cutting frames once a seat
+	// has spoken, so nobody waits on an opponent who never connected.
+	if err := sink.SubmitInput(bot.Next(), battle.Encode(battle.Input{DX: 1})); err != nil {
+		return fmt.Errorf("battle: first input: %w", err)
+	}
+	for {
+		select {
+		case packet := <-packets:
+			// Applying a frame runs the simulation, sends this seat's input
+			// for the next one and, at a keyframe, its state hash.
+			if err := bot.HandleBroadcast(packet); err != nil {
+				return fmt.Errorf("battle: apply frame: %w", err)
+			}
+			if terminal := bot.Terminal(); terminal != nil {
+				return fmt.Errorf("battle: bot is terminal: %w", terminal)
+			}
+			// Next is the frame the bot is waiting for, so it has applied
+			// everything below it.
+			if bot.Next() > want {
+				stats := bot.Stats()
+				rb.Blackboard.Set("battle_frames", int64(bot.Next()-1))
+				rb.Blackboard.Set("battle_catchups", int64(stats.CatchupsRequested))
+				return nil
+			}
+		case <-battleCtx.Done():
+			return fmt.Errorf("battle: applied %d of %d frames before the deadline", bot.Next()-1, want)
+		}
+	}
 }

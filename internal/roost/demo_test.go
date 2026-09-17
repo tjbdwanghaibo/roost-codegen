@@ -214,7 +214,9 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		"internal/service/game/gm.go",
 		"saga/gift_item/definition.go", "game/gift/gift.go", "game/handler/start_gift.go", "game/handler/gift_debit.go",
 		"protocol/def/send_gift.go", "protocol/def/gift_status.go", "game/controllers/player/send_gift.go", "game/controllers/player/gift_status.go",
-		"internal/service/game/gift_saga.go", "internal/errors/item_short.go"} {
+		"internal/service/game/gift_saga.go", "internal/errors/item_short.go",
+		"game/battle/battle.go", "protocol/def/battle_input.go", "protocol/def/battle_frame.go",
+		"game/controllers/player/battle_input.go", "internal/service/game/battle.go"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("demo did not write %s: %v", rel, err)
 		}
@@ -242,6 +244,24 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	}
 	if cfg := read("configs/service/config.game.prod.example.yaml"); !strings.Contains(cfg, "admin_enabled: false") {
 		t.Errorf("production example config enables admin")
+	}
+	// The lockstep battle: the room is opened by the matchmaker, owned by one
+	// goroutine, and its broadcast lane is the player TCP push. The robot
+	// plays it with roost-core/robot's LockstepBot, so the scenario must
+	// reach the battle after a match and the load test must register the
+	// per-frame message's codec entries (it is sent by an action, not by a
+	// registered call).
+	if manager := read("internal/service/game/battle.go"); !strings.Contains(manager, "lockstep.NewRoom(") || !strings.Contains(manager, "room.Tick(ctx)") || !strings.Contains(manager, "battleDrainWindow") {
+		t.Errorf("battle.go does not open a lockstep room, drive it or keep a drain window for the last keyframe's hash reports")
+	}
+	if matchmaker := read("internal/service/game/matchmaker.go"); !strings.Contains(matchmaker, "battles.Open(match.ID, members)") {
+		t.Errorf("the matchmaker does not open a battle for a formed match")
+	}
+	if loadtest := read("cmd/loadtest/main.go"); !strings.Contains(loadtest, "robot.NewLockstepBot(") || !strings.Contains(loadtest, "MustRegisterEncoder(msgid.MsgBattleInput") {
+		t.Errorf("the load test does not run a lockstep bot with the battle message's codec entries")
+	}
+	if scenario := read("loadtest/scenarios/demo.yaml"); !strings.Contains(scenario, "action: battle") {
+		t.Errorf("the robot scenario never plays a battle")
 	}
 	// The gift saga: the saga mod on the game service with its config section
 	// (added after the configs were rendered — the generic add-mod gap the
