@@ -22,6 +22,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-codegen/internal/nest"
 	"github.com/tjbdwanghaibo/roost-codegen/internal/protocol"
 	"github.com/tjbdwanghaibo/roost-codegen/internal/registry"
+	"github.com/tjbdwanghaibo/roost-codegen/internal/servicerpc"
 	"github.com/tjbdwanghaibo/roost-codegen/internal/tablegen"
 	"github.com/tjbdwanghaibo/roost-codegen/internal/webroute"
 )
@@ -114,6 +115,18 @@ func generatorsFor(m Manifest, force bool) []generator {
 			return tablegen.Run([]string{"-meta", tablegen.DefaultMetaDir, "-out", "./configs/generated", "-force"}, w)
 		}},
 		{Feature: "webroute", Name: "webroute", Prefixes: []string{"service/"}, Run: func(w io.Writer) error { return webroute.Run(forceArg([]string{"-dir", "./service"}, force), w) }},
+		// The project's own cross-process services (roost add rpc): each
+		// internal/rpc/<name> package is one servicerpc run — transport and
+		// assembly halves from its //roost:rpc interface. servicerpc writes
+		// only when the content changed, so -force is not needed.
+		{Feature: "rpc", Name: "servicerpc", Prefixes: []string{"internal/rpc/"}, Run: func(w io.Writer) error {
+			for _, dir := range projectRPCDirs(".", m) {
+				if err := servicerpc.Run([]string{"-dir", "./" + dir}, w); err != nil {
+					return fmt.Errorf("%s: %w", dir, err)
+				}
+			}
+			return nil
+		}},
 		// Last, and unconditional: the aggregate collects //roost:register
 		// markers, including the ones the generators above just wrote.
 		{Name: "registry", Always: true, Run: func(w io.Writer) error {

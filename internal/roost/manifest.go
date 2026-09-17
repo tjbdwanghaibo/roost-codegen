@@ -90,6 +90,13 @@ type ServiceSpec struct {
 	// calls. Each adds the ClientMod to this process and a typed accessor in
 	// internal/service/<name>/framework_clients_gen.go.
 	Uses []string `yaml:"uses,omitempty"`
+	// Rpcs lists the project's own cross-process services this business
+	// service owns (roost add rpc): internal/rpc/<name>, whose owner Mod the
+	// bootstrap assembles into this process.
+	Rpcs []string `yaml:"rpcs,omitempty"`
+	// UsesRpcs lists project rpcs (owned by another service) this business
+	// service calls; each assembles the generated ClientMod here.
+	UsesRpcs []string `yaml:"uses_rpcs,omitempty"`
 }
 
 // AccessSpec declares an application-owned request boundary. Access layers
@@ -353,6 +360,40 @@ func (m Manifest) Validate() error {
 		if !validName(sagaName) {
 			joined = errors.Join(joined, fmt.Errorf("invalid saga %q", sagaName))
 		}
+	}
+	owners := map[string]string{}
+	for _, name := range sortedServiceNames(m) {
+		spec := m.Services[name]
+		for _, rpc := range spec.Rpcs {
+			if !validName(rpc) {
+				joined = errors.Join(joined, fmt.Errorf("service %q: invalid rpc %q", name, rpc))
+				continue
+			}
+			if m.isFrameworkService(name) {
+				joined = errors.Join(joined, fmt.Errorf("service %q hosts a framework service and cannot own rpc %q", name, rpc))
+			}
+			if other, dup := owners[rpc]; dup {
+				joined = errors.Join(joined, fmt.Errorf("rpc %q is owned by both %q and %q", rpc, other, name))
+			}
+			owners[rpc] = name
+		}
+	}
+	for _, name := range sortedServiceNames(m) {
+		spec := m.Services[name]
+		for _, rpc := range spec.UsesRpcs {
+			owner, ok := owners[rpc]
+			if !ok {
+				joined = errors.Join(joined, fmt.Errorf("service %q uses_rpcs %q, which no service owns (roost add rpc %s -service <owner>)", name, rpc, rpc))
+			} else if owner == name {
+				joined = errors.Join(joined, fmt.Errorf("service %q both owns and uses rpc %q; the owner reaches it in-process through the capability", name, rpc))
+			}
+			if m.isFrameworkService(name) {
+				joined = errors.Join(joined, fmt.Errorf("service %q hosts a framework service and cannot declare uses_rpcs", name))
+			}
+		}
+	}
+	if len(owners) > 0 && !contains(m.Features, "rpc") {
+		joined = errors.Join(joined, fmt.Errorf("services declare rpcs but the rpc feature is not enabled (roost add rpc enables it)"))
 	}
 	if len(m.Sagas) > 0 {
 		hasSagaMod := false

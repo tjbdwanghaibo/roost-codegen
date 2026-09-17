@@ -76,7 +76,7 @@ var modCatalog = map[string]modSpec{
 
 var knownFeatures = map[string]bool{
 	"protocol": true, "config": true, "entity": true, "nest": true,
-	"event": true, "dao": true, "attribute": true, "webroute": true,
+	"event": true, "dao": true, "attribute": true, "webroute": true, "rpc": true,
 	"errcode":           true,
 	"saga":              true,
 	"nettransport-quic": true, "nettransport-kcp": true, "nettransport-udp": true,

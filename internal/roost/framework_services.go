@@ -184,14 +184,17 @@ func (m Manifest) usesFrameworkServices() bool {
 // effectiveServiceMods is a service's Kit mod set as the generator assembles
 // it: the declared mods, plus what a hosted framework service depends on
 // (Redis for state, NATS for the bus), plus NATS for a business service that
-// calls a framework service through its ClientMod.
+// calls a framework service through its ClientMod or owns / calls a project
+// rpc.
 func effectiveServiceMods(m Manifest, name string) []string {
 	service := m.Services[name]
 	mods := append([]string(nil), service.Mods...)
 	if spec, ok := frameworkCatalog[strings.TrimSpace(service.Framework)]; ok {
 		mods = append(mods, spec.Depends...)
 	}
-	if len(service.Uses) > 0 {
+	if len(service.Uses) > 0 || len(service.Rpcs) > 0 || len(service.UsesRpcs) > 0 {
+		// The bus: a framework ClientMod, a project rpc's owner Mod (it
+		// registers handlers) and a project rpc's ClientMod all ride on it.
 		mods = append(mods, "nats")
 	}
 	return mods

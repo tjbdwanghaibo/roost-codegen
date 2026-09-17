@@ -323,6 +323,14 @@ func renderBootstrap(m Manifest) string {
 		}
 	}
 	imports[m.Project.Module+"/internal/registry"] = "registry"
+	for _, name := range services {
+		for _, rpc := range m.Services[name].Rpcs {
+			imports[m.Project.Module+"/"+rpcDir(rpc)] = rpcAlias(rpc)
+		}
+		for _, rpc := range m.Services[name].UsesRpcs {
+			imports[m.Project.Module+"/"+rpcDir(rpc)] = rpcAlias(rpc)
+		}
+	}
 	for _, name := range m.Sagas {
 		imports[m.Project.Module+"/saga/"+name] = "saga" + safeIdent(name)
 	}
@@ -384,6 +392,15 @@ func renderBootstrap(m Manifest) string {
 		for _, target := range used {
 			spec := frameworkCatalog[m.Services[target].Framework]
 			fmt.Fprintf(&b, ",\n\t\tsvc%s.NewClientMod()", spec.Package)
+		}
+		// The project's own rpcs: the owner Mod wraps the implementation
+		// (New() takes whatever the service needs; edit the call here), a
+		// consumer gets the generated ClientMod.
+		for _, rpc := range uniqueSorted(m.Services[name].Rpcs) {
+			fmt.Fprintf(&b, ",\n\t\t%s.NewMod(%s.New())", rpcAlias(rpc), rpcAlias(rpc))
+		}
+		for _, rpc := range uniqueSorted(m.Services[name].UsesRpcs) {
+			fmt.Fprintf(&b, ",\n\t\t%s.NewClientMod()", rpcAlias(rpc))
 		}
 		if access, enabled := m.Access["player"]; enabled && access.Service == name {
 			b.WriteString(",\n\t\taccessplayer.NewMod()")
@@ -575,7 +592,7 @@ LOADTEST_METRICS_ADDR ?= 127.0.0.1:9300
 LOADTEST_ACCOUNT_NATS ?= nats://127.0.0.1:4222
 
 .PHONY: help sync project-upgrade deps-update roost-up codegen-up next doctor fmt fmt-check vet glsvet test test-race build run loadtest generate generate-changed check-generated config-check config-check-all player-tcp-enable player-tcp-disable id-check ci cicd-check release-check image-build compose-check k8s-render k8s-check deploy-shell rollback-shell deploy-docker rollback-docker deploy-k8s rollback-k8s dev-up dev-down dev-logs dev-run dev-stop dev-status dev-smoke clean
-.PHONY: new-service add-mod new-access new-transport new-module new-protocol new-entity new-component new-handler new-lifecycle new-endpoint new-skill new-event new-table new-dao new-webroute new-errcode new-saga
+.PHONY: new-service add-mod new-access new-transport new-module new-protocol new-entity new-component new-handler new-lifecycle new-endpoint new-skill new-event new-table new-dao new-webroute new-errcode new-saga new-rpc
 
 help:
 	$(ROOST) help-make
@@ -665,6 +682,8 @@ new-errcode:
 	$(ROOST) add errcode $(NAME)
 new-saga:
 	$(ROOST) add saga $(NAME) -service $(SERVICE) -steps $(STEPS)
+new-rpc:
+	$(ROOST) add rpc $(NAME) -service $(SERVICE)
 ci: fmt-check vet glsvet test test-race check-generated config-check-all id-check
 cicd-check: ci compose-check k8s-check
 release-check: cicd-check
@@ -988,6 +1007,7 @@ func renderUsage(m Manifest) string {
 - make roost-up：执行 go get -u ./... 和 go mod tidy，更新整个项目依赖图。
 - make codegen-up：安装最新 roost-codegen CLI。
 - make deps-update：只按 roost.yaml 更新 core、kit、skill 三个框架模块。
+- make new-rpc NAME=<name> SERVICE=<owner>：脚手架一个本工程自己的跨进程服务（internal/rpc/<name>：//roost:rpc 接口、实现、owner Mod、生成的传输与装配两半），调用方在 roost.yaml 的 services.<caller>.uses_rpcs 列出它。
 - make dev-up/dev-down：启动或停止所需基础设施。
 - make dev-run/dev-stop/dev-status：在本机一次起 / 停 / 查看工程声明的全部服务进程（每个服务自己的 ops 端口，日志在 .dev/）；game-demo 工程随后可用 make dev-smoke 跑两个机器人走完整条链。
 - make next：根据项目真实状态只显示一个当前动作；不需要背完整流程。

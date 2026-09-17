@@ -382,6 +382,18 @@ Entity wire 会生成 Component/DAO getter，
 `db/def` 并通过生成的 getter/setter 访问。完整流程见生成项目的
 `docs/FIRST_BUSINESS.zh-CN.md` 和 `docs/ENTITY_COMPONENT.zh-CN.md`。
 
+### 6.x 本工程自己的跨进程服务：`roost add rpc`
+
+    roost add rpc Guild -service game        # game 拥有它
+    # 调用方：roost.yaml services.gate.uses_rpcs: [guild]，然后 make sync
+
+生成 `internal/rpc/guild/`：`guild.go`（`//roost:rpc` 接口 `Guild`、`ErrRequestInvalid`（码来自 `ids.errcode`）、`Error` 映射）、
+`service.go`（实现骨架）、`mod.go`（owner Mod：发布 capability、Start 时在 bus 上注册 handler）、`server_run.go`（独立进程用的 Server 钩子），
+以及 servicerpc 生成的 `guild_rpc_gen.go` / `guild_rpc_assembly_gen.go`。清单里 `services.game.rpcs: [guild]`、feature `rpc` 自动加上，
+bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装配 `rpcGuild.NewClientMod()`；两边都自动带 nats mod。
+调用方 `app.Lookup[guild.Guild](registry, guild.CapabilityName)` 拿接口——服务日后搬进独立进程（`a.RegisterServer(..., guild.NewServer(), ...)`）业务代码不变。
+`make generate` 重生成两半，`generate --check` 把它们当生成物比对。
+
 ## 7. ID 管理
 
 查询下一个 ID：

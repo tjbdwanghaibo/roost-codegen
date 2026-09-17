@@ -295,6 +295,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		"lifecycle": {"root", "entity", "service"}, "endpoint": {"root", "handler", "protocol", "nest-handler"},
 		"skill": {"root"}, "event": {"root"}, "table": {"root"}, "dao": {"root", "entity"},
 		"webroute": {"root"}, "errcode": {"root", "id"}, "saga": {"root", "service", "steps"},
+		"rpc": {"root", "service"},
 	}
 	if err := rejectUnsupportedFlags(fs, allowed[args[0]]...); err != nil {
 		return err

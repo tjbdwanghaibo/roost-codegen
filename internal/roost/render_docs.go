@@ -344,6 +344,7 @@ make generate。未知字段会直接报错，避免拼写错误被静默忽略�
 | access | 否 | 已认证请求边界、所属 Service 与显式 transport | 生成 player runtime、binding、listener 与装配 |
 | features | 否 | 项目级代码生成能力开关 | 决定目录、生成器和 bootstrap 接线 |
 | sagas | 否 | 已生成 Saga 定义名称 | bootstrap 聚合并注册 Definitions |
+| services.<name>.rpcs / uses_rpcs | 否 | 本工程自己的跨进程服务：拥有者 / 调用者 | 拥有者进程装配 owner Mod（注册 bus handler），调用者装配生成的 ClientMod；用 roost add rpc 创建 |
 | ids | 否 | protocol/entity/component/errcode 编号空间 | add、id next 和 id check 使用 |
 
 ## 3. project
@@ -444,6 +445,7 @@ features 只控制生成期形态，不会自动启动同名基础设施：
 | errcode | 错误码检查与文档导出 | 是 |
 | attribute | 属性定义与访问代码 | 否 |
 | webroute | HTTP route 扫描和注册代码 | 否 |
+| rpc | 本工程自己的跨进程服务：internal/rpc/<name> 的 servicerpc 两半（随 roost add rpc 启用） | 否 |
 | saga | Saga definition 的生成与注册 | 否；由 roost add saga 维护 |
 | nettransport-udp | 房间帧同步 UDP 接线 | 否 |
 | nettransport-kcp | 房间帧同步 KCP 接线 | 否 |
@@ -459,6 +461,23 @@ features 只控制生成期形态，不会自动启动同名基础设施：
 
 Feature 和 Mod 必须分别理解：config feature 生成配置代码，configdata mod 在运行时加载配置；
 nest feature 生成 handler/注册代码，nest mod 装配运行引擎。
+
+## 7b. rpcs 与 uses_rpcs
+
+本工程自己的跨进程服务（区别于托管的框架服务）由 roost add rpc <name> -service <owner> 创建：
+internal/rpc/<name>/ 里是 //roost:rpc 接口（含 ErrRequestInvalid，码来自 ids.errcode）、实现 service.go、
+owner Mod（发布 capability、在 Start 注册 bus handler）和 servicerpc 生成的两半。拥有者写在
+services.<owner>.rpcs，调用者写在 services.<caller>.uses_rpcs：
+
+    services:
+      game:
+        rpcs: [guild]
+      gate:
+        uses_rpcs: [guild]
+
+调用方 app.Lookup[guild.Guild](registry, guild.CapabilityName) 拿到的是接口；服务搬进独立进程时
+业务代码不变。rpc feature 随 add rpc 自动启用，make generate 会重生成两半；同一个 rpc 只能有一个拥有者，
+拥有者不能同时 uses 它，托管框架服务不能拥有或使用。
 
 ## 8. sagas
 

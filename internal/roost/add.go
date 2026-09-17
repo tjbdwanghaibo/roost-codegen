@@ -207,6 +207,9 @@ func Add(root string, options AddOptions) ([]string, error) {
 	if options.Kind == "skill" {
 		return addSkillDefinition(root, m, options)
 	}
+	if options.Kind == "rpc" {
+		return addRPC(root, m, options)
+	}
 	return addArtifact(root, m, options)
 }
 

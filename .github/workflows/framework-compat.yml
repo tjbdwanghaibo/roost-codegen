@@ -92,6 +92,11 @@ jobs:
             "${RUNNER_TEMP}/roost" add endpoint RenamePlayer --handler player
             "${RUNNER_TEMP}/roost" add skill Fireball
             "${RUNNER_TEMP}/roost" add saga GuildTransfer -service game -steps debit,credit
+            # A project-owned rpc: game owns it, gate calls it (uses_rpcs is a
+            # manifest edit, so it goes through sync).
+            "${RUNNER_TEMP}/roost" add rpc Guild -service game
+            sed -i 's/^    gate:$/    gate:\n        uses_rpcs:\n            - guild/' roost.yaml
+            "${RUNNER_TEMP}/roost" project sync
             # Pure-version scenarios exercise the transactional generate+tidy
             # path here. Source-head is compiled through go.work below because
             # its APIs may intentionally not exist in the latest tag yet.
@@ -195,14 +200,39 @@ jobs:
           }
           boot mail
           boot game
+      # The demo gate. The compile cell proves the template's output builds;
+      # this proves it works: the six generated processes (account, chat,
+      # mail, match, session, game) come up on the project's own dev compose
+      # stack through the generated deploy/dev/run.sh, and six robots go
+      # through the whole chain — login, chat, items, exp, reward-mail claim,
+      # dungeon, duel and ranked matchmaking — with thresholds. What a user's
+      # first `make dev-run && make dev-smoke` does, done here first.
+      - name: run the demo's robots against the dev compose stack
+        if: matrix.scenario == 'demo'
+        working-directory: ${{ runner.temp }}/planet
+        env:
+          SET: ${{ matrix.dependency-set }}
+        run: |
+          set -euo pipefail
+          if [ "$SET" != source-head ]; then export GOWORK=off; fi
+          docker compose -f deploy/dev/docker-compose.yaml up -d
+          for _ in $(seq 1 45); do
+            if docker compose -f deploy/dev/docker-compose.yaml exec -T mongo mongosh --quiet --eval 'rs.status().ok' 2>/dev/null | grep -q '^1$'; then break; fi
+            sleep 2
+          done
+          docker compose -f deploy/dev/docker-compose.yaml exec -T mongo mongosh --quiet --eval 'rs.status().ok' | grep -q '^1$'
+          READY_TIMEOUT=180 sh deploy/dev/run.sh start
+          go run ./cmd/loadtest -count 6
+          sh deploy/dev/run.sh stop
       - name: dev stack state (on failure)
-        if: failure() && matrix.scenario == 'full'
+        if: failure() && (matrix.scenario == 'full' || matrix.scenario == 'demo')
         working-directory: ${{ runner.temp }}/planet
         run: |
           docker compose -f deploy/dev/docker-compose.yaml ps || true
           docker compose -f deploy/dev/docker-compose.yaml logs --tail=60 || true
-          for log in *.boot.log; do echo "== $log"; tail -n 60 "$log"; done 2>/dev/null || true
+          for log in *.boot.log .dev/*.log; do [ -f "$log" ] || continue; echo "== $log"; tail -n 80 "$log"; done 2>/dev/null || true
+          sh deploy/dev/run.sh stop 2>/dev/null || true
       - name: tear down the dev stack
-        if: always() && matrix.scenario == 'full'
+        if: always() && (matrix.scenario == 'full' || matrix.scenario == 'demo')
         working-directory: ${{ runner.temp }}/planet
         run: docker compose -f deploy/dev/docker-compose.yaml down -v || true
