@@ -156,6 +156,29 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
 不死在第一个客户端请求里），warning 数进日志；`SkillCatalog` 端点（10012）把编译出的 id 列给客户端，机器人断言至少一个且 0 warning。
 技能**执行**（Host 读已锁 Entity、确定性 tick、checkpoint / replay）刻意没进 demo，见 `roost help skill`。
 
+## GM 运维面：admin 命令，不是另一个 HTTP 服务
+
+`internal/service/game/gm.go` 把四条 GM 命令注册进 app 发布的 admin 命令表（`app.ModAdmin`），ops Mod 把它们经 HTTP 端出来：
+`GET /admin/commands` 列命令、`POST /admin/execute` 执行，鉴权 `X-Admin-Token` 或 Bearer；`ops.admin_enabled=false` 时两个端点 404。
+demo 的**开发配置**开着 admin、token 是 `dev-gm-token`（`allow_dev_token: true`）；生产示例配置关着，而且 `config check --production` 拒绝 `dev-` token。
+
+```bash
+curl -s -H 'X-Admin-Token: dev-gm-token' http://127.0.0.1:9100/admin/commands
+curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute \
+  -d '{"name":"gm.player.add_item","trace_id":"t1","payload":{"player_id":100866,"item_id":2001,"count":1}}'
+curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute \
+  -d '{"name":"gm.mail.send","trace_id":"t2","payload":{"player_id":100866,"subject":"补偿","body":"抱歉","item_id":1002,"count":5}}'
+curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute -d '{"name":"gm.world.stats"}'
+```
+
+- `player_id` 两种形式都收：客户端看到的唯一 id（`EnterGameResponse.PlayerID`，也是邮件的收件人 id），或 Mongo 里 Player 文档的 `_id`（完整实体 id，多了 kind / category 位）。
+  两者不同：把 `_id` 当唯一 id 再包一层会得到一个不存在的实体（`entity aggregate not found`）。响应里同时给出 `player_id`（唯一 id）与 `entity_id`。
+  唯一 id 从 Redis 计数器 `roost:demo:player_id` 分配，同一份 Redis 上反复起 demo 不会从 100001 重来——别猜，从 `EnterGame` 的响应或 Mongo 取。
+- 加道具受 Player 的背包规则约束（每种道具的叠加上限），超出时命令按业务错误码拒绝（`bag_full`），不是 GM 越过规则。
+- 命令做的就是游戏做的事：加道具 / 加经验走与端点相同的 Nest Sender（GM 加的经验升级同样发奖励邮件），发邮件走同一个 mail 客户端、附件用同一份 `rewards` 编码，玩家经 `ClaimMail` 领。
+- `trace_id` 是邮件的幂等键：同一 trace 重试不会发两封。
+- 为什么不是 webroute：这套 admin 命令表就是框架给运维面的位置（kit 的 nats / bus 也把 DLQ 命令注册在这里），共用鉴权、开关和 `/admin/commands` 的自描述；`webroute` 留给面向玩家 / 第三方的 HTTP 接口。
+
 ## World 的职责
 
 World 有了自己的 DAO（`PlayersEntered` / `MatchesFormed`）和 `Stats` 组件：`RecordEnter` 在 EnterGame 之后、

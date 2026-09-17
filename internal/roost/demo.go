@@ -141,6 +141,25 @@ func enableDemoMatchSweep(root, _ string) error {
 	return writeAtomic(path, []byte(strings.Replace(string(raw), before, after, 1)), 0o644)
 }
 
+// enableDemoAdmin turns the ops admin endpoint on in the game service's DEV
+// config with a dev token: GET /admin/commands and POST /admin/execute answer
+// on ops.addr with X-Admin-Token: dev-gm-token. The production example config
+// is untouched — it keeps admin off, and config check --production refuses a
+// dev- token anyway, so a real deployment mints its own.
+func enableDemoAdmin(root, gameService string) error {
+	path := filepath.Join(root, "configs", "service", "config."+gameService+".yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	const before = "  admin_enabled: false\n  admin_token: \"\"\n  allow_dev_token: false\n"
+	const after = "  admin_enabled: true\n  admin_token: dev-gm-token\n  allow_dev_token: true\n"
+	if !strings.Contains(string(raw), before) {
+		return fmt.Errorf("%s: expected the ops admin block to replace", path)
+	}
+	return writeAtomic(path, []byte(strings.Replace(string(raw), before, after, 1)), 0o644)
+}
+
 // enableDemoPlayerTCP flips player_access.tcp.enabled in the game service's
 // config, the same edit `roost config enable player-tcp` makes. A demo whose
 // listener is off cannot be connected to, and `roost project doctor
@@ -258,6 +277,8 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/service.go", why: "the game service starts the effect consumer in Init and drains it in Shutdown"},
 		{write: "internal/service/game/level_up_mail.go", why: "the consumer: JetStream durable + Mongo inbox → mail.Send keyed by EffectID"},
 		{write: "internal/service/game/matchmaker.go", why: "Candidates → Grouping → Commit on a ticker, then the World records the match and the players are pushed MatchFound"},
+		{write: "internal/service/game/gm.go", why: "GM commands on the admin registry: add item / add exp / send mail / world stats, served by ops over HTTP behind a token"},
+		{run: enableDemoAdmin, why: "the dev config enables the ops admin endpoint with a dev token, so the GM commands are reachable on a developer machine"},
 		{write: "cmd/accountctl/main.go", why: "the operator surface account keeps off the bus: register the game server so CreateRole works"},
 		{write: "internal/service/account/collaborators.go", why: "an account service that can log a demo user in and mint ids from Redis"},
 		{write: "internal/service/chat/collaborators.go", why: "a chat service with a written-down policy, one text type and a granted system path"},

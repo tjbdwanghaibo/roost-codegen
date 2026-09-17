@@ -210,7 +210,8 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		"game/controllers/player/list_mail.go", "game/controllers/player/claim_mail.go",
 		"internal/service/session/collaborators.go", "protocol/def/enter_dungeon.go", "protocol/def/finish_dungeon.go", "game/handler/player_level.go",
 		"game/controllers/player/enter_dungeon.go", "game/controllers/player/finish_dungeon.go",
-		"game/skills/fireball.json", "game/skills/catalog.go", "protocol/def/skill_catalog.go", "game/controllers/player/skill_catalog.go"} {
+		"game/skills/fireball.json", "game/skills/catalog.go", "protocol/def/skill_catalog.go", "game/controllers/player/skill_catalog.go",
+		"internal/service/game/gm.go"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("demo did not write %s: %v", rel, err)
 		}
@@ -230,6 +231,20 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		if cfg := read("configs/service/config." + service + ".yaml"); !strings.Contains(cfg, "addr: 127.0.0.1:"+port) {
 			t.Errorf("config.%s.yaml does not listen ops on %s", service, port)
 		}
+	}
+	// The GM surface: admin on in the dev config with a dev token, off in the
+	// production example (which config check --production would refuse anyway).
+	if cfg := read("configs/service/config.game.yaml"); !strings.Contains(cfg, "admin_enabled: true") || !strings.Contains(cfg, "admin_token: dev-gm-token") || !strings.Contains(cfg, "allow_dev_token: true") {
+		t.Errorf("dev config does not enable the ops admin endpoint for the GM commands")
+	}
+	if cfg := read("configs/service/config.game.prod.example.yaml"); !strings.Contains(cfg, "admin_enabled: false") {
+		t.Errorf("production example config enables admin")
+	}
+	// player_id takes either id an operator has at hand: the unique id the
+	// client sees or the full entity id Mongo stores as _id. Re-wrapping a
+	// full id produced an id no Player has (live run, 2026-09-17).
+	if gm := read("internal/service/game/gm.go"); !strings.Contains(gm, "entity.MatchEntityID(raw, player.EntityKindPlayer)") || !strings.Contains(gm, "entity.GetUniqueIDFromEntityID(raw)") {
+		t.Errorf("gm.go does not accept the full Player entity id as player_id")
 	}
 	if scrape := read("deploy/dev/observability/prometheus.yml"); !strings.Contains(scrape, "job_name: chat") || !strings.Contains(scrape, ":9102") {
 		t.Errorf("prometheus.yml does not scrape the chat process on its assigned port")

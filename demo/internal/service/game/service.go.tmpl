@@ -58,6 +58,11 @@ func (s *Service) Init(registry *app.Registry) error {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	s.stopMatchmaker = stop
+	// The operator surface: GM commands on the admin registry the ops Mod
+	// serves (gm.go). Registered last, when everything they call is up.
+	if err := registerGMCommands(registry); err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
 	return nil
 }
 
