@@ -57,12 +57,21 @@ func Add(root string, options AddOptions) ([]string, error) {
 		if _, ok := modCatalog[toSnake(name)]; !ok {
 			return nil, fmt.Errorf("unknown kit mod %q", name)
 		}
-		spec.Mods = uniqueSorted(append(spec.Mods, toSnake(name)))
+		// The spec's Mods slice may share its array with the manifest's;
+		// copy before appending so the "before" view stays what it was.
+		previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, Mods: append([]string(nil), spec.Mods...), Uses: spec.Uses, Rpcs: spec.Rpcs, UsesRpcs: spec.UsesRpcs})
+		spec.Mods = uniqueSorted(append(append([]string(nil), spec.Mods...), toSnake(name)))
 		m.Services[service] = spec
 		if err := commitManifestSync(root, manifestBefore, m); err != nil {
 			return nil, err
 		}
-		return []string{"roost.yaml"}, nil
+		// The service's configs were rendered at creation; give the new Mod
+		// its section there too, or it runs on defaults nobody can see.
+		configs, err := appendModConfigSections(root, previous, m, service)
+		if err != nil {
+			return []string{"roost.yaml"}, err
+		}
+		return append([]string{"roost.yaml"}, configs...), nil
 	}
 	if options.Kind == "access" {
 		manifestBefore, err := os.ReadFile(filepath.Join(root, ManifestName))
@@ -195,14 +204,22 @@ func Add(root string, options AddOptions) ([]string, error) {
 		if captureErr != nil {
 			return paths, restoreFiles(root, backups, captureErr)
 		}
-		spec.Mods = uniqueSorted(append(spec.Mods, "saga"))
+		previous := manifestWithService(m, service, ServiceSpec{Framework: spec.Framework, Mods: append([]string(nil), spec.Mods...), Uses: spec.Uses, Rpcs: spec.Rpcs, UsesRpcs: spec.UsesRpcs})
+		spec.Mods = uniqueSorted(append(append([]string(nil), spec.Mods...), "saga"))
 		m.Services[service] = spec
 		m.Features = uniqueSorted(append(m.Features, "saga"))
 		m.Sagas = uniqueSorted(append(m.Sagas, toSnake(options.Name)))
 		if err := commitManifestSync(root, manifestBefore, m); err != nil {
 			return paths, restoreFilesIfCurrent(root, backups, created, err)
 		}
-		return append(paths, "roost.yaml", "internal/bootstrap/generated.go"), nil
+		paths = append(paths, "roost.yaml", "internal/bootstrap/generated.go")
+		// The saga Mod (and whatever it pulled in) gets its config section in
+		// the service's configs, like a Mod chosen at project creation.
+		configs, err := appendModConfigSections(root, previous, m, service)
+		if err != nil {
+			return paths, err
+		}
+		return append(paths, configs...), nil
 	}
 	if options.Kind == "skill" {
 		return addSkillDefinition(root, m, options)
@@ -429,7 +446,7 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 				return nil, fmt.Errorf("invalid saga step %q", stepName)
 			}
 			fmt.Fprintf(&steps, "\t\t{Name: %q, ForwardTopic: %q, CompensateTopic: %q, Timeout: 5 * time.Second, MaxAttempts: 5, BackoffMin: 100 * time.Millisecond, BackoffMax: 5 * time.Second}, // %s\n", stepSnake, snake+"."+stepSnake, snake+"."+stepSnake+".compensate", stepPascal)
-			fmt.Fprintf(&subscribers, "\nfunc Subscribe%s(ctx context.Context, client fnats.IJetStream, transport *saga.JetStreamPublisher, inbox *saga.MongoCommandInbox, stream, durable string, handler saga.StepHandler) (fnats.IJetStreamSubscription, error) {\n\treturn saga.SubscribeStep(ctx, client, transport, inbox, saga.StepConsumerConfig{Stream: stream, Durable: durable, Topic: %q}, handler)\n}\n\nfunc Subscribe%sCompensation(ctx context.Context, client fnats.IJetStream, transport *saga.JetStreamPublisher, inbox *saga.MongoCommandInbox, stream, durable string, handler saga.StepHandler) (fnats.IJetStreamSubscription, error) {\n\treturn saga.SubscribeStep(ctx, client, transport, inbox, saga.StepConsumerConfig{Stream: stream, Durable: durable, Topic: %q}, handler)\n}\n", stepPascal, snake+"."+stepSnake, stepPascal, snake+"."+stepSnake+".compensate")
+			fmt.Fprintf(&subscribers, "\nfunc Subscribe%s(ctx context.Context, client fnats.IJetStream, transport *saga.JetStreamPublisher, inbox *saga.MongoCommandInbox, stream, durable string, handler saga.StepHandler) (fnats.IJetStreamSubscription, error) {\n\treturn saga.SubscribeMongoStep(ctx, client, transport, inbox, saga.StepConsumerConfig{Stream: stream, Durable: durable, Topic: %q}, handler)\n}\n\nfunc Subscribe%sCompensation(ctx context.Context, client fnats.IJetStream, transport *saga.JetStreamPublisher, inbox *saga.MongoCommandInbox, stream, durable string, handler saga.StepHandler) (fnats.IJetStreamSubscription, error) {\n\treturn saga.SubscribeMongoStep(ctx, client, transport, inbox, saga.StepConsumerConfig{Stream: stream, Durable: durable, Topic: %q}, handler)\n}\n", stepPascal, snake+"."+stepSnake, stepPascal, snake+"."+stepSnake+".compensate")
 		}
 		body = fmt.Sprintf(`package %s
 

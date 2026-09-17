@@ -14,12 +14,14 @@ import (
 )
 
 // Service is the game server. It owns this process's World, the consumers
-// that turn committed effects into work (level-ups into reward mail), and the
-// matchmaker that turns waiting tickets into matches.
+// that turn committed effects into work (level-ups into reward mail), the
+// matchmaker that turns waiting tickets into matches, and the gift saga's
+// step consumers.
 type Service struct {
 	world          *world.World
 	levelUpMail    fnats.IJetStreamSubscription
 	stopMatchmaker func()
+	stopGiftSaga   func()
 }
 
 func New() *Service                    { return &Service{} }
@@ -58,6 +60,13 @@ func (s *Service) Init(registry *app.Registry) error {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	s.stopMatchmaker = stop
+	// The gift saga's step consumers (gift_saga.go): the saga Mod has
+	// started, so the stream exists and the coordinator is running.
+	stopGift, err := startGiftSaga(context.Background(), registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.stopGiftSaga = stopGift
 	// The operator surface: GM commands on the admin registry the ops Mod
 	// serves (gm.go). Registered last, when everything they call is up.
 	if err := registerGMCommands(registry); err != nil {
@@ -77,6 +86,10 @@ func (s *Service) Shutdown(context.Context) error {
 	if s.stopMatchmaker != nil {
 		s.stopMatchmaker()
 		s.stopMatchmaker = nil
+	}
+	if s.stopGiftSaga != nil {
+		s.stopGiftSaga()
+		s.stopGiftSaga = nil
 	}
 	if s.levelUpMail != nil {
 		s.levelUpMail.Drain()

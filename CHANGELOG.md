@@ -9,6 +9,8 @@
 - **生成工程一条命令起全部服务：`make dev-run` / `dev-stop` / `dev-status` / `dev-smoke`**（`deploy/dev/run.sh`，codegen 受控）。按托管服务 → 业务服务的顺序 `go build` 后起每个进程、等各自 `/readyz`，有 `cmd/accountctl` 的工程（game-demo）顺手把 sid 注册进 account；pid 与日志在 `.dev/`（已入 .gitignore）。配套：**每个服务的本机配置有自己的 ops 端口**（业务服务按名从 9100 起，托管服务接在后面；生产配置仍统一 9100），此前五个进程都监听 9100、同机只能起一个。
 - **game-demo：chat 服务进链路**。`internal/service/chat/collaborators.go` 给出写成决定的策略（world / private 开放、group 拒绝、system 只读）、唯一的 `text` 类型与授予的系统路径；`game/chatroom/` 是游戏侧契约（频道、文本校验、每进程 presence）；新协议 `SendChat`（10006）、`ChatHistory`（10007）、推送 `ChatMessage`（10101）；EnterGame 经 `PublishSystem` 在 world 频道公告登录并扇出；机器人脚本加 send_chat → wait_push → chat_history。观测配置补 account / chat 的抓取目标。
 - **`-template game` / `game-demo` 托管第五个服务：session**（`frameworkCatalog` 加 `session`：`NewMod(Release(), Metrics())`，配置 `session.key_prefix / run_ttl / request_ttl`；collaborator `Release()` 默认拒绝）。demo 给出释放器实现与副本链路：`EnterDungeon`（10010，Enter 幂等、一个 owner 一个活 run）/ `FinishDungeon`（10011，Finish 后经 AddExp 两实体事务发 100 exp，够升一级再走一遍奖励邮件）；机器人 claim_mail 后 enter_dungeon → finish_dungeon。ops 端口 session 9105，观测配置补抓取目标。
+- **game-demo：送礼 saga**（B9，`add saga` 的第一个真实使用方）。`SendGift`（10013）在发送方 Player 的 Nest 事务里检查背包并 `saga.EmitStart`（start 意图与事务同一条 WAL 记录，saga id = 发送方 + 会话 + 帧序号）；`internal/service/<game>/gift_saga.go` 四个 `SubscribeMongoStep` 步骤消费者：debit = `GiftDebit` Nest 事务（`Bag.RemoveItem`，新 errcode `item_short` 100006），补偿 = 既有 AddItem，deliver = 确认收件人进过游戏后 `mail.Send` 带附件（RequestID = IdempotencyKey）；`GiftStatus`（10014）经 `mods.ModSaga` 的 Engine 读记录；GM 加 `gm.saga.get` / `gm.saga.list`。机器人走完成路（送自己再领回）与补偿路（送给从未进游戏的玩家 1 → `compensated`），新增 `expect_gift` 自定义动作与 `send_gift_self`（`MapField` 取黑板 player_id）。边界写在文件头：Nest 提交与 inbox 回执不原子；原生路径的完成效果无人消费（core WANTED W-2026-09-17-04）。**补偿路需要 core ≥ v1.15.6**（U-0225）；framework-compat 的 released × demo 暂排除到那次发版。
+- **`add mod` / `add saga` 给已生成的配置补上新 Mod 的段**。配置在项目创建时渲染一次、此后应用自有，后加的 Mod 只能靠代码默认值——game-demo 的 saga 因此用默认 8 GiB 建流、隔离环境起不来，而配置里没有 saga 段可改。现在按缺失的顶层键把 `modCatalog` 的段追加到 `config.<svc>.yaml` 与 `.prod.example.yaml`（生产示例经同一套 `productionizeConfig` 变换），已有的键不动、重复添加无变化（`add_mod_config_promises_test.go`）。
 - **game-demo：GM 运维面**（B6）。`internal/service/game/gm.go` 在 app 的 admin 命令表注册 `gm.player.add_item` / `gm.player.add_exp` / `gm.mail.send`（可带奖励附件，`trace_id` 幂等）/ `gm.world.stats`，ops 经 `/admin/commands` `/admin/execute` 端出、token 鉴权；开发配置开 admin（`dev-gm-token`），生产示例关。`player_id` 收唯一 id 或 Mongo `_id`（完整实体 id）两种形式，响应同时给出两者——实跑时把 `_id` 当唯一 id 再包一层得到的是不存在的实体，现在按 `MatchEntityID` 识别。实跑验证：加道具落库、加 300 exp 升 2 → 5 级并计入 World 计数、带附件邮件 `trace_id` 幂等、无 token 401、坏载荷按 `command invalid` 拒绝。
 - **game-demo：技能目录**（B7）。`roost add skill Fireball` + 写好契约的 `game/skills/fireball.json`；game 服务 `Init` 用 roost-core/skill 编译整份目录 fail-fast 并记 warning 数；`SkillCatalog` 协议（10012）列出编译出的 id 与 warning 数；机器人断言。技能执行刻意不进 demo。
 - **`project next` 的进阶引导**（D16）：必做链完成后列出框架有、工程没用的能力——`add rpc`、`add saga`、attribute、`add skill`、webroute、cfggen——每条一个命令一个理由（`optional:` / `why:`），用了的不再提示。
@@ -19,6 +21,11 @@
 - **game-demo：ranked 队列**（`ScoreWindowGrouping` 的第一个使用方）。`game/matchmaking` 变成 `Pools()`：duel 按到达顺序、ranked 按等级（窗口 5，每秒放宽 5，上限 50）；`PlayerLevel` 读 handler 在 Player 锁内取等级作 ticket 的 Score；`JoinQueue` / `PollMatch` 按 `mode` 选队列（未知 mode 是 coded 拒绝）；`sweep_queues` 列出两个队列；机器人 duel 之后再排一次 ranked。
 - **game-demo：mail 服务的客户端一半**。升级奖励邮件带附件（`game/rewards/`：一个道具一叠，发件方与领取方共用编码）；新协议 `ListMail`（10008，含 `Claimable`）与 `ClaimMail`（10009：ReserveClaim → Sync_AddItem → CommitClaim，失败 CancelClaim）；机器人 add_exp 后轮询邮箱并领取，断言背包计数。README 写明 demo 未把 claim token 带进 Nest 事务的边界。
 - **game-demo 一次 `doctor` 全绿**：account 的演示 Verifier 报错文案含"is not configured"，被 doctor 的 collaborators 桩标记误判为未实现；改写文案。
+
+### Changed
+
+- **`add saga` 生成的订阅助手改调 `saga.SubscribeMongoStep`**（`SubscribeStep` 已标 Deprecated，行为相同）。
+- **game-demo 机器人 p95 阈值默认 5s → 10s**：场景现在等四条异步链（奖励邮件、两个送礼 saga、匹配），成本落在 4s 桶边，下一个桶是 8s。
 
 ### Fixed
 

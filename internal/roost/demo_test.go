@@ -211,7 +211,10 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		"internal/service/session/collaborators.go", "protocol/def/enter_dungeon.go", "protocol/def/finish_dungeon.go", "game/handler/player_level.go",
 		"game/controllers/player/enter_dungeon.go", "game/controllers/player/finish_dungeon.go",
 		"game/skills/fireball.json", "game/skills/catalog.go", "protocol/def/skill_catalog.go", "game/controllers/player/skill_catalog.go",
-		"internal/service/game/gm.go"} {
+		"internal/service/game/gm.go",
+		"saga/gift_item/definition.go", "game/gift/gift.go", "game/handler/start_gift.go", "game/handler/gift_debit.go",
+		"protocol/def/send_gift.go", "protocol/def/gift_status.go", "game/controllers/player/send_gift.go", "game/controllers/player/gift_status.go",
+		"internal/service/game/gift_saga.go", "internal/errors/item_short.go"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("demo did not write %s: %v", rel, err)
 		}
@@ -239,6 +242,26 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	}
 	if cfg := read("configs/service/config.game.prod.example.yaml"); !strings.Contains(cfg, "admin_enabled: false") {
 		t.Errorf("production example config enables admin")
+	}
+	// The gift saga: the saga mod on the game service with its config section
+	// (added after the configs were rendered — the generic add-mod gap the
+	// live run found), the definition registered in the manifest, both robot
+	// paths in the scenario, and the step consumers using the non-deprecated
+	// Mongo step subscription.
+	if manifest := read("roost.yaml"); !strings.Contains(manifest, "- gift_item") || !strings.Contains(manifest, "- saga") {
+		t.Errorf("manifest does not carry the gift_item saga and the saga mod:\n%s", manifest)
+	}
+	if cfg := read("configs/service/config.game.yaml"); !strings.Contains(cfg, "\nsaga:\n") {
+		t.Errorf("game config has no saga section although the demo put the saga mod on it")
+	}
+	if scenario := read("loadtest/scenarios/demo.yaml"); !strings.Contains(scenario, "send_gift_self") || !strings.Contains(scenario, "status: compensated") || !strings.Contains(scenario, "to_player_id: 1") {
+		t.Errorf("the robot scenario does not exercise both gift saga paths")
+	}
+	if definition := read("saga/gift_item/definition.go"); !strings.Contains(definition, "saga.SubscribeMongoStep(") || strings.Contains(definition, "saga.SubscribeStep(") {
+		t.Errorf("generated saga definition still uses the deprecated SubscribeStep")
+	}
+	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, "giftitem.SubscribeDebitCompensation") || !strings.Contains(steps, "RequestID: \"gift:\" + command.IdempotencyKey") {
+		t.Errorf("gift saga steps do not subscribe the compensation or key the mail by the command's idempotency key")
 	}
 	// player_id takes either id an operator has at hand: the unique id the
 	// client sees or the full entity id Mongo stores as _id. Re-wrapping a

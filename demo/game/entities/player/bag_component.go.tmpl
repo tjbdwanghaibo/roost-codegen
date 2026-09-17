@@ -74,6 +74,23 @@ func (component *BagComponent) AddItem(itemID int64, count int32) (int32, error)
 	return current + count, nil
 }
 
+// RemoveItem takes count of itemID out of the bag and returns what is left.
+// Not having enough is a coded failure (item_short), the same shape AddItem
+// gives for a full stack: the caller decides what it means (the gift saga
+// turns it into a failed saga with nothing to compensate).
+func (component *BagComponent) RemoveItem(itemID int64, count int32) (int32, error) {
+	if count <= 0 {
+		return 0, errcode.Wrap(apperrors.ErrItemCount, nil, "item_id", itemID, "count", count)
+	}
+	dao := component.Owner().Dao()
+	current, _ := dao.GetItems(itemID)
+	if current < count {
+		return 0, errcode.Wrap(apperrors.ErrItemShort, nil, "item_id", itemID, "have", current, "want", count)
+	}
+	dao.SetItems(itemID, current-count)
+	return current - count, nil
+}
+
 // ItemCount is the current amount held for itemID.
 func (component *BagComponent) ItemCount(itemID int64) int32 {
 	count, _ := component.Owner().Dao().GetItems(itemID)

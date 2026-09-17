@@ -149,6 +149,26 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
   要"恰好一次"的做法是在 AddExp 事务里把 run id 记到 Player 上再发。
 - session 进程默认不扫过期 run（`sweepOwners` 返回空并在日志里说明）：过期 run 由同一 owner 的下一次 Enter 懒解决。要及时释放资源的部署自己接 owner 列表。
 
+## 跨域事务：送礼 saga（debit → deliver，失败补偿）
+
+送礼把一个道具从 A 的背包挪进 B 的邮箱：背包是 A 的 Player 上的 Nest 事务，邮件是对 mail 服务的调用——两个事务域，
+所以是 saga（`roost add saga GiftItem -service game -steps debit,deliver` 的产物，`saga/gift_item/definition.go`）。
+
+- **开始**：`SendGift`（10013）→ `StartGift` Nest 事务：在 A 的锁内检查背包够不够，然后 `saga.EmitStart`——start 意图和这次事务同一条 WAL 记录，
+  Data Engine outbox 把它送到协调器（saga Mod 在 game 进程里，`saga.start` 效果）。saga id = 发送方 + 会话 + 帧序号，同一帧重发不会开第二个 saga。
+  这步不动背包：检查是建议性的，道具在 debit 之前被花掉，debit 会以同一个 coded 错误拒绝，saga 以 failed 结束、无事可补。
+- **步骤**（`internal/service/game/gift_saga.go`，四个 `SubscribeMongoStep` 消费者）：debit = `GiftDebit` 事务（`Bag.RemoveItem`，不够是 `item_short`）；
+  debit 的补偿 = 既有的 `AddItem`；deliver = 查 Player 集合确认收件人进过游戏，再 `mail.Send` 带附件（RequestID = 命令的 IdempotencyKey，重投不重发）；
+  deliver 的补偿 = 什么也不做（邮件不撤回）。业务拒绝返回 `Success:false, Retryable:false`，协调器随即补偿已完成的步骤；基础设施错误返回 error 让投递退避重试。
+- **状态**：`GiftStatus`（10014）经 saga Engine 读记录。刚发完轮询会得到 `unknown`——start 意图还在 outbox → 协调器的路上；非本人的 saga 也是 `unknown`。
+  终态：`completed` / `compensated` / `failed` / `manual_required`（补偿自己也拒绝了，例如退回时叠加已满——运维在 `gm.saga.list` 里看到并决定）。
+- **机器人**：送给自己（背包 −1）→ 轮询到终态 → `expect_gift completed` → 领邮件（背包 +1）；再送给玩家 1（从未进游戏）→ deliver 拒绝 → debit 补偿 →
+  `expect_gift compensated`。两条路都在 `loadtest -count 6` 里跑。
+- **边界**：步骤的幂等靠 Mongo inbox 先占命令 id；debit / 退回是 Nest 事务，不在那个 Mongo 事务里——进程死在 Nest 提交与 inbox 提交之间，重投会再扣一次
+  （和 claim token 那条一样的边界）。saga 包的原生路径（`SubscribeDataEngineStep` + `inbox.Bind` 进 Nest 事务）把回执和变更一起提交，能关掉这个窟窿，
+  但它的完成效果目前没有消费者（roost-core `docs/bug/WANTED.md` W-2026-09-17-04），demo 没用。
+- **需要 core ≥ v1.15.6**：此前 Mongo 存储上任何步骤拒绝都进不了补偿（U-0225，`step result timeout` 反复出现），送给玩家 1 那一段会卡住。
+
 ## 技能目录：启动时编译，客户端可查
 
 `game/skills/fireball.json` 是 demo 的一个技能定义（`roost add skill` 生成骨架，再写上契约说明），`game/skills/catalog.go` 把目录下的 JSON
@@ -169,7 +189,11 @@ curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/exe
 curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute \
   -d '{"name":"gm.mail.send","trace_id":"t2","payload":{"player_id":100866,"subject":"补偿","body":"抱歉","item_id":1002,"count":5}}'
 curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute -d '{"name":"gm.world.stats"}'
+curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute -d '{"name":"gm.saga.list","payload":{"status":"manual_required","limit":20}}'
+curl -s -H 'X-Admin-Token: dev-gm-token' -X POST http://127.0.0.1:9100/admin/execute -d '{"name":"gm.saga.get","payload":{"id":"gift-100866-demo-100866-1789-15"}}'
 ```
+
+- `gm.saga.list` / `gm.saga.get` 读 saga 协调器的记录（状态、当前步、最后一次错误、状态数据）；`manual_required` 是需要人的那一类。
 
 - `player_id` 两种形式都收：客户端看到的唯一 id（`EnterGameResponse.PlayerID`，也是邮件的收件人 id），或 Mongo 里 Player 文档的 `_id`（完整实体 id，多了 kind / category 位）。
   两者不同：把 `_id` 当唯一 id 再包一层会得到一个不存在的实体（`entity aggregate not found`）。响应里同时给出 `player_id`（唯一 id）与 `entity_id`。

@@ -1,6 +1,8 @@
 # One robot's life: connect and hand over the credential, make sure the Player
 # exists, chat on the world channel and read it back, add an item, earn
-# exp (the reward mail it sends is then listed and claimed), clear a dungeon run,
+# exp (the reward mail it sends is then listed and claimed), gift an item to
+# itself through the saga and claim it back, watch a gift to nobody get
+# compensated, clear a dungeon run,
 # queue for a duel and then a ranked match, earn enough exp to level up (which sends a reward mail
 # through the effect chain), queue for a duel until matched, read the World's
 # counters. Run an even number of robots: duels need pairs. Param keys are the request fields' snake_case
@@ -61,6 +63,53 @@ scenarios:
                   param:
                     limit: 20
         - action: claim_mail
+        # A gift to oneself: the saga debits the Bag (step 1), then mails
+        # the item (step 2) — two transaction domains, one durable
+        # operation. The saga starts asynchronously (start effect → outbox →
+        # coordinator), so poll its status until terminal, expect it
+        # completed, then the gift mail is in the box: list and claim it,
+        # which puts the item back in the Bag.
+        - action: send_gift_self
+          param:
+            item_id: 1001
+            count: 1
+        - retry:
+            times: 40
+            node:
+              sequence:
+                - wait: 250ms
+                - action: gift_status
+        - action: expect_gift
+          param:
+            status: completed
+        - retry:
+            times: 20
+            node:
+              sequence:
+                - wait: 250ms
+                - action: list_mail
+                  param:
+                    limit: 20
+        - action: claim_mail
+        # The compensation path: player 1 has never entered the game, so the
+        # deliver step refuses, and the coordinator runs debit's
+        # compensation — the item is back in the Bag, the saga ends
+        # compensated. The second claim above left the Bag at one potion,
+        # which this round-trip leaves untouched.
+        - action: send_gift
+          param:
+            to_player_id: 1
+            item_id: 1001
+            count: 1
+        - retry:
+            times: 40
+            node:
+              sequence:
+                - wait: 250ms
+                - action: gift_status
+        - action: expect_gift
+          param:
+            status: compensated
         # A dungeon run with the session service: open it (one live run per
         # player, idempotent per frame), then resolve it as a clear — which
         # grants exp through the same AddExp transaction and releases what

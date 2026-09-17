@@ -13,6 +13,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/saga"
 	"github.com/tjbdwanghaibo/roost-kit/mods"
 	svcmail "github.com/tjbdwanghaibo/roost-kit/service/mail"
 )
@@ -27,7 +28,7 @@ import (
 // listener binds 127.0.0.1 unless a deployment says otherwise.
 //
 // Every command does what the game does: the same Nest Senders the endpoints
-// use, the same mail client. A GM grant is a transaction on the Player like
+// use, the same mail client, the saga Engine the coordinator runs on. A GM grant is a transaction on the Player like
 // any other, so it shows up in the WAL, the dirty tracking and the effects
 // (a gm.player.add_exp that levels the player up sends the reward mail).
 //
@@ -38,7 +39,37 @@ const (
 	gmAddExp    = "gm.player.add_exp"
 	gmMailSend  = "gm.mail.send"
 	gmWorldStat = "gm.world.stats"
+	gmSagaGet   = "gm.saga.get"
+	gmSagaList  = "gm.saga.list"
 )
+
+type gmSagaGetPayload struct {
+	ID string `json:"id"`
+}
+
+type gmSagaListPayload struct {
+	Type   string `json:"type,omitempty"`
+	Status string `json:"status,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+}
+
+// gmSagaStatuses is the operator's spelling of a saga status; the same words
+// Status.String() prints.
+var gmSagaStatuses = map[string]saga.Status{
+	"pending": saga.StatusPending, "waiting": saga.StatusWaiting, "compensating": saga.StatusCompensating,
+	"completed": saga.StatusCompleted, "compensated": saga.StatusCompensated, "failed": saga.StatusFailed,
+	"manual_required": saga.StatusManualRequired,
+}
+
+// gmSagaRecord is how a saga record reads in a command result.
+func gmSagaRecord(record saga.Record) map[string]any {
+	return map[string]any{
+		"id": record.ID, "type": record.Type, "business_key": record.BusinessKey,
+		"status": record.Status.String(), "phase": record.Phase.String(), "step": record.Step, "completed_steps": record.CompletedSteps,
+		"attempt": record.Attempt, "last_error": record.LastError, "data": string(record.Data),
+		"next_run_at": record.NextRunAt, "updated_at": record.UpdatedAt,
+	}
+}
 
 type gmAddItemPayload struct {
 	PlayerID int64 `json:"player_id"`
@@ -72,6 +103,10 @@ func registerGMCommands(registry *app.Registry) error {
 	mailer, err := Mail(registry)
 	if err != nil {
 		return fmt.Errorf("gm: %w", err)
+	}
+	sagas, ok := app.Lookup[*saga.Engine](registry, mods.ModSaga)
+	if !ok || sagas == nil {
+		return fmt.Errorf("gm: saga engine %q is unavailable", mods.ModSaga)
 	}
 	worldID, err := entity.BuildEntityID(lifecycle.WorldUniqueID, world.EntityKindWorld)
 	if err != nil {
@@ -172,6 +207,54 @@ func registerGMCommands(registry *app.Registry) error {
 					return admin.Result{}, err
 				}
 				return admin.Result{Data: map[string]any{"mail_id": envelope.ID, "recipients": envelope.Recipients}}, nil
+			},
+		},
+		{
+			Name:        gmSagaGet,
+			Description: "read one saga record: {id}; the gift saga's id is what SendGift returned",
+			Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
+				payload, err := admin.DecodePayload[gmSagaGetPayload](cmd)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				if payload.ID == "" {
+					return admin.Result{}, fmt.Errorf("%w: id is required", admin.ErrCommandInvalid)
+				}
+				record, err := sagas.Get(ctx, payload.ID)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: gmSagaRecord(record)}, nil
+			},
+		},
+		{
+			Name:        gmSagaList,
+			Description: "list saga records: {type?, status?, limit?}; status is one of pending, waiting, compensating, completed, compensated, failed, manual_required — the last is what needs an operator",
+			Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
+				payload, err := admin.DecodePayload[gmSagaListPayload](cmd)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				query := saga.Query{Type: payload.Type, Limit: payload.Limit}
+				if query.Limit <= 0 || query.Limit > 200 {
+					query.Limit = 50
+				}
+				if payload.Status != "" {
+					status, ok := gmSagaStatuses[payload.Status]
+					if !ok {
+						return admin.Result{}, fmt.Errorf("%w: unknown status %q", admin.ErrCommandInvalid, payload.Status)
+					}
+					query.Statuses = []saga.Status{status}
+				}
+				records, err := sagas.List(ctx, query)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				listed := make([]map[string]any, 0, len(records))
+				for _, record := range records {
+					listed = append(listed, gmSagaRecord(record))
+				}
+				return admin.Result{Data: map[string]any{"count": len(listed), "sagas": listed}}, nil
 			},
 		},
 		{

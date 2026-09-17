@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"go/format"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -520,16 +522,131 @@ func renderServiceConfig(m Manifest, service string, production bool) string {
 		return strings.Replace(b.String(), "ops:\n  enabled: true\n  addr: 127.0.0.1:9100",
 			fmt.Sprintf("ops:\n  enabled: true\n  addr: 127.0.0.1:%d", opsPort(m, service)), 1)
 	}
-	if production {
-		value := strings.ReplaceAll(strings.ReplaceAll(b.String(), "127.0.0.1", "CHANGE_ME"), "localhost", "CHANGE_ME")
-		value = strings.Replace(value,
-			"ops:\n  enabled: true\n  addr: CHANGE_ME:9100",
-			"ops:\n  enabled: true\n  addr: 0.0.0.0:9100", 1)
-		value = strings.ReplaceAll(value, "replicas: 1", "replicas: 3")
-		value = strings.ReplaceAll(value, "file: true", "file: false")
-		return strings.ReplaceAll(value, "dir: data/wal/dataengine", "dir: /var/lib/roost/wal")
+	return productionizeConfig(b.String())
+}
+
+// productionizeConfig turns a starter (loopback, single replica, local WAL)
+// configuration text into the production example: every address becomes a
+// CHANGE_ME the operator must fill, ops listens on all interfaces, replicated
+// stores get three replicas, logs go to stdout only. It is applied to the
+// whole rendered file at project creation and to each section a Mod added
+// later appends (appendModConfigSections), so the two never diverge.
+func productionizeConfig(value string) string {
+	value = strings.ReplaceAll(strings.ReplaceAll(value, "127.0.0.1", "CHANGE_ME"), "localhost", "CHANGE_ME")
+	value = strings.Replace(value,
+		"ops:\n  enabled: true\n  addr: CHANGE_ME:9100",
+		"ops:\n  enabled: true\n  addr: 0.0.0.0:9100", 1)
+	value = strings.ReplaceAll(value, "replicas: 1", "replicas: 3")
+	value = strings.ReplaceAll(value, "file: true", "file: false")
+	return strings.ReplaceAll(value, "dir: data/wal/dataengine", "dir: /var/lib/roost/wal")
+}
+
+// appendModConfigSections writes the configuration sections of the Mods a
+// service gained between two manifests into that service's two config files.
+// The files are rendered once at project creation and application-owned
+// afterwards (renderServiceConfig), so a Mod added later — `add mod`, or
+// `add saga` putting the saga Mod on a service — would otherwise run on its
+// code defaults with nothing in the file to change. The game-demo's saga did
+// exactly that: its default 8 GiB stream did not fit a developer JetStream
+// and the process died at start with no saga: block to edit.
+//
+// Only top-level keys the file does not have are appended (a Mod's section
+// may carry several, dataengine's has three), so hand edits stay and a
+// repeat is a no-op. The production example gets the same transforms the
+// whole file got. It returns the files it changed.
+func appendModConfigSections(root string, before, after Manifest, service string) ([]string, error) {
+	previous, _ := resolveMods(append(append([]string{}, before.SharedMods...), effectiveServiceMods(before, service)...))
+	current, _ := resolveMods(append(append([]string{}, after.SharedMods...), effectiveServiceMods(after, service)...))
+	var sections []string
+	for _, name := range current {
+		if !contains(previous, name) && modCatalog[name].Config != "" {
+			sections = append(sections, modCatalog[name].Config)
+		}
 	}
-	return b.String()
+	if len(sections) == 0 {
+		return nil, nil
+	}
+	var changed []string
+	for _, target := range []struct {
+		rel        string
+		production bool
+	}{
+		{"configs/service/config." + service + ".yaml", false},
+		{"configs/service/config." + service + ".prod.example.yaml", true},
+	} {
+		path := filepath.Join(root, filepath.FromSlash(target.rel))
+		raw, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return changed, err
+		}
+		body := string(raw)
+		if body != "" && !strings.HasSuffix(body, "\n") {
+			body += "\n"
+		}
+		appended := false
+		for _, section := range sections {
+			for _, block := range topLevelConfigBlocks(section) {
+				if strings.HasPrefix(body, block.key+":") || strings.Contains(body, "\n"+block.key+":") {
+					continue
+				}
+				text := block.text
+				if target.production {
+					text = productionizeConfig(text)
+				}
+				body += text
+				appended = true
+			}
+		}
+		if !appended {
+			continue
+		}
+		if err := writeAtomic(path, []byte(body), 0o644); err != nil {
+			return changed, err
+		}
+		changed = append(changed, target.rel)
+	}
+	return changed, nil
+}
+
+type configBlock struct {
+	key  string
+	text string
+}
+
+// topLevelConfigBlocks splits a catalog config section into its top-level
+// keys: a line that starts in column one begins a block, indented lines
+// belong to the block above.
+func topLevelConfigBlocks(section string) []configBlock {
+	var blocks []configBlock
+	for _, line := range strings.SplitAfter(section, "\n") {
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") && !strings.HasPrefix(line, "#") && strings.Contains(line, ":") {
+			blocks = append(blocks, configBlock{key: strings.TrimSpace(line[:strings.Index(line, ":")]), text: line})
+			continue
+		}
+		if len(blocks) == 0 {
+			blocks = append(blocks, configBlock{})
+		}
+		blocks[len(blocks)-1].text += line
+	}
+	return blocks
+}
+
+// manifestWithService is m with one service's spec replaced, without touching
+// m's own map: the "before" view appendModConfigSections compares against.
+func manifestWithService(m Manifest, service string, spec ServiceSpec) Manifest {
+	services := make(map[string]ServiceSpec, len(m.Services))
+	for name, value := range m.Services {
+		services[name] = value
+	}
+	services[service] = spec
+	m.Services = services
+	return m
 }
 
 func sortedServiceNames(m Manifest) []string {

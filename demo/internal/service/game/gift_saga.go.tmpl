@@ -1,0 +1,250 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/gift"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/rewards"
+	giftitem "{{MODULE}}/saga/gift_item"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
+	fnats "github.com/tjbdwanghaibo/roost-core/nats"
+	corenest "github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/saga"
+	"github.com/tjbdwanghaibo/roost-kit/mods"
+	svcmail "github.com/tjbdwanghaibo/roost-kit/service/mail"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// The gift saga's steps. The coordinator (the saga Mod in this process)
+// publishes one command per step on the saga stream; the four consumers
+// below each take one topic — debit, its compensation, deliver, its
+// compensation — run the business, and publish the completion the
+// coordinator waits for.
+//
+// What a step is allowed to be: idempotent per command. SubscribeMongoStep
+// wraps the handler in a Mongo transaction that first reserves the command
+// id in an inbox collection, so a redelivered command (JetStream retries
+// until the completion is published) replays the stored completion instead
+// of running the handler again. The two side effects here are not Mongo
+// writes in that transaction, so each has its own second layer:
+//
+//   - the mail service deduplicates Send by RequestID, and the RequestID is
+//     the command's IdempotencyKey (stable across attempts of one step);
+//   - the Nest transactions (debit, refund) have no such key. If this
+//     process dies after the Nest commit and before the inbox transaction
+//     commits, the redelivery runs the debit again. That is the demo's
+//     stated boundary, the same one claim_mail has; the saga package's
+//     native path (SubscribeDataEngineStep + inbox.Bind inside the Nest
+//     handler) closes it by committing the receipt with the mutation, and
+//     is the next step for a project that needs it.
+//
+// How a step reports: a coded business refusal (the sender no longer has
+// the items, the recipient's mailbox is full) is a completion with
+// Success=false and Retryable=false — the coordinator then compensates the
+// steps that completed. Anything else (Mongo, bus, Nest unavailable) is
+// returned as an error so the delivery is retried with backoff.
+const (
+	giftSagaInbox   = "_{{GAME_SERVICE}}_gift_step_inbox"
+	giftSagaDurable = "{{GAME_SERVICE}}-gift"
+	// giftRecipientCollection is the Player DAO's collection: the recipient
+	// check reads it directly (a player who has never entered the game has
+	// no document) rather than loading a foreign Player into this process.
+	giftRecipientCollection = "player"
+	giftRecipientNotFound   = "recipient has never entered the game"
+)
+
+// startGiftSaga subscribes the four step consumers and returns what drains
+// them. It runs in Init, after the saga Mod has started (the stream exists).
+func startGiftSaga(ctx context.Context, registry *app.Registry) (func(), error) {
+	jetstream, ok := app.Lookup[fnats.IJetStream](registry, mods.ModNatsJetStream)
+	if !ok || jetstream == nil {
+		return nil, fmt.Errorf("gift saga: capability %q not found", mods.ModNatsJetStream)
+	}
+	mongoClient, ok := app.Lookup[fmongo.IMongo](registry, mods.ModMongo)
+	if !ok || mongoClient == nil {
+		return nil, fmt.Errorf("gift saga: capability %q not found", mods.ModMongo)
+	}
+	nestClient, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || nestClient == nil {
+		return nil, fmt.Errorf("gift saga: nest client is unavailable")
+	}
+	mailer, err := Mail(registry)
+	if err != nil {
+		return nil, fmt.Errorf("gift saga: %w", err)
+	}
+	prefix, stream, sagaDatabase := sagaSettings(registry)
+	gameDatabase, _, _ := effectSettings(registry)
+	// The same prefix the coordinator publishes commands under; the
+	// publisher here carries the completions back on it.
+	transport, err := saga.NewJetStreamPublisher(jetstream, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("gift saga: %w", err)
+	}
+	inbox, err := saga.NewMongoCommandInbox(mongoClient, sagaDatabase, giftSagaInbox)
+	if err != nil {
+		return nil, fmt.Errorf("gift saga: %w", err)
+	}
+	steps := giftSteps{nest: nestClient, mailer: mailer, mongo: mongoClient, gameDatabase: gameDatabase}
+	subscriptions := make([]fnats.IJetStreamSubscription, 0, 4)
+	stop := func() {
+		for _, subscription := range subscriptions {
+			subscription.Drain()
+		}
+	}
+	for _, consumer := range []struct {
+		name      string
+		subscribe func(context.Context, fnats.IJetStream, *saga.JetStreamPublisher, *saga.MongoCommandInbox, string, string, saga.StepHandler) (fnats.IJetStreamSubscription, error)
+		handler   saga.StepHandler
+	}{
+		{"debit", giftitem.SubscribeDebit, steps.debit},
+		{"debit-undo", giftitem.SubscribeDebitCompensation, steps.refund},
+		{"deliver", giftitem.SubscribeDeliver, steps.deliver},
+		{"deliver-undo", giftitem.SubscribeDeliverCompensation, steps.nothingToUndo},
+	} {
+		subscription, err := consumer.subscribe(ctx, jetstream, transport, inbox, stream, giftSagaDurable+"-"+consumer.name, consumer.handler)
+		if err != nil {
+			stop()
+			return nil, fmt.Errorf("gift saga: subscribe %s: %w", consumer.name, err)
+		}
+		subscriptions = append(subscriptions, subscription)
+	}
+	return stop, nil
+}
+
+type giftSteps struct {
+	nest         corenest.Client
+	mailer       svcmail.Mail
+	mongo        fmongo.IMongo
+	gameDatabase string
+}
+
+// debit takes the items out of the sender's Bag. The sender may have spent
+// them since SendGift checked: that is the coded refusal item_short, and a
+// failed first step has nothing to compensate.
+func (steps giftSteps) debit(ctx context.Context, command saga.Command) (saga.Completion, error) {
+	state, entityID, err := giftTarget(command, func(state gift.State) int64 { return state.From })
+	if err != nil {
+		return refuse(err.Error()), nil
+	}
+	if _, err := syncsender.NewGiftDebitSender(steps.nest).Sync_GiftDebit(ctx, entityID, state.ItemID, state.Count); err != nil {
+		if code, reason := errcode.ClientError(err); code != errcode.CodeInternal {
+			return refuse(reason), nil
+		}
+		return saga.Completion{}, err
+	}
+	return saga.Completion{Success: true}, nil
+}
+
+// refund is debit's compensation: the same AddItem transaction the endpoint
+// runs. It can refuse too — the stack filled up meanwhile — and a refused
+// compensation is what the coordinator marks manual_required for: an
+// operator sees it in gm.saga.list and decides.
+func (steps giftSteps) refund(ctx context.Context, command saga.Command) (saga.Completion, error) {
+	state, entityID, err := giftTarget(command, func(state gift.State) int64 { return state.From })
+	if err != nil {
+		return refuse(err.Error()), nil
+	}
+	if _, err := syncsender.NewAddItemSender(steps.nest).Sync_AddItem(ctx, entityID, state.ItemID, state.Count); err != nil {
+		if code, reason := errcode.ClientError(err); code != errcode.CodeInternal {
+			return refuse(reason), nil
+		}
+		return saga.Completion{}, err
+	}
+	return saga.Completion{Success: true}, nil
+}
+
+// deliver mails the item to the recipient. A recipient who has never
+// entered the game has no Player document and is refused — the case that
+// makes the coordinator compensate the debit. The mail service's own coded
+// refusals (mailbox full) do the same.
+func (steps giftSteps) deliver(ctx context.Context, command saga.Command) (saga.Completion, error) {
+	state, entityID, err := giftTarget(command, func(state gift.State) int64 { return state.To })
+	if err != nil {
+		return refuse(err.Error()), nil
+	}
+	var recipient struct {
+		ID int64 `bson:"_id"`
+	}
+	if err := steps.mongo.Database(steps.gameDatabase).Collection(giftRecipientCollection).FindOne(ctx, bson.M{"_id": entityID}, &recipient); err != nil {
+		if errors.Is(err, fmongo.ErrNotFound) {
+			return refuse(giftRecipientNotFound), nil
+		}
+		return saga.Completion{}, err
+	}
+	attachment, err := rewards.Encode(rewards.Reward{ItemID: state.ItemID, Count: state.Count})
+	if err != nil {
+		return refuse(err.Error()), nil
+	}
+	_, err = steps.mailer.Send(ctx, svcmail.SendRequest{
+		Audience: svcmail.AudienceDirect, Recipients: []int64{state.To},
+		Subject: gift.Subject(state), Body: gift.Body(state), Attachment: attachment,
+		ExpiresInSeconds: gift.MailExpiresIn,
+		// One mail per step, however many times the command is delivered.
+		RequestID: "gift:" + command.IdempotencyKey,
+	})
+	if err != nil {
+		if code, reason := errcode.ClientError(err); code != errcode.CodeInternal {
+			return refuse(reason), nil
+		}
+		return saga.Completion{}, err
+	}
+	return saga.Completion{Success: true}, nil
+}
+
+// nothingToUndo is deliver's compensation. A sent mail is not recalled; the
+// definition names a compensation topic for every step, so this one
+// acknowledges and moves on. It only ever runs if a step after deliver is
+// added and fails.
+func (giftSteps) nothingToUndo(_ context.Context, command saga.Command) (saga.Completion, error) {
+	slog.Warn("gift saga: deliver compensation requested; mail is not recalled", "saga_id", command.SagaID)
+	return saga.Completion{Success: true}, nil
+}
+
+// giftTarget decodes the command's state and builds the entity id of the
+// player the step acts on.
+func giftTarget(command saga.Command, pick func(gift.State) int64) (gift.State, int64, error) {
+	state, err := gift.Decode(command.Payload)
+	if err != nil {
+		return gift.State{}, 0, err
+	}
+	entityID, err := entity.BuildEntityID(pick(state), player.EntityKindPlayer)
+	if err != nil {
+		return gift.State{}, 0, err
+	}
+	return state, entityID, nil
+}
+
+// refuse is a non-retryable failure: the coordinator moves to compensation.
+func refuse(reason string) saga.Completion {
+	return saga.Completion{Success: false, Retryable: false, Error: reason}
+}
+
+// sagaSettings reads what the saga Mod was configured with, with the Mod's
+// own defaults, so the step consumers meet the coordinator on the same
+// stream and subject prefix.
+func sagaSettings(registry *app.Registry) (prefix, stream, database string) {
+	prefix, stream, database = "roost.saga", "ROOST_SAGA", "saga"
+	cfg := registry.Config()
+	if cfg == nil {
+		return prefix, stream, database
+	}
+	if value := strings.Trim(strings.TrimSpace(cfg.GetString("saga.subject_prefix")), "."); value != "" {
+		prefix = value
+	}
+	if value := strings.TrimSpace(cfg.GetString("saga.stream")); value != "" {
+		stream = value
+	}
+	if value := strings.TrimSpace(cfg.GetString("saga.database")); value != "" {
+		database = value
+	}
+	return prefix, stream, database
+}

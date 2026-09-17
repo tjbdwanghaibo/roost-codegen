@@ -58,7 +58,7 @@ func main() {
 	// The scenario deliberately waits for matchmaking (poll every 250ms while
 	// the matchmaker ticks every 500ms), so a whole-scenario p95 of a few
 	// hundred milliseconds is the floor, not a regression.
-	maxP95 := flag.Float64("max-p95", 5.0, "threshold: scenario cost p95, seconds; a regression bound, not an SLO — the scenario waits on two asynchronous chains (reward mail, match) and the cost histogram has power-of-two buckets")
+	maxP95 := flag.Float64("max-p95", 10.0, "threshold: scenario cost p95, seconds; a regression bound, not an SLO — the scenario waits on four asynchronous chains (reward mail, two gift sagas, match) and the cost histogram has power-of-two buckets, so a healthy run sits in the 4s bucket and the next one is 8s")
 	metricsAddr := flag.String("metrics-addr", "", "serve this process's metrics at http://<addr>/metrics for Prometheus (deploy/dev/observability scrapes 127.0.0.1:9300)")
 	accountNATS := flag.String("account-nats", "nats://127.0.0.1:4222", "NATS url of the bus the account service answers on; robots log in for real (Login → CreateRole → SelectRole) and present session tickets")
 	natsPrefix := flag.String("nats-prefix", "roost", "bus subject prefix (nats.prefix in the services' configs)")
@@ -315,6 +315,49 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 		}))
 	// enter_dungeon opens a run with the session service and remembers its
 	// id for finish_dungeon (request field run_id).
+	// send_gift starts the gift saga and remembers its id for gift_status
+	// (request field saga_id). send_gift_self is the same call with the
+	// recipient taken from the blackboard's player_id: a robot knows no
+	// other robot's id, and a gift to oneself still crosses both domains
+	// (Bag debit, then a mail to claim).
+	giftStarted := action.OnResp(func(rb *robot.Context, resp *pb.SendGiftResponse) error {
+		if err := coded(resp.Code, resp.Reason); err != nil {
+			return err
+		}
+		if resp.SagaID == "" {
+			return fmt.Errorf("send_gift returned no saga id")
+		}
+		rb.Blackboard.Set("saga_id", resp.SagaID)
+		return nil
+	})
+	action.MustRegisterCall[pb.SendGiftRequest, pb.SendGiftResponse](actions, protocols, "send_gift", msgid.MsgSendGift, giftStarted)
+	action.MustRegisterCall[pb.SendGiftRequest, pb.SendGiftResponse](actions, protocols, "send_gift_self", msgid.MsgSendGift, giftStarted,
+		action.MapField[pb.SendGiftResponse]("ToPlayerID", "player_id"))
+	// gift_status fails while the saga is still running, so a retry node
+	// polls it; once terminal, the status goes on the blackboard for
+	// expect_gift to judge (a step's own OnResp cannot see scenario params).
+	action.MustRegisterCall[pb.GiftStatusRequest, pb.GiftStatusResponse](actions, protocols, "gift_status", msgid.MsgGiftStatus,
+		action.OnResp(func(rb *robot.Context, resp *pb.GiftStatusResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			switch resp.Status {
+			case "completed", "compensated", "failed", "manual_required":
+				rb.Blackboard.Set("gift_status", resp.Status)
+				rb.Blackboard.Set("gift_error", resp.LastError)
+				return nil
+			}
+			return fmt.Errorf("gift saga still %s (step %d)", resp.Status, resp.Step)
+		}))
+	actions.MustRegister(action.Func{ActionName: "expect_gift", Handle: func(_ context.Context, rb *robot.Context, param any) error {
+		want := action.ParamsOf(rb, param).String("status", "completed")
+		got, _ := rb.Blackboard.Get("gift_status")
+		if got != want {
+			lastError, _ := rb.Blackboard.Get("gift_error")
+			return fmt.Errorf("gift saga ended %v, want %s (last error: %v)", got, want, lastError)
+		}
+		return nil
+	}})
 	action.MustRegisterCall[pb.EnterDungeonRequest, pb.EnterDungeonResponse](actions, protocols, "enter_dungeon", msgid.MsgEnterDungeon,
 		action.OnResp(func(rb *robot.Context, resp *pb.EnterDungeonResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
@@ -450,6 +493,10 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalFinishDungeonRequest(message)
 	case *pb.SkillCatalogRequest:
 		return pb.MarshalSkillCatalogRequest(message)
+	case *pb.SendGiftRequest:
+		return pb.MarshalSendGiftRequest(message)
+	case *pb.GiftStatusRequest:
+		return pb.MarshalGiftStatusRequest(message)
 	default:
 		return nil, fmt.Errorf("pb codec: no marshal for %T", value)
 	}
@@ -531,6 +578,18 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 		*message = *decoded
 	case *pb.SkillCatalogResponse:
 		decoded, err := pb.UnmarshalSkillCatalogResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.SendGiftResponse:
+		decoded, err := pb.UnmarshalSendGiftResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.GiftStatusResponse:
+		decoded, err := pb.UnmarshalGiftStatusResponse(data)
 		if err != nil {
 			return err
 		}
