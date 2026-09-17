@@ -6,6 +6,14 @@
 
 ### Added
 
+- **生成工程一条命令起全部服务：`make dev-run` / `dev-stop` / `dev-status` / `dev-smoke`**（`deploy/dev/run.sh`，codegen 受控）。按托管服务 → 业务服务的顺序 `go build` 后起每个进程、等各自 `/readyz`，有 `cmd/accountctl` 的工程（game-demo）顺手把 sid 注册进 account；pid 与日志在 `.dev/`（已入 .gitignore）。配套：**每个服务的本机配置有自己的 ops 端口**（业务服务按名从 9100 起，托管服务接在后面；生产配置仍统一 9100），此前五个进程都监听 9100、同机只能起一个。
+- **game-demo：chat 服务进链路**。`internal/service/chat/collaborators.go` 给出写成决定的策略（world / private 开放、group 拒绝、system 只读）、唯一的 `text` 类型与授予的系统路径；`game/chatroom/` 是游戏侧契约（频道、文本校验、每进程 presence）；新协议 `SendChat`（10006）、`ChatHistory`（10007）、推送 `ChatMessage`（10101）；EnterGame 经 `PublishSystem` 在 world 频道公告登录并扇出；机器人脚本加 send_chat → wait_push → chat_history。观测配置补 account / chat 的抓取目标。
+- **game-demo 一次 `doctor` 全绿**：account 的演示 Verifier 报错文案含"is not configured"，被 doctor 的 collaborators 桩标记误判为未实现；改写文案。
+
+### Fixed
+
+- **game-demo 机器人 transport 把服务端推送当成响应**（`loadtest/playertcp/conn.go`）。服务端给推送编的是自己的会话序号，与客户端 wire 序号同起点 1，一条世界频道推送恰好带着某个在途请求的号就被当作它的响应（`response msg mismatch: got 10101 want 10000`）。现在按帧头的 server-push 标志位分类，推送一律 Seq 0。此前只有 MatchFound 一种推送、且只在 wait_push 期间到达，所以没暴露。
+
 - **`servicerpc -emit transport|assembly|all`、`-out <dir>`，`-dir` 接受 import path**（M-11，ARCH-01 / ARCH-04 收尾）。接口住在 roost-core 领域包时，core 包跑 `-emit transport`（生成物只依赖 core），kit 包跑 `-emit assembly -dir github.com/tjbdwanghaibo/roost-core/service/<x> -out .`（在 `-out` 的模块上下文里用 `go list` 解析 import path，不用写模块缓存路径）。文件头的"Regenerate with"记录实际命令。`GenerateWith(service, Options{Half, Regenerate})`；`-check` 对 `-out` 目录判定。测试：`halves_promises_test.go`。kit 的 mail / session / match 已按此生成。
 
 ### Changed

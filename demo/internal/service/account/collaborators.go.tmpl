@@ -36,7 +36,7 @@ const demoCredentialPrefix = "demo:"
 func Verifier() account.IdentityVerifier {
 	return account.VerifierFunc(func(_ context.Context, identity account.Identity) (account.Verified, error) {
 		if identity.Channel != DemoChannel {
-			return account.Verified{}, fmt.Errorf("%w: channel %q is not configured", account.ErrIdentityDenied, identity.Channel)
+			return account.Verified{}, fmt.Errorf("%w: channel %q is not a login channel of this demo (only %q is)", account.ErrIdentityDenied, identity.Channel, DemoChannel)
 		}
 		openID, ok := strings.CutPrefix(identity.Credential, demoCredentialPrefix)
 		if !ok || openID == "" || openID != identity.OpenID {

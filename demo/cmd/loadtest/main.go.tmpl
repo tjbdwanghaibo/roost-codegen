@@ -259,6 +259,32 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			rb.Blackboard.Set("match_id", resp.MatchID)
 			return nil
 		}))
+	// send_chat publishes through the chat service; the world channel fans
+	// the stored line back to every online robot, including the sender, so
+	// the scenario can wait for its own push (msg 10101).
+	action.MustRegisterCall[pb.SendChatRequest, pb.SendChatResponse](actions, protocols, "send_chat", msgid.MsgSendChat,
+		action.OnResp(func(rb *robot.Context, resp *pb.SendChatResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.Seq <= 0 {
+				return fmt.Errorf("chat message stored without a sequence")
+			}
+			rb.Blackboard.Set("chat_seq", resp.Seq)
+			return nil
+		}))
+	// chat_history is the reconnect path: reading back must return at least
+	// the line this robot just sent (the login announcement is there too).
+	action.MustRegisterCall[pb.ChatHistoryRequest, pb.ChatHistoryResponse](actions, protocols, "chat_history", msgid.MsgChatHistory,
+		action.OnResp(func(_ *robot.Context, resp *pb.ChatHistoryResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if len(resp.Messages) == 0 {
+				return fmt.Errorf("chat history came back empty after a publish")
+			}
+			return nil
+		}))
 	action.MustRegisterCall[pb.WorldStatsRequest, pb.WorldStatsResponse](actions, protocols, "world_stats", msgid.MsgWorldStats,
 		action.OnResp(func(_ *robot.Context, resp *pb.WorldStatsResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
@@ -274,6 +300,7 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 // registerPushes lets the session decode server pushes the scenario waits on.
 func registerPushes(protocols *protocol.Registry) {
 	protocols.MustRegisterDecoder(msgid.MsgMatchFound, protocol.DecodeTyped(msgid.MsgMatchFound, pb.UnmarshalMatchFoundPush))
+	protocols.MustRegisterDecoder(msgid.MsgChatMessage, protocol.DecodeTyped(msgid.MsgChatMessage, pb.UnmarshalChatMessagePush))
 }
 
 func coded(code int32, reason string) error {
@@ -342,6 +369,10 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalPollMatchRequest(message)
 	case *pb.WorldStatsRequest:
 		return pb.MarshalWorldStatsRequest(message)
+	case *pb.SendChatRequest:
+		return pb.MarshalSendChatRequest(message)
+	case *pb.ChatHistoryRequest:
+		return pb.MarshalChatHistoryRequest(message)
 	default:
 		return nil, fmt.Errorf("pb codec: no marshal for %T", value)
 	}
@@ -381,6 +412,18 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 		*message = *decoded
 	case *pb.WorldStatsResponse:
 		decoded, err := pb.UnmarshalWorldStatsResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.SendChatResponse:
+		decoded, err := pb.UnmarshalSendChatResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.ChatHistoryResponse:
+		decoded, err := pb.UnmarshalChatHistoryResponse(data)
 		if err != nil {
 			return err
 		}

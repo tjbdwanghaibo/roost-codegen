@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"log/slog"
 
+	"{{MODULE}}/game/chatroom"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	player_agent "{{MODULE}}/game/player_agent"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/errcode"
+	svcchat "github.com/tjbdwanghaibo/roost-kit/service/chat"
 )
 
 // HandleEnterGame makes sure the authenticated player has a Player Entity.
@@ -31,6 +33,22 @@ func (controller *Controller) HandleEnterGame(context *player_agent.Context, req
 	// a different lock, a separate Nest call after the Player one completed.
 	if err := syncsender.NewRecordEnterSender(controller.NestClient()).Sync_RecordEnter(context.Context(), controller.WorldID()); err != nil {
 		slog.Warn("enter_game: world did not record the login", "player_id", context.PlayerID, "err", err)
+	}
+	// From here on the player receives world-channel pushes.
+	controller.Presence().Add(context.PlayerID)
+	// The game announces the login on the world channel through the chat
+	// service's privileged path (PublishSystem: no player could have sent
+	// this). Best effort — a missed announcement is not a failed login — and
+	// idempotent per frame, so a retried EnterGame announces once.
+	requestID := fmt.Sprintf("enter:%d:%s:%d", context.PlayerID, context.Session.Principal().SessionID, context.Seq)
+	message, err := controller.Messaging().PublishSystem(context.Context(), svcchat.SystemPublishRequest{
+		Channel: chatroom.WorldChannel, Actor: chatroom.SystemActor, Type: chatroom.TypeText,
+		Body: []byte(fmt.Sprintf("player %d entered the world", context.PlayerID)), RequestID: requestID,
+	})
+	if err != nil {
+		slog.Warn("enter_game: login not announced on the world channel", "player_id", context.PlayerID, "err", err)
+	} else {
+		controller.deliver(context.Context(), message)
 	}
 	return &pb.EnterGameResponse{PlayerID: context.PlayerID, Created: created}, nil
 }

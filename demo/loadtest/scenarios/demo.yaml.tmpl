@@ -1,5 +1,5 @@
 # One robot's life: connect and hand over the credential, make sure the Player
-# exists, add an item, earn enough exp to level up (which sends a reward mail
+# exists, chat on the world channel and read it back, add an item, earn enough exp to level up (which sends a reward mail
 # through the effect chain), queue for a duel until matched, read the World's
 # counters. Run an even number of robots: duels need pairs. Param keys are the request fields' snake_case
 # names; a value can also come from the robot's blackboard.
@@ -12,6 +12,31 @@ scenarios:
       sequence:
         - action: connect
         - action: enter_game
+        # Chat: say hello on the world channel (a bus call into the chat
+        # service). The game fans the stored line back as a push (msg 10101)
+        # to every online player, the sender included — but it pushes before
+        # it answers, so the robot's own copy can land before wait_push is
+        # listening and be dropped as an unsolicited push. Hence the selector:
+        # a push within half a second (its own, or another robot's), or move
+        # on; chat_history is the check that the line is there either way
+        # (the reconnect path). The wait is short because it counts toward
+        # the scenario cost the p95 threshold judges.
+        - action: send_chat
+          param:
+            kind: world
+            target: 1
+            text: hello from a robot
+        - selector:
+            - action: wait_push
+              param:
+                msg: 10101
+                timeout: 500ms
+            - wait: 10ms
+        - action: chat_history
+          param:
+            kind: world
+            target: 1
+            limit: 20
         - action: add_item
           param:
             item_id: 1001

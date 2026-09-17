@@ -144,6 +144,8 @@ roost add dao --help          # 等价于 roost help dao
 
 专题输出固定包含四部分：用途、命令、配置/标记和示例。未知能力会失败并提示先运行 `roost help`，适合脚本和 CI 发现拼写错误。
 
+新项目可以一条命令在本机起全部服务：`make dev-up`（基础设施 compose）→ `make dev-run`（`deploy/dev/run.sh`：按托管服务 → 业务服务的顺序编译并启动每个进程、等各自 `/readyz`；每个服务的本机配置有自己的 ops 端口）→ game-demo 工程再 `make dev-smoke`（两个机器人走完整条链）；`make dev-status` / `make dev-stop` 查看与停止。
+
 新项目 Makefile 同时提供四个更新入口：
 
 ```bash

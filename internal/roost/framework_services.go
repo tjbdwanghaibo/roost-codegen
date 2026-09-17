@@ -511,7 +511,8 @@ func renderFrameworkServicesGuide(m Manifest) string {
 			fmt.Fprintf(&b, "    ./bin/app %s --config configs/service/config.%s.yaml\n", name, name)
 		}
 	}
-	b.WriteString("\n每个进程默认监听同一个 ops 端口（127.0.0.1:9100），本机同时起多个时给各自的配置改 ops.addr。\n")
+	b.WriteString("\n或者一条命令：`make dev-run`（deploy/dev/run.sh）按上面的顺序启动全部服务并等每个进程的 /readyz，`make dev-stop` 反序停止，`make dev-status` 查看。\n")
+	b.WriteString("每个服务在本机配置里有自己的 ops 端口（业务服务从 9100 起，托管服务接在后面，见各 config.<服务>.yaml 的 ops.addr）；生产配置统一 9100，一容器一进程。\n")
 	b.WriteString("托管服务的 key_prefix 默认 roost:<工程名>:<服务>：两个部署共用一个 Redis 时必须不同，否则共享状态。\n")
 	return b.String()
 }

@@ -108,6 +108,7 @@ func TestNewProjectSyncPreservesBusinessFiles(t *testing.T) {
 		"internal/service/game/service.go",
 		"configs/generated/gen_table_config.go",
 		"internal/registry/nest_gen.go",
+		"deploy/dev/run.sh",
 	} {
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("%s missing: %v", rel, err)

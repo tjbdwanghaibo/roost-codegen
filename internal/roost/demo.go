@@ -215,6 +215,16 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/controllers/player/world_stats.go", why: "a Nest read handler on the World"},
 		{add: &AddOptions{Kind: "protocol", Name: "MatchFound", Group: "game", Handler: "player"}, why: "the server push announcing a match"},
 		{write: "protocol/def/match_found.go", why: "a notify: no request, the bind registers its encoder"},
+		{write: "game/chatroom/chatroom.go", why: "the game's side of the chat contract: channels, the text type, who is online"},
+		{add: &AddOptions{Kind: "protocol", Name: "SendChat", Group: "game", Handler: "player"}, why: "the cross-service call: game → chat"},
+		{write: "protocol/def/send_chat.go", why: "kind, target, text; the stored sequence comes back"},
+		{write: "game/controllers/player/send_chat.go", why: "Publish through the typed chat client, then fan the stored line out"},
+		{add: &AddOptions{Kind: "protocol", Name: "ChatHistory", Group: "game", Handler: "player"}, why: "the reconnect path: page a channel forwards"},
+		{write: "protocol/def/chat_history.go", why: "cursor in, lines and cursor out"},
+		{write: "game/controllers/player/chat_history.go", why: "History through the typed chat client, viewer checked by the service"},
+		{add: &AddOptions{Kind: "protocol", Name: "ChatMessage", Group: "game", Handler: "player"}, why: "the server push carrying one chat line"},
+		{write: "protocol/def/chat_message.go", why: "a notify with the same shape history returns"},
+		{write: "game/controllers/player/chat_push.go", why: "Message → push, and who receives it: presence for world, the pair for private"},
 		{run: enableDemoMatchSweep, why: "the match process sweeps the duel queue for expired tickets"},
 		{write: "loadtest/playertcp/conn.go", why: "the robot transport that speaks the generated server's frame"},
 		{write: "loadtest/scenarios/demo.yaml", why: "one robot's life, as a scenario tree"},
@@ -230,6 +240,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/matchmaker.go", why: "Candidates → Grouping → Commit on a ticker, then the World records the match and the players are pushed MatchFound"},
 		{write: "cmd/accountctl/main.go", why: "the operator surface account keeps off the bus: register the game server so CreateRole works"},
 		{write: "internal/service/account/collaborators.go", why: "an account service that can log a demo user in and mint ids from Redis"},
+		{write: "internal/service/chat/collaborators.go", why: "a chat service with a written-down policy, one text type and a granted system path"},
 	}
 }
 

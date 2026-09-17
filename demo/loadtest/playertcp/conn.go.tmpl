@@ -73,7 +73,12 @@ func dial(ctx context.Context, cfg transport.Config) (transport.Conn, error) {
 // notifies, which the robot sends with Seq 0 — so the wire sequence is this
 // Conn's own counter, and a map remembers which robot sequence each wire
 // sequence carried so the response can be handed back under the sequence the
-// robot session is waiting on. Server pushes arrive with sequence 0 and stay 0.
+// robot session is waiting on. A server push is told apart by the flags byte,
+// not by its sequence: the server numbers pushes from its own per-session
+// counter, which starts at 1 like this Conn's, so a world-chat push arriving
+// while a call is in flight can carry exactly the number that call is waiting
+// on. Pushes surface to the robot with Seq 0, which is what its session
+// routes to wait_push.
 type Conn struct {
 	conn       net.Conn
 	maxPayload int
@@ -135,7 +140,7 @@ func (c *Conn) ReadPacket() (*transport.Packet, error) {
 	}
 	wire := binary.BigEndian.Uint32(header[8:12])
 	seq := uint32(0)
-	if wire != 0 {
+	if header[3]&flagServerPush == 0 && wire != 0 {
 		c.mu.Lock()
 		if robotSeq, ok := c.sequences[wire]; ok {
 			seq = robotSeq

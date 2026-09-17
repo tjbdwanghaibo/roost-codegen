@@ -24,7 +24,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	// Keep the file present so Docker's deterministic `COPY go.mod go.sum ./`
 	// works before the first local `go mod tidy`. Sync never overwrites it.
 	add("go.sum", "", false)
-	add(".gitignore", "bin/\ndist/\nlog/\n.roost-deploy/\n.env\ndeploy/docker/.env.*\n*.local.yaml\ndeploy/k8s/base/secret.*.local.yaml\n.idea/\n.vscode/\n", false)
+	add(".gitignore", "bin/\ndist/\nlog/\n.dev/\n.roost-deploy/\n.env\ndeploy/docker/.env.*\n*.local.yaml\ndeploy/k8s/base/secret.*.local.yaml\n.idea/\n.vscode/\n", false)
 	add("Makefile", renderMakefile(m), true)
 	add("README.md", renderProjectReadme(m), false)
 	add("docs/QUICKSTART.zh-CN.md", renderBeginnerQuickstart(m), true)
@@ -51,6 +51,7 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	add(".github/dependabot.yml", renderDependabot(), true)
 	add(".github/actionlint.yaml", renderActionlintConfig(), true)
 	add("deploy/dev/docker-compose.yaml", renderCompose(m), true)
+	add("deploy/dev/run.sh", renderDevRun(m), true)
 	add("Dockerfile", renderDockerfile(m), true)
 	for path, body := range renderProductionDeployment(m) {
 		owned := !strings.HasPrefix(path, "deploy/k8s/base/secret.")
@@ -495,6 +496,12 @@ func renderServiceConfig(m Manifest, service string, production bool) string {
 	if spec, hosted := frameworkCatalog[m.Services[service].Framework]; hosted {
 		b.WriteString(spec.ConfigFunc(m.Project.Name))
 	}
+	if !production {
+		// One machine, every service at once: each gets its own ops port
+		// (see opsPort). Production keeps 9100 — one process per container.
+		return strings.Replace(b.String(), "ops:\n  enabled: true\n  addr: 127.0.0.1:9100",
+			fmt.Sprintf("ops:\n  enabled: true\n  addr: 127.0.0.1:%d", opsPort(m, service)), 1)
+	}
 	if production {
 		value := strings.ReplaceAll(strings.ReplaceAll(b.String(), "127.0.0.1", "CHANGE_ME"), "localhost", "CHANGE_ME")
 		value = strings.Replace(value,
@@ -567,7 +574,7 @@ LOADTEST_COUNT ?= 10
 LOADTEST_METRICS_ADDR ?= 127.0.0.1:9300
 LOADTEST_ACCOUNT_NATS ?= nats://127.0.0.1:4222
 
-.PHONY: help sync project-upgrade deps-update roost-up codegen-up next doctor fmt fmt-check vet glsvet test test-race build run loadtest generate generate-changed check-generated config-check config-check-all player-tcp-enable player-tcp-disable id-check ci cicd-check release-check image-build compose-check k8s-render k8s-check deploy-shell rollback-shell deploy-docker rollback-docker deploy-k8s rollback-k8s dev-up dev-down dev-logs clean
+.PHONY: help sync project-upgrade deps-update roost-up codegen-up next doctor fmt fmt-check vet glsvet test test-race build run loadtest generate generate-changed check-generated config-check config-check-all player-tcp-enable player-tcp-disable id-check ci cicd-check release-check image-build compose-check k8s-render k8s-check deploy-shell rollback-shell deploy-docker rollback-docker deploy-k8s rollback-k8s dev-up dev-down dev-logs dev-run dev-stop dev-status dev-smoke clean
 .PHONY: new-service add-mod new-access new-transport new-module new-protocol new-entity new-component new-handler new-lifecycle new-endpoint new-skill new-event new-table new-dao new-webroute new-errcode new-saga
 
 help:
@@ -690,6 +697,15 @@ dev-down:
 	docker compose -f deploy/dev/docker-compose.yaml down
 dev-logs:
 	docker compose -f deploy/dev/docker-compose.yaml logs -f
+dev-run:
+	sh deploy/dev/run.sh start
+dev-stop:
+	sh deploy/dev/run.sh stop
+dev-status:
+	sh deploy/dev/run.sh status
+dev-smoke:
+	@test -d cmd/loadtest || { echo "cmd/loadtest is not part of this project (game-demo template); run your own client against the services started by make dev-run"; exit 1; }
+	go run ./cmd/loadtest -endpoint $(LOADTEST_ENDPOINT) -count 2 -account-nats $(LOADTEST_ACCOUNT_NATS) $(LOADTEST_ARGS)
 clean:
 	go clean
 `, m.Project.Name, codegenVersion(m), service)
@@ -973,6 +989,7 @@ func renderUsage(m Manifest) string {
 - make codegen-up：安装最新 roost-codegen CLI。
 - make deps-update：只按 roost.yaml 更新 core、kit、skill 三个框架模块。
 - make dev-up/dev-down：启动或停止所需基础设施。
+- make dev-run/dev-stop/dev-status：在本机一次起 / 停 / 查看工程声明的全部服务进程（每个服务自己的 ops 端口，日志在 .dev/）；game-demo 工程随后可用 make dev-smoke 跑两个机器人走完整条链。
 - make next：根据项目真实状态只显示一个当前动作；不需要背完整流程。
 - make generate：在临时项目按依赖顺序生成并 tidy 新增 import，全部成功后原子提交；不会执行依赖升级。
 - make doctor：检查清单、依赖、配置和生成状态；阶段验收使用 roost project doctor --workflow first-business。
