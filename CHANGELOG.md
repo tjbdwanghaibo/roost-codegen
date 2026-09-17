@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- **dao：生成的嵌套 struct 现在有 BSON 表示，`DirtyHook` 不再进文档**（U-0224，C2；用户复审提出，T-118）。此前嵌套 struct 字段全部未导出且没有 `MarshalBSON`，父 DAO 把它放进 `bson.M` 后反射编码只看见导出的内嵌 `DirtyHook`，Mongo 里落的是 `{"dirtyhook": {}}`——嵌套数据没存、回滚快照与同步同丢。现在内嵌打 `bson:"-" json:"-"`，每个嵌套类型生成值接收者 `MarshalBSON` / 指针接收者 `UnmarshalBSON`（私有 wire struct，snake_case 键，map 经 raw 辅助）。**重生成** `gen_*_nested.go` 即生效；历史文档里的嵌套字段本来就是空的，无迁移。测试 `nested_bson_promises_test.go`；真实驱动往返见记录 `roost-core/docs/bugfix/U-0224-dao-nested-bson.md`。
 - **game-demo 机器人 transport 把服务端推送当成响应**（`loadtest/playertcp/conn.go`）。服务端给推送编的是自己的会话序号，与客户端 wire 序号同起点 1，一条世界频道推送恰好带着某个在途请求的号就被当作它的响应（`response msg mismatch: got 10101 want 10000`）。现在按帧头的 server-push 标志位分类，推送一律 Seq 0。此前只有 MatchFound 一种推送、且只在 wait_push 期间到达，所以没暴露。
 
 - **`servicerpc -emit transport|assembly|all`、`-out <dir>`，`-dir` 接受 import path**（M-11，ARCH-01 / ARCH-04 收尾）。接口住在 roost-core 领域包时，core 包跑 `-emit transport`（生成物只依赖 core），kit 包跑 `-emit assembly -dir github.com/tjbdwanghaibo/roost-core/service/<x> -out .`（在 `-out` 的模块上下文里用 `go list` 解析 import path，不用写模块缓存路径）。文件头的"Regenerate with"记录实际命令。`GenerateWith(service, Options{Half, Regenerate})`；`-check` 对 `-out` 目录判定。测试：`halves_promises_test.go`。kit 的 mail / session / match 已按此生成。

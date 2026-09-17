@@ -11,15 +11,79 @@ import (
 {{- if hasMaps .Nested.Fields}}
 	fmap "github.com/tjbdwanghaibo/roost-core/safemap"
 {{- end}}
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // {{.Nested.Name}} is a nested struct with dirty propagation.
+//
+// The hook is excluded from every codec: it is runtime wiring, not state, and
+// an exported embedded struct with no exported fields would otherwise be
+// written as an empty "dirtyhook" sub-document (U-0224).
 type {{.Nested.Name}} struct {
-	dataengine.DirtyHook
+	dataengine.DirtyHook ` + "`" + `bson:"-" json:"-"` + "`" + `
 {{- range .Nested.Fields}}
 	{{fieldVar .Name}} {{fieldType .}}
 {{- end}}
 }
+
+// --- BSON (persistence, rollback capture, sync) ---
+//
+// The fields are unexported so every mutation goes through the setters below
+// — that is what makes dirty tracking and undo impossible to bypass — and the
+// reflection-based codec cannot see unexported fields. Without these two
+// methods the parent DAO's document carried {"<field>": {"dirtyhook": {}}}:
+// no data at all (U-0224). MarshalBSON has a value receiver because the
+// parent places the struct itself, not a pointer, into its bson.M.
+type {{lower1 .Nested.Name}}BSONDoc struct {
+{{- range .Nested.Fields}}
+	{{.Name}} {{if eq .Kind 2}}{{rawMapType .}}{{else}}{{.TypeStr}}{{end}} ` + "`" + `bson:"{{bsonKey .Name}}"` + "`" + `
+{{- end}}
+}
+
+func (s {{.Nested.Name}}) MarshalBSON() ([]byte, error) {
+	return bson.Marshal({{lower1 .Nested.Name}}BSONDoc{
+{{- range .Nested.Fields}}
+		{{.Name}}: {{if eq .Kind 2}}s.{{fieldVar .Name}}RawMap(){{else}}s.{{fieldVar .Name}}{{end}},
+{{- end}}
+	})
+}
+
+func (s *{{.Nested.Name}}) UnmarshalBSON(raw []byte) error {
+	var doc {{lower1 .Nested.Name}}BSONDoc
+	if err := bson.Unmarshal(raw, &doc); err != nil {
+		return err
+	}
+{{- range .Nested.Fields}}
+{{- if eq .Kind 2}}
+	s.set{{.Name}}RawMap(doc.{{.Name}})
+{{- else}}
+	s.{{fieldVar .Name}} = doc.{{.Name}}
+{{- end}}
+{{- end}}
+	return nil
+}
+{{range .Nested.Fields}}
+{{- if eq .Kind 2}}
+func (s {{$.Nested.Name}}) {{fieldVar .Name}}RawMap() {{rawMapType .}} {
+	if s.{{fieldVar .Name}} == nil {
+		return nil
+	}
+	ret := make({{rawMapType .}}, s.{{fieldVar .Name}}.Len())
+	s.{{fieldVar .Name}}.Range(func(key {{.MapKey}}, val {{mapValType .}}) bool {
+		ret[key] = val
+		return true
+	})
+	return ret
+}
+
+func (s *{{$.Nested.Name}}) set{{.Name}}RawMap(src {{rawMapType .}}) {
+	s.{{fieldVar .Name}} = {{mapNewExpr . "len(src)"}}
+	for key, val := range src {
+		s.{{fieldVar .Name}}.Set(key, val)
+	}
+}
+{{end}}
+{{- end}}
 {{range .Nested.Fields}}
 {{- if eq .Kind 0}}
 func (s *{{$.Nested.Name}}) Get{{.Name}}() {{.TypeStr}} { return s.{{fieldVar .Name}} }

@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -320,7 +321,9 @@ func TestGenerateNested(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := string(content)
+	// gofmt aligns struct fields into columns (the hook's struct tag widens
+	// them, U-0224), so compare with runs of blanks collapsed.
+	s := regexp.MustCompile(`[ \t]+`).ReplaceAllString(string(content), " ")
 
 	checks := []string{
 		"package testdata",

@@ -46,6 +46,22 @@ func generateDao(dao DaoDef, defs *Definitions, pkg string, outFile string, forc
 	return writeIfChanged(content, outFile, force)
 }
 
+// nestedFuncMap is the nested template's helper set; a test renders the
+// template with it to pin the generated shape.
+func nestedFuncMap() template.FuncMap {
+	return template.FuncMap{
+		"snakeCase":  toSnake,
+		"lower1":     lower1,
+		"bsonKey":    func(name string) string { return toSnake(name) },
+		"fieldType":  fieldType,
+		"fieldVar":   fieldVarName,
+		"mapValType": mapValType,
+		"mapNewExpr": mapNewExpr,
+		"rawMapType": rawMapType,
+		"hasMaps":    hasMapFields,
+	}
+}
+
 func generateNested(nested NestedDef, pkg string, outFile string, force bool) (bool, error) {
 	if err := validateGeneratedStorageFields(nested.Name, nested.Fields); err != nil {
 		return false, err
@@ -53,16 +69,7 @@ func generateNested(nested NestedDef, pkg string, outFile string, force bool) (b
 	if err := validateGeneratedMapFields(nested.Fields); err != nil {
 		return false, err
 	}
-	tmpl, err := template.New("nested").Funcs(template.FuncMap{
-		"snakeCase":  toSnake,
-		"lower1":     lower1,
-		"fieldType":  fieldType,
-		"fieldVar":   fieldVarName,
-		"mapValType": mapValType,
-		"mapNewExpr": mapNewExpr,
-		"rawMapType": rawMapType,
-		"hasMaps":    hasMapFields,
-	}).Parse(nestedTemplate)
+	tmpl, err := template.New("nested").Funcs(nestedFuncMap()).Parse(nestedTemplate)
 	if err != nil {
 		return false, fmt.Errorf("template parse: %w", err)
 	}

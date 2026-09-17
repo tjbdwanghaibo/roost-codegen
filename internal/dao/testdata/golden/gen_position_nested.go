@@ -6,13 +6,48 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/nest"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // Position is a nested struct with dirty propagation.
+//
+// The hook is excluded from every codec: it is runtime wiring, not state, and
+// an exported embedded struct with no exported fields would otherwise be
+// written as an empty "dirtyhook" sub-document (U-0224).
 type Position struct {
-	dataengine.DirtyHook
-	x int32
-	y int32
+	dataengine.DirtyHook `bson:"-" json:"-"`
+	x                    int32
+	y                    int32
+}
+
+// --- BSON (persistence, rollback capture, sync) ---
+//
+// The fields are unexported so every mutation goes through the setters below
+// — that is what makes dirty tracking and undo impossible to bypass — and the
+// reflection-based codec cannot see unexported fields. Without these two
+// methods the parent DAO's document carried {"<field>": {"dirtyhook": {}}}:
+// no data at all (U-0224). MarshalBSON has a value receiver because the
+// parent places the struct itself, not a pointer, into its bson.M.
+type positionBSONDoc struct {
+	X int32 `bson:"x"`
+	Y int32 `bson:"y"`
+}
+
+func (s Position) MarshalBSON() ([]byte, error) {
+	return bson.Marshal(positionBSONDoc{
+		X: s.x,
+		Y: s.y,
+	})
+}
+
+func (s *Position) UnmarshalBSON(raw []byte) error {
+	var doc positionBSONDoc
+	if err := bson.Unmarshal(raw, &doc); err != nil {
+		return err
+	}
+	s.x = doc.X
+	s.y = doc.Y
+	return nil
 }
 
 func (s *Position) GetX() int32 { return s.x }

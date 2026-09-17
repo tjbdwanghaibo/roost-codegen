@@ -7,14 +7,71 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/nest"
 	fmap "github.com/tjbdwanghaibo/roost-core/safemap"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // EquipInfo is a nested struct with dirty propagation.
+//
+// The hook is excluded from every codec: it is runtime wiring, not state, and
+// an exported embedded struct with no exported fields would otherwise be
+// written as an empty "dirtyhook" sub-document (U-0224).
 type EquipInfo struct {
-	dataengine.DirtyHook
-	level int32
-	star  int32
-	gems  *fmap.SmallSafeMap[int32, *GemInfo]
+	dataengine.DirtyHook `bson:"-" json:"-"`
+	level                int32
+	star                 int32
+	gems                 *fmap.SmallSafeMap[int32, *GemInfo]
+}
+
+// --- BSON (persistence, rollback capture, sync) ---
+//
+// The fields are unexported so every mutation goes through the setters below
+// — that is what makes dirty tracking and undo impossible to bypass — and the
+// reflection-based codec cannot see unexported fields. Without these two
+// methods the parent DAO's document carried {"<field>": {"dirtyhook": {}}}:
+// no data at all (U-0224). MarshalBSON has a value receiver because the
+// parent places the struct itself, not a pointer, into its bson.M.
+type equipInfoBSONDoc struct {
+	Level int32              `bson:"level"`
+	Star  int32              `bson:"star"`
+	Gems  map[int32]*GemInfo `bson:"gems"`
+}
+
+func (s EquipInfo) MarshalBSON() ([]byte, error) {
+	return bson.Marshal(equipInfoBSONDoc{
+		Level: s.level,
+		Star:  s.star,
+		Gems:  s.gemsRawMap(),
+	})
+}
+
+func (s *EquipInfo) UnmarshalBSON(raw []byte) error {
+	var doc equipInfoBSONDoc
+	if err := bson.Unmarshal(raw, &doc); err != nil {
+		return err
+	}
+	s.level = doc.Level
+	s.star = doc.Star
+	s.setGemsRawMap(doc.Gems)
+	return nil
+}
+
+func (s EquipInfo) gemsRawMap() map[int32]*GemInfo {
+	if s.gems == nil {
+		return nil
+	}
+	ret := make(map[int32]*GemInfo, s.gems.Len())
+	s.gems.Range(func(key int32, val *GemInfo) bool {
+		ret[key] = val
+		return true
+	})
+	return ret
+}
+
+func (s *EquipInfo) setGemsRawMap(src map[int32]*GemInfo) {
+	s.gems = fmap.NewSmallSafeMap[int32, *GemInfo](len(src))
+	for key, val := range src {
+		s.gems.Set(key, val)
+	}
 }
 
 func (s *EquipInfo) GetLevel() int32 { return s.level }
