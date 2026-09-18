@@ -323,6 +323,48 @@ func (bridge *Scene) Leave(ctx context.Context, subjectID int64) {
 	}
 }
 
+// ShowSubject registers something that is seen but does not see: a monster, a
+// dropped item. It is the Join path without the observer half — and without
+// the membership bookkeeping, because these are not sessions that can go away
+// on their own.
+func (bridge *Scene) ShowSubject(ctx context.Context, state *coreentity.SubjectSyncState, subjectID int64, at spatial.Point) error {
+	if bridge == nil || bridge.room == nil {
+		return errors.New("scene: not started")
+	}
+	area := bridge.area.Load()
+	if area == nil || area.Interest() == nil {
+		return errors.New("scene: no area")
+	}
+	if err := bridge.room.RegisterSubject(state); err != nil && !errors.Is(err, room.ErrRoomSubjectAlreadyExists) {
+		return fmt.Errorf("scene: register subject %d: %w", subjectID, err)
+	}
+	if err := area.Interest().Show(subjectID, at); err != nil {
+		return fmt.Errorf("scene: show subject %d: %w", subjectID, err)
+	}
+	bridge.applyChanges(ctx, area.Interest().Tick())
+	return nil
+}
+
+// HideSubject is the reverse: the thing is gone, everyone watching is told,
+// and the room stops holding it.
+func (bridge *Scene) HideSubject(ctx context.Context, subjectID int64) {
+	if bridge == nil || bridge.room == nil {
+		return
+	}
+	if area := bridge.area.Load(); area != nil && area.Interest() != nil {
+		if err := area.Interest().Hide(subjectID); err != nil {
+			slog.Debug("scene: interest did not release a subject", "subject_id", subjectID, "err", err)
+		}
+		bridge.applyChanges(ctx, area.Interest().Tick())
+	}
+	if err := bridge.room.RetireSubject(ctx, subjectID); err != nil {
+		slog.Debug("scene: subject not retired", "subject_id", subjectID, "err", err)
+	}
+	if err := bridge.room.UnregisterSubject(subjectID); err != nil {
+		slog.Debug("scene: subject not unregistered", "subject_id", subjectID, "err", err)
+	}
+}
+
 // SetTeam makes a formed match a relationship: each member is interested in
 // the others wherever they are. Player ids in, entity ids out — the interest
 // system keys on the id that is unique across kinds, and this is one of the

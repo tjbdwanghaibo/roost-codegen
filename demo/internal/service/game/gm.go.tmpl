@@ -41,7 +41,13 @@ const (
 	gmWorldStat = "gm.world.stats"
 	gmSagaGet   = "gm.saga.get"
 	gmSagaList  = "gm.saga.list"
+	gmScenePop  = "gm.scene.population"
+	gmSceneKill = "gm.scene.kill"
 )
+
+type gmSceneKillPayload struct {
+	MonsterID int64 `json:"monster_id"`
+}
 
 type gmSagaGetPayload struct {
 	ID string `json:"id"`
@@ -91,7 +97,7 @@ type gmMailSendPayload struct {
 }
 
 // registerGMCommands is called from Init, after every Mod has started.
-func registerGMCommands(registry *app.Registry) error {
+func registerGMCommands(registry *app.Registry, spawn *spawner) error {
 	commands, ok := app.Lookup[*admin.Registry](registry, mods.ModAdmin)
 	if !ok || commands == nil {
 		return fmt.Errorf("gm: admin registry %q is unavailable", mods.ModAdmin)
@@ -268,6 +274,33 @@ func registerGMCommands(registry *app.Registry) error {
 				return admin.Result{Data: map[string]any{
 					"players_entered": stats.PlayersEntered, "matches_formed": stats.MatchesFormed, "exp_granted": stats.ExpGranted,
 				}}, nil
+			},
+		},
+		{
+			Name:        gmScenePop,
+			Description: "list the monsters the scene currently holds",
+			Handler: func(_ context.Context, _ admin.Command) (admin.Result, error) {
+				if spawn == nil {
+					return admin.Result{}, fmt.Errorf("gm: the spawner is not running")
+				}
+				return admin.Result{Data: map[string]any{"alive": spawn.Count(), "ids": spawn.IDs()}}, nil
+			},
+		},
+		{
+			Name:        gmSceneKill,
+			Description: "remove one monster; the scene refills the slot after the table's respawn delay",
+			Handler: func(ctx context.Context, command admin.Command) (admin.Result, error) {
+				if spawn == nil {
+					return admin.Result{}, fmt.Errorf("gm: the spawner is not running")
+				}
+				payload, err := admin.DecodePayload[gmSceneKillPayload](command)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				if err := spawn.Kill(ctx, payload.MonsterID); err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: map[string]any{"killed": payload.MonsterID, "alive": spawn.Count()}}, nil
 			},
 		},
 	}

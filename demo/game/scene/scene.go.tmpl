@@ -1,6 +1,8 @@
 package scene
 
 import (
+	"time"
+
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/spatial"
 )
@@ -150,4 +152,40 @@ type Interest interface {
 	// Calling it is the assembly's choice — the system is a state machine, not
 	// a goroutine.
 	Tick() []SubscriptionChange
+}
+
+// --- 刷新：场景该有多少东西活着 ---
+
+// SpawnRequest is one thing the scene wants created. The refresh system does
+// not create it: building an Entity needs the lifecycle, the lifecycle needs
+// the entity packages, and the entity packages hold this runtime — so the
+// system says what it wants and the assembly does it, exactly like the
+// interest system says who should be subscribed and the replication bridge
+// says it to the room.
+type SpawnRequest struct {
+	// Group is the spawn table row this came from; the assembly hands it back
+	// with Spawned so the system can count the population per row.
+	Group    int32
+	Template int32
+	HP       int64
+	At       spatial.Point
+}
+
+// Refresh keeps the scene's population at what the spawn table says.
+type Refresh interface {
+	// Due returns what should be created now: one request per missing
+	// member whose respawn delay has elapsed. Calling it twice without
+	// Spawned in between returns the same requests again — the system counts
+	// what it has been TOLD exists, not what it has asked for, because a
+	// spawn that failed must be asked for again.
+	Due(now time.Time) []SpawnRequest
+	// Spawned reports a created member. Until it is called the member does
+	// not count towards the group.
+	Spawned(group int32, id int64)
+	// Died reports a member gone and queues its slot for the group's respawn
+	// delay.
+	Died(id int64, now time.Time)
+	// Alive lists every member the system believes exists, for the assembly
+	// to clean up on shutdown.
+	Alive() []int64
 }

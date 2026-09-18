@@ -999,6 +999,7 @@ func expectScene(ctx context.Context, rb *robot.Context, param any) error {
 	params := action.ParamsOf(rb, param)
 	timeout := params.Duration("timeout", 10*time.Second)
 	wanted := strings.Split(params.String("fields", "level"), ",")
+	wantSubjects := int(params.Int64("subjects", 1))
 	raw, _ := rb.Blackboard.Get("scene_watcher")
 	watcher, ok := raw.(*sceneWatcher)
 	if !ok || watcher == nil {
@@ -1032,7 +1033,7 @@ func expectScene(ctx context.Context, rb *robot.Context, param any) error {
 		if failure != nil {
 			return failure
 		}
-		if subjects > 0 && missing == "" {
+		if subjects >= wantSubjects && missing == "" {
 			return nil
 		}
 		select {
@@ -1041,7 +1042,7 @@ func expectScene(ctx context.Context, rb *robot.Context, param any) error {
 		case <-deadline:
 			watcher.mu.Lock()
 			defer watcher.mu.Unlock()
-			return fmt.Errorf("scene_expect: after %s the client knows %d subjects and %d frames; %q never arrived", timeout, len(watcher.subjects), watcher.frames, missing)
+			return fmt.Errorf("scene_expect: after %s the client knows %d subjects (want %d) and %d frames; %q never arrived", timeout, len(watcher.subjects), wantSubjects, watcher.frames, missing)
 		case <-time.After(100 * time.Millisecond):
 		}
 	}

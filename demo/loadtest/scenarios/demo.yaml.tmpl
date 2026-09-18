@@ -144,6 +144,12 @@ scenarios:
         # state changes — the rest of the run would not notice.
         - action: scene_expect
           param:
+            # Two subjects at least: this client's own state and one of the
+            # monsters the scene spawned near the spawn point. Monsters go
+            # through the same AOI and the same wire as players — if the
+            # pipeline had a special case for "not a player", this is where it
+            # would show.
+            subjects: 2
             # attr_final is the composed attribute view: it is never stored
             # (the DAO field is nopersist) and only exists on the wire, so
             # asking for it here is what proves the attribute container is

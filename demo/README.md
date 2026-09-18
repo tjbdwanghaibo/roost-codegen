@@ -250,6 +250,21 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 - 机器人 `scene_watch` / `scene_expect` 是真客户端：解码、合并、断言。**推送消息必须在 loadtest 注册解码器**，
   否则推送到了也解不出来、静默丢弃。
 
+## 刷新：场景该有多少东西活着
+
+`configs/table/spawn.csv` 一行是一组：模板、数量、血量、中心点、半径、重生秒数。
+
+- **系统只说"该生成什么"，装配层去建**。`Refresh.Due(now)` 返回 `[]SpawnRequest`，`internal/service/<game>/spawner.go`
+  建实体、放位置、注册进 room 与 AOI，然后才 `Spawned` 回报。与兴趣系统只产出订阅变更是同一个形状——
+  也正好避开包环：建实体要 lifecycle，lifecycle 要实体包，实体包持有 runtime。
+- **数的是"被告知存在的"而不是"被请求过的"**。一次失败的创建会在下一次 `Due` 里重新出现；若按请求扣减，
+  这个进程余下的时间里都会少一只，而且没人会说。
+- **怪的 DAO 每个字段都是 `nopersist,sync`**：不存，但复制。这是为了让"位置住在 DAO 里、经组件读写"对**所有**实体一致——
+  否则 demo 里会出现两种位置权威，而第一段要同时处理玩家和怪的代码就会挑错一种。
+- **计时器在装配层**，不在 system 里：system 仍是纯状态机（`Due(now)` 的时间是传进去的），所以它可测、可重放。
+- GM：`gm.scene.population` 看当前几只，`gm.scene.kill` 杀一只——表里写 20 秒，20 秒后回到满员且是一个**新 id**。
+- **没做**：怪不动（没有 AI），战斗只有 GM 的"杀掉"，id 由进程本地计数器生成（第二个进程会撞，见 WANTED）。
+
 ## 兴趣：距离是一种来源，关系是另一种
 
 "谁该收到谁的状态"由 Scene 实体的兴趣系统回答。它把**每一种理由都做成同一种来源**：

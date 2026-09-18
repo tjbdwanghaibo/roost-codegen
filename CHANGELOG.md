@@ -6,6 +6,17 @@
 
 ### Added
 
+- **game-demo：地图第三批——刷怪，以及"非玩家主体"走同一条链路**（§9.4.3）。新 `Monster` 实体
+  （kind 4，`noPersist=true lifetime=ephemeral`，`sync=true`）作为"只被看、不看"的 subject 进兴趣系统
+  （新的 `Show` / `Hide` 入口），其余一整条链路与 Player 同一份代码。**它的 DAO 每个字段都是 `nopersist,sync`**：
+  不存但复制——这样"位置住在 DAO 里、经组件读写"对所有实体一致，否则 demo 里会有两种位置权威。
+  刷新策略是配置（新 `spawn` 表：组、模板、数量、血量、中心点、半径、重生秒数），表在每次 `Due` 时读，热更下一 tick 生效。
+  `Refresh` 系统只返回 `[]SpawnRequest`，`internal/service/<game>/spawner.go` 才建实体——与兴趣系统只产出订阅变更
+  同一个形状，也避开了"建实体要 lifecycle、lifecycle 要实体包、实体包持有 runtime"的包环。
+  **数的是被告知存在的而不是被请求过的**，所以一次失败的创建会在下一次 `Due` 里重新出现，而不是让这个进程少一只。
+  新 GM 命令 `gm.scene.population` / `gm.scene.kill`；`scene_expect` 加 `subjects` 参数，机器人现在要求至少看到
+  自己 + 一只怪。测试四条；实跑：杀一只 3→2，表里的 20 秒后回到 3 且是新 id。
+  **已知限制**：怪不动（没有 AI），id 由进程本地计数器生成（第二个进程会撞，见 WANTED W-2026-09-18-10）。
 - **game-demo：地图第二批——AOI 接管订阅，距离与社会关系是同一种来源**（§9.4.2）。
   `game/scene/runtime/interest.go` 把 `spatial.InterestManager`（自带锁：它明确不并发安全）与两个关系来源
   （`self`、`team`）汇总成一份订阅：**第一个来源命中才 Subscribe，最后一个来源撤销才 Unsubscribe**——

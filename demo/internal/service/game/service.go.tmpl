@@ -24,6 +24,8 @@ type Service struct {
 	stopGiftSaga   func()
 	battles        *battleManager
 	scene          *Scene
+	stopSpawner    func()
+	spawner        *spawner
 }
 
 func New() *Service                    { return &Service{} }
@@ -91,6 +93,13 @@ func (s *Service) Init(registry *app.Registry) error {
 		return fmt.Errorf("{{GAME_SERVICE}}: publish scene: %w", err)
 	}
 	s.scene = scene
+	// The spawner last among the scene's users: it needs both the entity and
+	// the bridge, and it starts producing subjects immediately.
+	stopSpawner, spawn, err := startSpawner(context.Background(), registry, area, scene)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.stopSpawner, s.spawner = stopSpawner, spawn
 	stop, err := startMatchmaker(context.Background(), registry, battles, scene)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
@@ -105,7 +114,7 @@ func (s *Service) Init(registry *app.Registry) error {
 	s.stopGiftSaga = stopGift
 	// The operator surface: GM commands on the admin registry the ops Mod
 	// serves (gm.go). Registered last, when everything they call is up.
-	if err := registerGMCommands(registry); err != nil {
+	if err := registerGMCommands(registry, s.spawner); err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	return nil
@@ -135,6 +144,12 @@ func (s *Service) Shutdown(context.Context) error {
 	if s.levelUpMail != nil {
 		s.levelUpMail.Drain()
 		s.levelUpMail = nil
+	}
+	// The spawner before the scene: it takes its population down, and the
+	// room has to still be there to hear about it.
+	if s.stopSpawner != nil {
+		s.stopSpawner()
+		s.stopSpawner = nil
 	}
 	// The scene last among the fan-out paths: closing it stops the
 	// replication loop and the transport sink, and anything still preparing

@@ -91,6 +91,13 @@ func (s *Scene) Interest() gamescene.Interest {
 	return nil
 }
 
+func (s *Scene) Refresh() gamescene.Refresh {
+	if runtime := s.runtime.Load(); runtime != nil {
+		return runtime.Refresh()
+	}
+	return nil
+}
+
 // ISceneEntity is the lock-safe business view for Nest handlers that address
 // a Scene.
 type ISceneEntity interface {
@@ -98,4 +105,5 @@ type ISceneEntity interface {
 	Terrain() gamescene.Terrain
 	PathFind() gamescene.PathFind
 	Interest() gamescene.Interest
+	Refresh() gamescene.Refresh
 }
