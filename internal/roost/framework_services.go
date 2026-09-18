@@ -100,6 +100,19 @@ func Broadcast() mail.Deliverer { return nil }
 			return "match:\n  key_prefix: roost:" + project + ":match\n  ticket_ttl: 60s\n  sweep_queues: []\n"
 		},
 	},
+	"rank": {
+		Package: "rank", Interface: "Rank", Depends: []string{"redis", "nats"},
+		ModArgs: []string{"Metrics()"},
+		Collabs: `// The rank service takes no collaborators: what is ranked, how a submit
+// combines with the stored value and when a season ends are all the caller's
+// (a board id, an UpdateMode and a RequestID per submit). Reset is
+// deliberately absent from the bus interface — emptying a board is an
+// operator action with an audit trail, not something every peer can reach.
+`,
+		ConfigFunc: func(project string) string {
+			return "rank:\n  key_prefix: roost:" + project + ":rank\n"
+		},
+	},
 	"session": {
 		Package: "session", Interface: "Session", Depends: []string{"redis", "nats"},
 		ModArgs: []string{"Release()", "Metrics()"},

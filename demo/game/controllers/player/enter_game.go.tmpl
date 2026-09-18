@@ -21,7 +21,7 @@ func (controller *Controller) HandleEnterGame(context *player_agent.Context, req
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("enter_game endpoint: context and request are required")
 	}
-	_, created, err := controller.Players().GetOrCreate(context.Context(), context.PlayerID)
+	subject, created, err := controller.Players().GetOrCreate(context.Context(), context.PlayerID)
 	if err != nil {
 		code, reason := errcode.ClientError(err)
 		if code == errcode.CodeInternal {
@@ -36,6 +36,16 @@ func (controller *Controller) HandleEnterGame(context *player_agent.Context, req
 	}
 	// From here on the player receives world-channel pushes.
 	controller.Presence().Add(context.PlayerID)
+	// ... and the replicated state of everyone else in the scene. Joining
+	// hands the Entity's sync subject to the room, which sends this client a
+	// snapshot of each subject it subscribes to and everyone else a snapshot
+	// of this one. A failure here is not a failed login: the player plays,
+	// they just do not see the others until the next login.
+	if scene, err := controller.Scene(); err != nil {
+		slog.Warn("enter_game: no scene to join", "player_id", context.PlayerID, "err", err)
+	} else if err := scene.Join(context.Context(), subject); err != nil {
+		slog.Warn("enter_game: player did not join the scene", "player_id", context.PlayerID, "err", err)
+	}
 	// The game announces the login on the world channel through the chat
 	// service's privileged path (PublishSystem: no player could have sent
 	// this). Best effort — a missed announcement is not a failed login — and

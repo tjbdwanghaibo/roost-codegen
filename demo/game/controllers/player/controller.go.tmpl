@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"{{MODULE}}/game/chatroom"
+	player "{{MODULE}}/game/entities/player"
 	world "{{MODULE}}/game/entities/world"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/skills"
@@ -17,6 +18,7 @@ import (
 	svcchat "github.com/tjbdwanghaibo/roost-kit/service/chat"
 	svcmail "github.com/tjbdwanghaibo/roost-kit/service/mail"
 	svcmatch "github.com/tjbdwanghaibo/roost-kit/service/match"
+	svcrank "github.com/tjbdwanghaibo/roost-kit/service/rank"
 	svcsession "github.com/tjbdwanghaibo/roost-kit/service/session"
 )
 
@@ -34,9 +36,11 @@ type Controller struct {
 	messaging  svcchat.Messaging
 	mailer     svcmail.Mail
 	sessions   svcsession.Session
+	ranking    svcrank.Rank
 	presence   *chatroom.Presence
 	transport  atomic.Pointer[pushTransport]
 	battles    atomic.Pointer[battleRouter]
+	scene      atomic.Pointer[sceneJoiner]
 	worldID    int64
 
 	// The skill catalog, compiled from game/skills/*.json on first use.
@@ -51,6 +55,14 @@ type Controller struct {
 // service package imports the controller, not the other way round.
 type battleRouter interface {
 	SubmitBattleInput(ctx context.Context, battleID string, playerID int64, frame uint32, payload []byte, hashFrame uint32, hash uint64, catchupFrom uint32) error
+}
+
+// sceneJoiner is the slice of the scene an endpoint needs: put this player's
+// Entity into the replicated world. Looked up by capability name for the same
+// reason as the battle manager — the service package imports this one.
+type sceneJoiner interface {
+	Join(ctx context.Context, subject *player.Player) error
+	Leave(ctx context.Context, playerID int64)
 }
 
 // pushTransport is the slice of the player TCP Runtime the endpoints use.
@@ -71,6 +83,10 @@ const playerTCPCapability app.ModName = "access.player.tcp"
 // Init, which runs after this controller is constructed, so the lookup is
 // lazy like the transport's.
 const battleCapability app.ModName = "{{GAME_SERVICE}}.battle"
+
+// sceneCapability is what internal/service/<game> publishes its scene under
+// (SceneCapability there).
+const sceneCapability app.ModName = "{{GAME_SERVICE}}.scene"
 
 // FromRegistry is what the generated protocol binding calls once per
 // process; keep its signature.
@@ -105,13 +121,18 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if !ok || sessions == nil {
 		return nil, fmt.Errorf("player controller: capability %q not found; list session under services.<game>.uses", svcsession.CapabilityName)
 	}
+	ranking, ok := app.Lookup[svcrank.Rank](registry, svcrank.CapabilityName)
+	if !ok || ranking == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; list rank under services.<game>.uses", svcrank.CapabilityName)
+	}
 	worldID, err := entity.BuildEntityID(lifecycle.WorldUniqueID, world.EntityKindWorld)
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
 	return &Controller{
 		registry: registry, nestClient: client, players: players,
-		matcher: matcher, messaging: messaging, mailer: mailer, sessions: sessions, presence: chatroom.NewPresence(), worldID: worldID,
+		matcher: matcher, messaging: messaging, mailer: mailer, sessions: sessions, ranking: ranking,
+		presence: chatroom.NewPresence(), worldID: worldID,
 	}, nil
 }
 
@@ -203,6 +224,30 @@ func (controller *Controller) Battles() (battleRouter, error) {
 	}
 	controller.battles.Store(&router)
 	return router, nil
+}
+
+// Ranking is the leaderboard service.
+func (controller *Controller) Ranking() svcrank.Rank {
+	if controller == nil {
+		return nil
+	}
+	return controller.ranking
+}
+
+// Scene is the replicated world, looked up lazily like the battle manager.
+func (controller *Controller) Scene() (sceneJoiner, error) {
+	if controller == nil {
+		return nil, errors.New("player controller: nil")
+	}
+	if joiner := controller.scene.Load(); joiner != nil {
+		return *joiner, nil
+	}
+	joiner, ok := app.Lookup[sceneJoiner](controller.registry, sceneCapability)
+	if !ok || joiner == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; the scene is not running", sceneCapability)
+	}
+	controller.scene.Store(&joiner)
+	return joiner, nil
 }
 
 // WorldID is the full entity id of this process's World.

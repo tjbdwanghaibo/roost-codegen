@@ -7,6 +7,12 @@ import (
 
 const EntityKindPlayer entity.EntityKind = 1
 
+// SyncTopicPlayer names the subject stream a replicated Player belongs to.
+// The marker below repeats the literal on purpose: syncTopic takes a literal
+// or a package-qualified constant, and a bare identifier would be written out
+// as the string "SyncTopicPlayer".
+const SyncTopicPlayer = "player"
+
 // IPlayerEntity is the lock-safe business view used by Nest handlers.
 type IPlayerEntity interface{ entity.IThreadSafeEntity }
 
@@ -21,12 +27,48 @@ type IPlayerEntity interface{ entity.IThreadSafeEntity }
 // is encoded in the id), so this is decided once, before the first document
 // is persisted; afterwards it is a data migration.
 //
-//roost:entity id=1 entityKind=EntityKindPlayer category=entity.EntityCategoryPlayer
+// sync=true is what gives this Entity a SubjectSyncState: the framework's
+// server-authoritative replication to clients. The DAO fields tagged
+// `dao:"...,sync"` already record what changed (the generated setters call
+// Tracker.MarkSync); sync=true adds the subject that turns those marks into
+// versioned deltas, and subjectPacker names who serializes them.
+//
+// Nothing about it is automatic on the write side: marking the DAO dirty and
+// marking the SUBJECT dirty are two different facts, and the game decides
+// when the second one happens (PublishSyncDirty below). That split is
+// deliberate — a transaction that changed three fields should produce one
+// delta, not three.
+//
+//roost:entity id=1 entityKind=EntityKindPlayer category=entity.EntityCategoryPlayer sync=true syncTopic=player subjectPacker=NewPlayerSyncPacker
 type Player struct {
 	*entity.EntityBase
 	entity.ComponentManager
 	entity.DaoManager
 	profile *ProfileComponent `comp:"CompTypeProfile"`
 	bag     *BagComponent     `comp:"CompTypeBag"`
+	attr    *AttributeComponent `comp:"CompTypeAttribute"`
 	dao     *db.PlayerDao     `dao:"player"`
+}
+
+// PublishSyncDirty hands whatever the generated DAO recorded as sync-dirty to
+// the subject the scene replicates. Call it at the end of a mutation, not per
+// field: one call is one delta.
+//
+// Two things worth knowing before copying this:
+//
+//   - TakeSyncDirty CONSUMES the mask. In this demo the client is the only
+//     consumer; a project that also mirrors the Entity to another process has
+//     a second reader and must not let one of them steal the other's mask.
+//   - Called inside a transaction that later rolls back, the subject stays
+//     marked while the DAO's own mark is restored. That is safe in the
+//     direction that matters: the next flush packs current state, so the
+//     client gets the truth — just one redundant delta. Marking too little
+//     would be the unsafe direction.
+func (player *Player) PublishSyncDirty() {
+	if player == nil {
+		return
+	}
+	if mask := player.Dao().DirtyTracker().TakeSyncDirty(); mask != 0 {
+		player.MarkSyncDirty(mask)
+	}
 }

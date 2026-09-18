@@ -87,7 +87,7 @@ func TestDemoTemplateKeepsTheGameTemplateAndItsFeatures(t *testing.T) {
 	if err := applyDemoTemplate(&m, "game"); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"account", "mail", "match", "chat", "session"} {
+	for _, name := range []string{"account", "mail", "match", "chat", "rank", "session"} {
 		if m.Services[name].Framework != name {
 			t.Errorf("demo dropped hosted service %s: %+v", name, m.Services[name])
 		}
@@ -196,7 +196,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// the stub marker, so the demo's own texts must not contain it either
 	// (account's verifier once said "channel %q is not configured" and read as
 	// a stub).
-	for _, service := range []string{"account", "chat", "mail", "match", "session"} {
+	for _, service := range []string{"account", "chat", "mail", "match", "rank", "session"} {
 		if collaborators := read("internal/service/" + service + "/collaborators.go"); strings.Contains(collaborators, collaboratorUnconfiguredMarker) {
 			t.Errorf("%s collaborators still read as unconfigured to doctor:\n%s", service, collaborators)
 		}
@@ -242,9 +242,9 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if conn := read("loadtest/playertcp/conn.go"); !strings.Contains(conn, "header[3]&flagServerPush == 0 && wire != 0") {
 		t.Errorf("the robot transport does not classify frames by the server-push flag; a push carrying a pending wire sequence would be taken for the response")
 	}
-	// Five processes on one machine: each config has its own ops port, in the
-	// order run.sh and prometheus.yml assume.
-	for service, port := range map[string]string{"game": "9100", "account": "9101", "chat": "9102", "mail": "9103", "match": "9104", "session": "9105"} {
+	// Seven processes on one machine: each config has its own ops port, in
+	// the order run.sh and prometheus.yml assume.
+	for service, port := range map[string]string{"game": "9100", "account": "9101", "chat": "9102", "mail": "9103", "match": "9104", "rank": "9105", "session": "9106"} {
 		if cfg := read("configs/service/config." + service + ".yaml"); !strings.Contains(cfg, "addr: 127.0.0.1:"+port) {
 			t.Errorf("config.%s.yaml does not listen ops on %s", service, port)
 		}
@@ -281,6 +281,23 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	}
 	if scenario := read("loadtest/scenarios/demo.yaml"); !strings.Contains(scenario, "finish_dungeon_replay") {
 		t.Errorf("the robot scenario never replays a finished dungeon, so a double reward would pass unnoticed")
+	}
+	// Entity sync: the Player is a replicated subject, the scene is the room
+	// that schedules and fans out its deltas, and the client half decodes
+	// them. A demo without this never exercises server-authoritative
+	// replication at all — which is how a generated sync=true entity could
+	// stop compiling against Core without anything noticing (RR-20260918-01).
+	if marker := read("game/entities/player/entity.go"); !strings.Contains(marker, "sync=true") || !strings.Contains(marker, "subjectPacker=NewPlayerSyncPacker") {
+		t.Errorf("the demo Player is not a replicated subject, so sync=true has no consumer in the template")
+	}
+	if scene := read("internal/service/game/scene.go"); !strings.Contains(scene, "room.NewRoomManager(") || !strings.Contains(scene, "DurableWatermark") || !strings.Contains(scene, "RegisterSubject") {
+		t.Errorf("the scene does not assemble the room, its subjects and the durability gate")
+	}
+	if packer := read("game/entities/player/sync_packer.go"); !strings.Contains(packer, "PackSubjectDelta") || !strings.Contains(packer, "MarshalSync(mask)") {
+		t.Errorf("the player packer does not turn the DAO's dirty mask into a delta")
+	}
+	if scenario := read("loadtest/scenarios/demo.yaml"); !strings.Contains(scenario, "scene_watch") || !strings.Contains(scenario, "scene_expect") {
+		t.Errorf("the robot scenario never observes replicated state, so a broken sync path would pass unnoticed")
 	}
 	// The lockstep battle: the room is opened by the matchmaker, owned by one
 	// goroutine, and its broadcast lane is the player TCP push. The robot

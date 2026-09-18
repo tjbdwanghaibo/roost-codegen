@@ -56,6 +56,7 @@ func (component *ProfileComponent) Rename(name string) error {
 		return errcode.Wrap(apperrors.ErrNameEmpty, nil)
 	}
 	component.Owner().Dao().SetName(name)
+	component.Owner().PublishSyncDirty()
 	return nil
 }
 
@@ -81,13 +82,23 @@ func (component *ProfileComponent) AddExp(amount int64) (int32, error) {
 	}
 	dao.SetExp(exp)
 	if gained == 0 {
+		// One call per mutation, at every exit that changed something: the
+		// subject carries the accumulated mask, so the client sees one delta
+		// for "exp moved" rather than one per setter.
+		component.Owner().PublishSyncDirty()
 		return 0, nil
 	}
 	level := dao.GetLevel() + gained
 	dao.SetLevel(level)
+	// The level is a DAO field; what a level is WORTH is the attribute
+	// system's. LevelUp raises the base layer, recomposes Final over it and
+	// writes both back — all inside this transaction, so a rollback takes
+	// the attributes with the level.
+	component.Owner().AttributeComp().LevelUp(gained)
 	if err := effects.EmitPlayerLevelUp(component.Owner().UniqueID(), level); err != nil {
 		return 0, fmt.Errorf("profile: %w", err)
 	}
+	component.Owner().PublishSyncDirty()
 	return gained, nil
 }
 

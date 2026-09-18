@@ -16,6 +16,12 @@ scenarios:
       sequence:
         - action: connect
         - action: enter_game
+        # The scene: from here the server replicates this client's own state
+        # and every other online player's, as versioned deltas. Installed
+        # right after the login that joined it — a capture installed later
+        # would miss the frames the changes below produce. scene_expect at the
+        # end judges what arrived.
+        - action: scene_watch
         # The server compiled its skill catalog at startup; list it.
         - action: skill_catalog
         # Chat: say hello on the world channel (a bus call into the chat
@@ -131,6 +137,25 @@ scenarios:
         - action: finish_dungeon_replay
           param:
             success: true
+        # The dungeon clear moved this player's exp and level through an
+        # ordinary Nest transaction. Nobody wrote a push for it: the entity's
+        # sync subject produced a delta, the scene's room framed it, and the
+        # client decoded it. If this fails, replication is not carrying real
+        # state changes — the rest of the run would not notice.
+        - action: scene_expect
+          param:
+            # attr_final is the composed attribute view: it is never stored
+            # (the DAO field is nopersist) and only exists on the wire, so
+            # asking for it here is what proves the attribute container is
+            # actually wired into replication rather than just into Mongo.
+            fields: level,exp,attr_base,attr_final
+            timeout: 10s
+        # The leaderboard. The clear was counted through the rank service with
+        # the run id as the request id, so the replay above did not count a
+        # second time — the board is where that shows.
+        - action: rank_top
+          param:
+            limit: 10
         # Matchmaking: join the duel queue, then poll until the game's
         # matchmaker has paired this robot with another one. The ticket id
         # comes from the blackboard, where join_queue's OnResp put it.

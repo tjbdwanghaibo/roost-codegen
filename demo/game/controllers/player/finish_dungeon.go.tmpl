@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"{{MODULE}}/game/dungeon"
+	"{{MODULE}}/game/ranking"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	player_agent "{{MODULE}}/game/player_agent"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/errcode"
+	svcrank "github.com/tjbdwanghaibo/roost-kit/service/rank"
 	svcsession "github.com/tjbdwanghaibo/roost-kit/service/session"
 )
 
@@ -106,6 +108,17 @@ func (controller *Controller) HandleFinishDungeon(context *player_agent.Context,
 	// already paid, and saying so is more useful than repeating the numbers.
 	if result.Claimed {
 		response.ExpGranted, response.LevelsGained = result.ExpGranted, result.LevelsGained
+	}
+	// The leaderboard point. It is OUTSIDE the transaction — the board lives
+	// in another service — so the two are not atomic: a crash here leaves a
+	// paid clear that was never counted. That direction is the recoverable
+	// one, and the submit is idempotent on the run id, so a retry of this
+	// endpoint counts it once whether or not the first attempt got through.
+	// The submit is deliberately not gated on result.Claimed for that reason:
+	// a replay that finds the reward already paid is exactly the case where
+	// the point may still be missing.
+	if _, err := controller.Ranking().Submit(context.Context(), ranking.ClearsBoard(), ranking.ClearScore(context.PlayerID), svcrank.UpdateAdd, ranking.ClearRequestID(run.ID)); err != nil {
+		slog.Warn("finish_dungeon: clear not counted on the board", "player_id", context.PlayerID, "run_id", run.ID, "err", err)
 	}
 	return response, nil
 }

@@ -199,6 +199,56 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
   deliver 那条仍然是"两次提交"：mail 服务的去重是第二层，不是同一条记录。
 - **需要 core ≥ v1.15.6 / kit ≥ v1.14.7**：此前 Mongo 存储上任何步骤拒绝都进不了补偿（U-0225，`step result timeout` 反复出现），送给玩家 1 那一段会卡住。
 
+## 服务端权威状态同步：Player 是复制主体，scene 是它的调度器
+
+`sync=true` 的实体有一个 **sync 主体**（`Player.Sync()`）：版本、脏掩码、packer。scene 是它的另一半——谁订阅了谁、
+什么时候成帧、往哪条线发。
+
+```
+Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶ 主体标脏
+                                                                      │  room 每 200ms
+主体 ─ Prepare(packer) ─▶ entitysync coordinator ─▶ RoomTransportSink ─▶ AdmitBatch ─▶ TCP 推送 10103
+                                                            （快照/离场走 reliable，delta 走分片）
+客户端：分片 → statesync.Reassembler → room.DecodeRoomWireFrame → DecodeRoomSubjectUpdate → 合并进本地视图
+```
+
+- **写入侧不是自动的**。把 DAO 标脏和把**主体**标脏是两件事：`PublishSyncDirty()` 在一次变更的末尾调一次，
+  于是一次事务产出**一条** delta 而不是每个 setter 一条。复制是"一次已提交的变更"的副作用，不是"有人调了 setter"的副作用。
+- **payload 是 DAO 自己的同步文档**（`MarshalSync(mask)`，与 `ApplySync` 成对）。掩码从生成的 setter 来、原样回到生成的
+  marshaller，两端都不需要知道哪个 bit 是哪个字段——生成的字段掩码常量是 DAO 包私有的，别的包里的 packer 没法按字段裁剪
+  （已登记给 review）。要自己的客户端协议的项目在这里换成自己的消息。
+- **持久化水位**：`kit/dataengine` 的 `DurableLSN` 装进 `RoomManagerConfig.DurableWatermark`。流水线提交的部署会在 WAL 落盘前
+  就确认事务，把这种内容外发等于让客户端看到服务端还可能丢掉的状态；房间会压住它直到水位追上。
+- **没有兴趣管理**：所有人订阅所有人，O(n²)，只因为 demo 世界只有几个机器人。AOI 应该插在 `Subscribe` / `Unsubscribe` 前面，
+  scene 的其余部分不用动。
+- **没有断连回调**：生成的接入层不通知会话关闭，所以"谁还在线"靠两条——推送失败就把人摘掉，以及有人入场时按
+  `ActiveSessions` 扫一遍陈旧成员。chat 的 presence 有同样的问题。
+- 机器人 `scene_watch` / `scene_expect` 是真客户端：解码、合并、断言。**推送消息必须在 loadtest 注册解码器**，
+  否则推送到了也解不出来、静默丢弃。
+
+## 属性：层、合成，以及两种存储意图
+
+`game/gameplay/attribute` 声明属性与派生公式，`game/entities/player/attribute_component.go` 是容器的归属地。
+
+- **三层**：`Base`（玩家自己的值）、`Gear`（背包的投影，按 item 表的 `attack` / `hp` 求和）、`Final`（合成视图）。
+- **合成规则**：`Final = Base + Gear` 逐属性相加，**然后**才 `Update()` 重算派生属性。派生属性只算一次、且算在合成后的输入上——
+  把各层自己的战力相加，等于把两个各用一半输入算出来的评分加起来，那不是战力的意思。
+- **两种存储意图**：`AttrBase` 是 `persist,sync`；`AttrFinal` 是 `nopersist,sync`——能从已存的东西推出来的值不存
+  （存了就是第二个真相，会和第一个打架），但它是客户端要画的，所以照样复制。Mongo 里只有 `attr_base`，线上两个都有。
+- 容器在 `OnInitFinish` 填充：生成的 builder 先挂 DAO、再初始化组件，所以那时存储值已经在手上了。
+- **没做**：会过期的层。真正的 buff 层需要一个时钟和一次扫描，而它该待在被 tick 调用的组件方法里，不是某个 getter 里的惰性检查。
+
+## 排行榜：rank 服务，与领奖账本同一个幂等键
+
+`game/ranking/ranking.go` 是游戏这侧的决定：哪个榜、一分是什么、什么让提交可重试。
+
+- 清关提交用 `UpdateAdd`（本身**不**可重放）+ requestID = `clear:<run id>`——和奖励账本键的是同一个 run 身份。
+  一次清关只发一次奖、只记一分，两件事同源不是巧合。
+- 提交**不**以"这次是否真的发了奖"为条件：重放发现奖励已发，恰恰是"分可能还没记上"的那种情况。
+- 提交在事务**外**（榜在另一个服务），两者不原子。崩在中间会留下"已发奖但没记分"——可恢复的方向，重试这个端点因幂等键只记一次。
+- `RankTop`（10016）读榜头 + 自己的名次，两次读：一页是榜头，说不了不在榜上的人的事。榜 id 由服务端定，
+  从线上收一个 board id 等于让任何人读到任何榜。
+
 ## 技能目录：启动时编译，客户端可查
 
 `game/skills/fireball.json` 是 demo 的一个技能定义（`roost add skill` 生成骨架，再写上契约说明），`game/skills/catalog.go` 把目录下的 JSON

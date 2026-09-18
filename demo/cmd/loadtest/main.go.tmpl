@@ -13,7 +13,6 @@
 package main
 
 import (
-	"strings"
 	"context"
 	"encoding/json"
 	"errors"
@@ -25,6 +24,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -45,7 +46,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
 	"github.com/tjbdwanghaibo/roost-core/robot/session"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	"github.com/tjbdwanghaibo/roost-core/room"
+	corestate "github.com/tjbdwanghaibo/roost-core/statesync"
 	svcaccount "github.com/tjbdwanghaibo/roost-kit/service/account"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 const profileName = "demo"
@@ -386,6 +390,27 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 		}
 		return nil
 	}})
+	// rank_top: the leaderboard. Every robot cleared a dungeon, so every
+	// robot must be ON the board — and its own value must be exactly 1 no
+	// matter how many times it replayed the finish, which is what the
+	// idempotent submit promises.
+	action.MustRegisterCall[pb.RankTopRequest, pb.RankTopResponse](actions, protocols, "rank_top", msgid.MsgRankTop,
+		action.OnResp(func(rb *robot.Context, resp *pb.RankTopResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			rawPlayer, _ := rb.Blackboard.Get("player_id")
+			playerID, _ := rawPlayer.(int64)
+			if resp.MyRank <= 0 {
+				return fmt.Errorf("player %d cleared a dungeon but is not on the board (total %d)", playerID, resp.Total)
+			}
+			for _, entry := range resp.Entries {
+				if entry.PlayerID == playerID && entry.Value != 1 {
+					return fmt.Errorf("player %d counted %d clears for one run", playerID, entry.Value)
+				}
+			}
+			return nil
+		}))
 	// battle: the lockstep half. The scenario reaches it with match_id on
 	// the blackboard (join_queue → the matchmaker's MatchFound push), and
 	// this action runs a real client of roost-core/lockstep for the length
@@ -396,6 +421,15 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 	// terminal (a gap it could not heal, a simulation that diverged) or if
 	// the battle does not reach its frame budget in time.
 	actions.MustRegister(action.Func{ActionName: "battle", Handle: runBattle})
+	// scene_watch / scene_expect are the client half of sync=true. The watch
+	// installs a push capture and decodes every state frame the server sends
+	// this client — reliable snapshots whole, deltas reassembled from their
+	// fragments — exactly as a real client would. The expect judges what
+	// arrived at the end of the run, so the two are separate actions: a
+	// capture installed after the change has already been pushed sees
+	// nothing.
+	actions.MustRegister(action.Func{ActionName: "scene_watch", Handle: watchScene})
+	actions.MustRegister(action.Func{ActionName: "scene_expect", Handle: expectScene})
 	action.MustRegisterCall[pb.EnterDungeonRequest, pb.EnterDungeonResponse](actions, protocols, "enter_dungeon", msgid.MsgEnterDungeon,
 		action.OnResp(func(rb *robot.Context, resp *pb.EnterDungeonResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
@@ -467,6 +501,9 @@ func registerPushes(protocols *protocol.Registry) {
 	protocols.MustRegisterDecoder(msgid.MsgMatchFound, protocol.DecodeTyped(msgid.MsgMatchFound, pb.UnmarshalMatchFoundPush))
 	protocols.MustRegisterDecoder(msgid.MsgChatMessage, protocol.DecodeTyped(msgid.MsgChatMessage, pb.UnmarshalChatMessagePush))
 	protocols.MustRegisterDecoder(msgid.MsgBattleFrame, protocol.DecodeTyped(msgid.MsgBattleFrame, pb.UnmarshalBattleFramePush))
+	// The scene's state frames. A push whose id has no decoder is dropped
+	// before any capture sees it, so registering it is not optional bookkeeping.
+	protocols.MustRegisterDecoder(msgid.MsgEntitySync, protocol.DecodeTyped(msgid.MsgEntitySync, pb.UnmarshalEntitySyncPush))
 	// BattleInput is sent by the battle action, not by a registered call, so
 	// its codec entries are installed here: the request encoder and the
 	// response decoder both route through pbCodec like every other message.
@@ -560,6 +597,8 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalGiftStatusRequest(message)
 	case *pb.BattleInputRequest:
 		return pb.MarshalBattleInputRequest(message)
+	case *pb.RankTopRequest:
+		return pb.MarshalRankTopRequest(message)
 	default:
 		return nil, fmt.Errorf("pb codec: no marshal for %T", value)
 	}
@@ -659,6 +698,12 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 		*message = *decoded
 	case *pb.BattleInputResponse:
 		decoded, err := pb.UnmarshalBattleInputResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.RankTopResponse:
+		decoded, err := pb.UnmarshalRankTopResponse(data)
 		if err != nil {
 			return err
 		}
@@ -822,6 +867,148 @@ func runBattle(ctx context.Context, rb *robot.Context, param any) error {
 			}
 		case <-battleCtx.Done():
 			return fmt.Errorf("battle: applied %d of %d frames before the deadline", bot.Next()-1, want)
+		}
+	}
+}
+
+// sceneWatcher is a client-side view of the replicated world: subject id →
+// the fields this client has been told about. It is what a real client would
+// feed into its rendering state.
+type sceneWatcher struct {
+	mu          sync.Mutex
+	reassembler *corestate.Reassembler
+	session     corestate.SessionID
+	subjects    map[int64]bson.M
+	frames      int
+	deltas      int
+	failure     error
+}
+
+func (watcher *sceneWatcher) consume(push *pb.EntitySyncPush) {
+	watcher.mu.Lock()
+	defer watcher.mu.Unlock()
+	raw := push.Payload
+	if push.Datagram {
+		complete, done, _, err := watcher.reassembler.PushFor(watcher.session, push.Payload, time.Now())
+		if err != nil {
+			watcher.failure = fmt.Errorf("reassemble state frame: %w", err)
+			return
+		}
+		if !done {
+			return
+		}
+		raw = complete
+		watcher.deltas++
+	}
+	_, _, frame, err := room.DecodeRoomWireFrame(raw, corestate.DefaultLimits())
+	if err != nil {
+		watcher.failure = fmt.Errorf("decode state frame: %w", err)
+		return
+	}
+	watcher.frames++
+	for _, object := range frame.Objects {
+		for _, component := range object.Components {
+			update, err := room.DecodeRoomSubjectUpdate(component.Data, 0)
+			if err != nil {
+				watcher.failure = fmt.Errorf("decode subject update: %w", err)
+				return
+			}
+			payload := update.Payload.BytesCopy()
+			if len(payload) == 0 {
+				continue
+			}
+			var document bson.M
+			if err := bson.Unmarshal(payload, &document); err != nil {
+				watcher.failure = fmt.Errorf("decode player state: %w", err)
+				return
+			}
+			// A delta carries only what changed, so the client MERGES it into
+			// what it already knows. Replacing would make every delta look
+			// like a state with three fields missing.
+			known := watcher.subjects[update.SubjectID]
+			if known == nil {
+				known = bson.M{}
+				watcher.subjects[update.SubjectID] = known
+			}
+			for key, value := range document {
+				known[key] = value
+			}
+		}
+	}
+}
+
+// watchScene installs the capture. Params: none.
+func watchScene(_ context.Context, rb *robot.Context, _ any) error {
+	rawPlayer, _ := rb.Blackboard.Get("player_id")
+	playerID, _ := rawPlayer.(int64)
+	watcher := &sceneWatcher{
+		reassembler: corestate.NewReassembler(corestate.DefaultLimits(), 5*time.Second),
+		session:     corestate.SessionID(playerID),
+		subjects:    make(map[int64]bson.M),
+	}
+	rb.Blackboard.Set("scene_watcher", watcher)
+	if err := rb.EnsurePushCapture("scene", msgid.MsgEntitySync, func(message *session.Message) {
+		push, ok := message.Value.(*pb.EntitySyncPush)
+		if !ok {
+			return
+		}
+		watcher.consume(push)
+	}); err != nil {
+		return fmt.Errorf("scene_watch: capture state frames: %w", err)
+	}
+	return nil
+}
+
+// expectScene judges what arrived. Params: "fields" (comma separated, each
+// must have been replicated for this client's own subject), "timeout".
+func expectScene(ctx context.Context, rb *robot.Context, param any) error {
+	params := action.ParamsOf(rb, param)
+	timeout := params.Duration("timeout", 10*time.Second)
+	wanted := strings.Split(params.String("fields", "level"), ",")
+	raw, _ := rb.Blackboard.Get("scene_watcher")
+	watcher, ok := raw.(*sceneWatcher)
+	if !ok || watcher == nil {
+		return errors.New("scene_expect: no watcher on the blackboard; scene_watch must run first")
+	}
+	deadline := time.After(timeout)
+	for {
+		watcher.mu.Lock()
+		failure, subjects := watcher.failure, len(watcher.subjects)
+		missing := ""
+		if failure == nil && subjects > 0 {
+			for _, field := range wanted {
+				field = strings.TrimSpace(field)
+				if field == "" {
+					continue
+				}
+				found := false
+				for _, document := range watcher.subjects {
+					if _, ok := document[field]; ok {
+						found = true
+						break
+					}
+				}
+				if !found {
+					missing = field
+					break
+				}
+			}
+		}
+		watcher.mu.Unlock()
+		if failure != nil {
+			return failure
+		}
+		if subjects > 0 && missing == "" {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline:
+			watcher.mu.Lock()
+			defer watcher.mu.Unlock()
+			return fmt.Errorf("scene_expect: after %s the client knows %d subjects and %d frames; %q never arrived", timeout, len(watcher.subjects), watcher.frames, missing)
+		case <-time.After(100 * time.Millisecond):
 		}
 	}
 }

@@ -6,6 +6,24 @@
 
 ### Added
 
+- **game-demo：服务端权威状态同步（`sync=true` 的第一个使用方）**（§9.3.1）。Player 成为复制主体，
+  `internal/service/<game>/scene.go` 是它的调度器：`Player.Sync()`（版本 / 脏掩码 / packer）→ `room.RoomBroadcaster`
+  （谁订阅了谁、何时 flush）→ `room.RoomTransportSink`（每会话线帧）→ demo 的 TCP 推送（新消息 `EntitySync` 10103）。
+  写入侧**故意不自动**：`Player.PublishSyncDirty()` 在一次变更末尾调一次，于是一次事务产出一条 delta。
+  payload 是 DAO 自己的同步文档（`MarshalSync(mask)` / `ApplySync` 成对），掩码不透明地进出。
+  `kit/dataengine.DurableLSN` 装进 `RoomManagerConfig.DurableWatermark`——U-0233 那个入口的第一个真实使用方。
+  随工程生成 `internal/service/game/scene_test.go`（一个玩家改 DAO，另一个玩家的线上收到可解码 delta，
+  分片经 `statesync.Reassembler` 重组）与机器人的 `scene_watch` / `scene_expect`（真客户端解码、合并、断言）。
+  边界写在文件头：没有 AOI（所有人订阅所有人）、接入层没有断连回调（靠推送失败 + 入场时按 `ActiveSessions` 扫）。
+- **game-demo：attribute 接进持久化与同步，层间合成定死**（§9.3.2）。三层 `Base` / `Gear` / `Final`；
+  规则是 `Final = Base + Gear` 逐属性相加**再** `Update()` 重算派生属性（派生只算一次、算在合成后的输入上）。
+  `AttrBase` 是 `persist,sync`、`AttrFinal` 是 `nopersist,sync`——能推出来的值不存，但照样复制。
+  容器在 `OnInitFinish` 填充；item 表加 `attack` / `hp` 两列，Gear 层是背包按配置求和。
+  新增 `game/entities/player/attribute_component.go` 与其测试。
+- **`-template game` / `game-demo` 托管第六个服务：rank**（`frameworkCatalog` 加 `rank`，ops 端口 9105、session 顺延 9106）。
+  demo 侧：`game/ranking/ranking.go` 定板与分值，清关用 `UpdateAdd` + requestID `clear:<run id>` 提交——
+  与奖励账本同一个 run 身份，所以重放的 FinishDungeon 只记一分；新端点 `RankTop`(10016) 读榜头与自己的名次；
+  机器人加 `rank_top` 断言自己在榜上且值为 1。观测配置补 rank 抓取目标。
 - **game-demo：送礼 saga 的两个 Nest 步骤改走原生路径**（§9.1 第 2 条，需 core ≥ v1.15.7）。debit 与它的补偿（新 handler `GiftRefund`，不再借用 `AddItem`）用 `saga.SubscribeDataEngineStep`：handler 在自己的 Nest 事务里 `inbox.Bind(command, reservation)` + `saga.EmitCompletion(...)`，背包变更、命令回执、协调器等的完成结果落进**同一条 WAL 记录**——重投撞上回执回放已存结果，提交前崩溃则三样都没发生。此前这是两次提交，中间的窗口写在注释里当边界。deliver 的业务是一次 bus 调用、没有事务可绑，**刻意留在** `SubscribeMongoStep`（第二层幂等是 mail 服务的 RequestID 去重）；这条分界是规则，拿原生路径包跨服务调用等于把回执绑在不含那次副作用的事务上。业务拒绝也提交（不动数据，只写回执和失败的完成结果），只有基础设施错误回滚重投。新增 `gift.NativeStep` carrier 与 `Complete(success, reason)`。实跑：6 机器人全过、6 completed + 6 compensated，Mongo 里 `saga-step` 回执 18 条（debit + refund）、Mongo step inbox 12 条（全是 deliver）。
 - **`roost add saga` 生成步骤 topic 常量**（`TopicDebit` / `TopicDebitCompensation` …）。此前只生成绑定 Mongo inbox 的 `Subscribe*` 助手，想走原生路径就得自己重复 topic 字符串；现在 durable 与 filter 由同一份常量给出，不会漂。
 - **game-demo：邮件附件的领取做成恰好一次**（§9.1 第 1 条，与 dungeon 清关奖励同形）。`ClaimMail` 的三步里，中间那一步换成 `ClaimMailReward` 事务：邮件 id 与道具进同一条 WAL 记录（`db/def/player.go` 的 `MailClaims` 账本、`Bag.ClaimMailReward`、新 errcode `mail_claim`(100011)）。三次调用不可能合成一个事务——邮件在另一个进程——所以窗口是真的：发放成功、`CommitClaim` 丢失、预留到期、重试用同一个 token 再预留一次；邮件服务只能算作重复**尝试**（它无从知道游戏发没发），游戏这边知道，第二次发放什么也不做。账本按时间清理，保留期长于 `mail.send_ttl`（720h），论证在 `game/rewards`。随工程生成 `game/handler/claim_mail_reward_test.go`：真实 handler 跑在真实 Nest 事务里（一个只发一个实体的 Getter + 记录型 committer + 工程自己的配置数据），去掉账本判断即红（重放拿到第二叠）。机器人加 `claim_mail_replay`。仍然开着的两处写在 README。

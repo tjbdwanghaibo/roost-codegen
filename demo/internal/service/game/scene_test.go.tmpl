@@ -1,0 +1,302 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+
+	player "{{MODULE}}/game/entities/player"
+	world "{{MODULE}}/game/entities/world"
+	"{{MODULE}}/game/handler"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/nest"
+	"github.com/tjbdwanghaibo/roost-core/room"
+	corestate "github.com/tjbdwanghaibo/roost-core/statesync"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// What this asserts is the whole claim of sync=true: a change made on the
+// server, through the ordinary DAO setters, reaches ANOTHER player's client
+// as a decodable delta — without anyone writing a push for it.
+//
+// The only stand-in is the socket. The subject, the room, the wire encoding
+// and the client-side decode are the real framework, which is the point: a
+// test that packed its own payload would prove nothing about the pipeline
+// that carries it.
+
+// sceneRecorder stands in for the player TCP Runtime, keeping what each
+// player would have received.
+type sceneRecorder struct {
+	mu     sync.Mutex
+	pushes map[int64][]*pb.EntitySyncPush
+}
+
+func newSceneRecorder() *sceneRecorder {
+	return &sceneRecorder{pushes: make(map[int64][]*pb.EntitySyncPush)}
+}
+
+func (recorder *sceneRecorder) PushPlayer(_ context.Context, playerID int64, messageID uint32, value any) error {
+	if messageID != msgid.MsgEntitySync {
+		return nil
+	}
+	push, ok := value.(*pb.EntitySyncPush)
+	if !ok {
+		return nil
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.pushes[playerID] = append(recorder.pushes[playerID], push)
+	return nil
+}
+
+// Every recorded player counts as connected; the sweep is exercised by the
+// leave test instead.
+func (recorder *sceneRecorder) ActiveSessions(int64) int { return 1 }
+
+func (recorder *sceneRecorder) take(playerID int64) []*pb.EntitySyncPush {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	taken := recorder.pushes[playerID]
+	delete(recorder.pushes, playerID)
+	return taken
+}
+
+// decodeSceneFrames turns what one player received into the subject updates
+// it carries. Reliable frames (snapshots, removals) decode directly; delta
+// fragments go through statesync's Reassembler, exactly as a UDP client would
+// do it.
+func decodeSceneFrames(t *testing.T, playerID int64, pushes []*pb.EntitySyncPush) map[int64]bson.M {
+	t.Helper()
+	out := make(map[int64]bson.M)
+	reassembler := corestate.NewReassembler(corestate.DefaultLimits(), time.Second)
+	for _, push := range pushes {
+		raw := push.Payload
+		if push.Datagram {
+			complete, done, _, err := reassembler.PushFor(corestate.SessionID(playerID), push.Payload, time.Now())
+			if err != nil {
+				t.Fatalf("reassemble: %v", err)
+			}
+			if !done {
+				continue
+			}
+			raw = complete
+		}
+		_, _, frame, err := room.DecodeRoomWireFrame(raw, corestate.DefaultLimits())
+		if err != nil {
+			t.Fatalf("decode wire frame: %v", err)
+		}
+		for _, object := range frame.Objects {
+			for _, component := range object.Components {
+				update, err := room.DecodeRoomSubjectUpdate(component.Data, 0)
+				if err != nil {
+					t.Fatalf("decode subject update: %v", err)
+				}
+				payload := update.Payload.BytesCopy()
+				if len(payload) == 0 {
+					continue
+				}
+				var document bson.M
+				if err := bson.Unmarshal(payload, &document); err != nil {
+					t.Fatalf("decode player sync payload: %v", err)
+				}
+				out[update.SubjectID] = document
+			}
+		}
+	}
+	return out
+}
+
+func newScenePlayer(t *testing.T, uniqueID int64) *player.Player {
+	t.Helper()
+	player.RegisterEntity()
+	id, err := entity.BuildEntityID(uniqueID, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: player.EntityKindPlayer, Id: id})
+	if err != nil {
+		t.Fatalf("build player %d: %v", uniqueID, err)
+	}
+	value, ok := built.(*player.Player)
+	if !ok {
+		t.Fatalf("the generated factory produced %T", built)
+	}
+	return value
+}
+
+func newSceneWorld(t *testing.T) *world.World {
+	t.Helper()
+	world.RegisterEntity()
+	id, err := entity.BuildEntityID(1, world.EntityKindWorld)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: world.EntityKindWorld, Id: id})
+	if err != nil {
+		t.Fatalf("build world: %v", err)
+	}
+	return built.(*world.World)
+}
+
+// sceneCommitter keeps what a transaction would have written instead of
+// writing it: this test is about what goes out on the wire, not what lands in
+// Mongo.
+type sceneCommitter struct{}
+
+func (sceneCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+func newSceneNest(t *testing.T, entities map[int64]entity.IThreadSafeEntity) nest.Client {
+	t.Helper()
+	handler.RegisterAddExpNestHandlers()
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(sceneGetter(entities)),
+		nest.NestOptionWithTransactionCommitter(sceneCommitter{}),
+		nest.NestOptionWithWorkerNumAndMsgCap(1, 1, 16),
+	)
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+	return engine
+}
+
+type sceneGetter map[int64]entity.IThreadSafeEntity
+
+func (g sceneGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	value, ok := g[id]
+	if !ok {
+		return nil, fmt.Errorf("the harness holds no entity %d", id)
+	}
+	return value, nil
+}
+
+func (g sceneGetter) GetMany(ctx context.Context, ids []int64, categories []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		value, err := g.Get(ctx, id, categories[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = value
+	}
+	return out, nil
+}
+
+func TestSceneReplicatesOnePlayersChangeToAnother(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil)
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	const (
+		watcherID = int64(9001)
+		moverID   = int64(9002)
+	)
+	watcher := newScenePlayer(t, watcherID)
+	mover := newScenePlayer(t, moverID)
+	if err := scene.Join(ctx, watcher); err != nil {
+		t.Fatalf("watcher joins: %v", err)
+	}
+	if err := scene.Join(ctx, mover); err != nil {
+		t.Fatalf("mover joins: %v", err)
+	}
+	if scene.Members() != 2 {
+		t.Fatalf("the scene holds %d members, want 2", scene.Members())
+	}
+	// Joining already produced snapshots; this test is about what a CHANGE
+	// produces, so start from a clean slate.
+	recorder.take(watcherID)
+
+	// An ordinary server-side mutation, through the real AddExp transaction.
+	// It has to be a transaction: the generated persist setters refuse to run
+	// outside one, which is also why replication cannot be a side effect of
+	// "someone called a setter" — it is a side effect of a committed change.
+	// Nothing in the handler knows about replication.
+	counters := newSceneWorld(t)
+	client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{
+		watcher.ID(): watcher, mover.ID(): mover, counters.ID(): counters,
+	})
+	gained, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, mover.ID(), counters.ID(), 250)
+	if err != nil {
+		t.Fatalf("add exp: %v", err)
+	}
+	if gained == 0 {
+		t.Fatal("the mutation did not level the player up, so the delta would be exp only")
+	}
+	if !mover.Sync().PendingDirty() {
+		t.Fatal("the subject was not marked dirty; PublishSyncDirty did not reach it")
+	}
+
+	if err := scene.room.FlushDirty(ctx); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	updates := decodeSceneFrames(t, watcherID, recorder.take(watcherID))
+	document, ok := updates[mover.ID()]
+	if !ok {
+		t.Fatalf("the watcher received no update for subject %d; got %v", mover.ID(), updates)
+	}
+	// The delta carries the fields the mask named — the ones AddExp changed.
+	if _, ok := document["level"]; !ok {
+		t.Errorf("the delta does not carry the level that changed: %v", document)
+	}
+	if _, ok := document["exp"]; !ok {
+		t.Errorf("the delta does not carry the exp that changed: %v", document)
+	}
+	// And not the ones it did not: a delta is not a snapshot.
+	if _, ok := document["items"]; ok {
+		t.Errorf("the delta carries a field the mutation never touched: %v", document)
+	}
+}
+
+// A player who leaves stops being replicated, and the others are told the
+// object is gone rather than left with a stale copy of it.
+func TestSceneRetiresASubjectOnLeave(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil)
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	watcher := newScenePlayer(t, 9101)
+	leaver := newScenePlayer(t, 9102)
+	if err := scene.Join(ctx, watcher); err != nil {
+		t.Fatal(err)
+	}
+	if err := scene.Join(ctx, leaver); err != nil {
+		t.Fatal(err)
+	}
+	recorder.take(9101)
+
+	scene.Leave(ctx, 9102)
+	if scene.Members() != 1 {
+		t.Fatalf("the scene holds %d members after a leave, want 1", scene.Members())
+	}
+	if len(recorder.take(9101)) == 0 {
+		t.Error("the watcher was not told the leaver's object is gone")
+	}
+}

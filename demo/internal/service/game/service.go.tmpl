@@ -23,6 +23,7 @@ type Service struct {
 	stopMatchmaker func()
 	stopGiftSaga   func()
 	battles        *battleManager
+	scene          *Scene
 }
 
 func New() *Service                    { return &Service{} }
@@ -66,6 +67,20 @@ func (s *Service) Init(registry *app.Registry) error {
 		return fmt.Errorf("{{GAME_SERVICE}}: publish battle manager: %w", err)
 	}
 	s.battles = battles
+	// The scene before anything that can make a player visible: EnterGame
+	// joins it, and a join before Start would have no room to join.
+	scene, err := NewScene(registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	if err := scene.Start(context.Background()); err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	if err := registry.Register(SceneCapability, scene); err != nil {
+		_ = scene.Close(context.Background())
+		return fmt.Errorf("{{GAME_SERVICE}}: publish scene: %w", err)
+	}
+	s.scene = scene
 	stop, err := startMatchmaker(context.Background(), registry, battles)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
@@ -110,6 +125,15 @@ func (s *Service) Shutdown(context.Context) error {
 	if s.levelUpMail != nil {
 		s.levelUpMail.Drain()
 		s.levelUpMail = nil
+	}
+	// The scene last among the fan-out paths: closing it stops the
+	// replication loop and the transport sink, and anything still preparing
+	// a frame finishes first.
+	if s.scene != nil {
+		if err := s.scene.Close(context.Background()); err != nil {
+			slog.Warn("scene did not close cleanly", "err", err)
+		}
+		s.scene = nil
 	}
 	return nil
 }
