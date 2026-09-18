@@ -301,6 +301,12 @@ func funcMap(defs *Definitions) template.FuncMap {
 		"rawMapType":    rawMapType,
 		"mapHelperName": mapHelperName,
 		"hasMaps":       hasMapFields,
+		"schemaVersion": func(d DaoDef) uint32 {
+			if d.Schema == 0 {
+				return 1
+			}
+			return d.Schema
+		},
 	}
 }
 

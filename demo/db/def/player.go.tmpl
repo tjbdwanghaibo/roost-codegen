@@ -1,6 +1,6 @@
 package dbdef
 
-//roost:dao coll=player db=game
+//roost:dao coll=player db=game schema=2
 type PlayerDao struct {
 	Name  string          `bson:"name" dao:"persist,sync"`
 	Level int32           `bson:"level" dao:"persist,sync"`
@@ -25,6 +25,13 @@ type PlayerDao struct {
 	PosY int64 `bson:"pos_y" dao:"persist,sync"`
 	// SceneID is which scene the player is in, 0 for nowhere.
 	SceneID int64 `bson:"scene_id" dao:"persist,sync"`
+	// Equipment is what the player is wearing. It is the demo's one NESTED
+	// struct — a struct inside the DAO, holding a map of pointers to another
+	// struct — and it is here on purpose: two P1 defects (U-0236, U-0238)
+	// lived in exactly that path and only the dao runtime gate could see
+	// them, because nothing the demo generated had a nested field. Now the
+	// live run covers it too.
+	Equipment Equipment `bson:"equipment" dao:"persist,sync"`
 	// AttrBase is the player's own attribute values: what they are with
 	// nothing applied. AttrID -> value, the bulk form the framework's
 	// Profile exports and loads (game/entities/player/attribute_component.go).
@@ -43,4 +50,19 @@ type PlayerDao struct {
 	// reserve and grant succeed, the commit is lost, and the retry would
 	// grant a second stack (see game/controllers/player/claim_mail.go).
 	MailClaims map[string]int64 `bson:"mail_claims" dao:"persist,map=fast"`
+}
+
+// Equipment is a nested struct: the generator gives it its own dirty
+// propagation, so changing a gear piece marks the Player without anyone
+// writing the link.
+type Equipment struct {
+	// Slots is slot id -> the piece worn there. Nested inside a nested
+	// struct, which is the shape whose ownership transfer U-0236 fixed.
+	Slots map[int32]*GearPiece
+}
+
+// GearPiece is one worn item.
+type GearPiece struct {
+	ItemID int64
+	Level  int32
 }

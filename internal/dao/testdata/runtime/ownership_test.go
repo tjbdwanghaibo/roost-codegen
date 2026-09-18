@@ -316,3 +316,30 @@ func TestTopLevelSliceItemOwnership(t *testing.T) {
 		})
 	}
 }
+
+// U-0245：一个刚构造出来的 DAO，它的嵌套回调也必须是接好的。
+//
+// `Init()` 此前只在装载路径上被调用（UnmarshalBSON / RestorePersisted /
+// ApplySync）。于是一个**新建**的实体——第一次登录的玩家、刚刷出来的怪——
+// 其嵌套字段的通知是空的：改动不标脏、不进持久化补丁、**悄悄丢掉**，直到
+// 这个实体被存过一次再读回来为止。
+//
+// 运行时门此前看不到它，因为每个 harness 都自己调了一次 Init()。
+func TestAFreshlyConstructedDaoPropagatesNestedChanges(t *testing.T) {
+	hero := NewHeroDao()
+	hero.SetId(42)
+	// No Init() here on purpose: that is the whole question.
+	committer := &ownershipCommitter{}
+
+	// Straight to the nested value, without going through Set<Field> first.
+	// That is the path a component takes: `dao.GetEquipment().SetSlots(...)`
+	// never touches the DAO's own setter, so if the constructor did not wire
+	// the callback, nothing did.
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "move",
+		func() (any, error) { hero.GetPos().SetX(3); return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(committer.records) != 1 {
+		t.Fatalf("changing a nested value of a freshly constructed DAO produced %d commit records, want 1 — the change would be lost", len(committer.records))
+	}
+}

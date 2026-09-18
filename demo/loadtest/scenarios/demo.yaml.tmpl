@@ -154,8 +154,19 @@ scenarios:
             # (the DAO field is nopersist) and only exists on the wire, so
             # asking for it here is what proves the attribute container is
             # actually wired into replication rather than just into Mongo.
-            fields: level,exp,attr_base,attr_final,pos_x
+            fields: level,exp,attr_base,attr_final,pos_x,equipment
             timeout: 10s
+        # Wear the sword. The item was granted by add_item above; equipping
+        # takes it out of the bag and puts it on in ONE transaction, and the
+        # attribute layer follows the worn set — so this is also what makes
+        # the replicated attr_final move.
+        - action: add_item
+          param:
+            item_id: 2001
+            count: 1
+        - action: equip
+          param:
+            item_id: 2001
         # The map: one step, then a step off the edge of the world. The
         # second one must be refused — and must answer with the position the
         # player still has.

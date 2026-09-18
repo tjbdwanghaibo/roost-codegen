@@ -72,11 +72,6 @@ func (component *BagComponent) AddItem(itemID int64, count int32) (int32, error)
 		return 0, errcode.Wrap(apperrors.ErrBagFull, nil, "item_id", itemID, "have", current, "add", count, "max_stack", item.MaxStack)
 	}
 	dao.SetItems(itemID, current+count)
-	// The gear layer is a projection of the bag, so it is rebuilt whenever
-	// the bag moves. An item with no attack changes nothing and the refresh
-	// costs a walk of the bag; a real game with a big inventory indexes the
-	// equipped set instead of scanning.
-	component.Owner().AttributeComp().RefreshGear()
 	component.Owner().PublishSyncDirty()
 	return current + count, nil
 }
@@ -95,7 +90,6 @@ func (component *BagComponent) RemoveItem(itemID int64, count int32) (int32, err
 		return 0, errcode.Wrap(apperrors.ErrItemShort, nil, "item_id", itemID, "have", current, "want", count)
 	}
 	dao.SetItems(itemID, current-count)
-	component.Owner().AttributeComp().RefreshGear()
 	component.Owner().PublishSyncDirty()
 	return current - count, nil
 }

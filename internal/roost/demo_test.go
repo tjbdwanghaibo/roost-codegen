@@ -298,6 +298,21 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if scenario := read("loadtest/scenarios/demo.yaml"); !strings.Contains(scenario, "finish_dungeon_replay") {
 		t.Errorf("the robot scenario never replays a finished dungeon, so a double reward would pass unnoticed")
 	}
+	// The one nested DAO field: a struct inside the DAO holding a map of
+	// pointers to another struct. Two P1 defects lived in exactly that path
+	// and no generated project could see them, because nothing in the demo
+	// had one (U-0236, U-0238, U-0245).
+	if def := read("db/def/player.go"); !strings.Contains(def, "Equipment Equipment") || !strings.Contains(def, "Slots map[int32]*GearPiece") {
+		t.Errorf("the Player DAO has no nested struct field, so the demo never exercises two-level dirty propagation")
+	}
+	// And the schema version it declares, with the step that upgrades the
+	// documents an older build wrote.
+	if def := read("db/def/player.go"); !strings.Contains(def, "schema=2") {
+		t.Errorf("the Player DAO does not declare a schema version, so migration.MigrateDAO can never run")
+	}
+	if step := read("db/migrations/player.go"); !strings.Contains(step, "migration.RegisterDAO(") || !strings.Contains(step, "weapon_id") {
+		t.Errorf("the project registers no migration step, so the framework's migration path has no consumer")
+	}
 	// Entity sync: the Player is a replicated subject, the scene is the room
 	// that schedules and fans out its deltas, and the client half decodes
 	// them. A demo without this never exercises server-authoritative

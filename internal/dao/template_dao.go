@@ -33,7 +33,7 @@ var _ nest.MutationParticipant = (*{{.Dao.Name}})(nil)
 const (
 	{{daoDBConst .Dao.Name}} = "{{.Dao.Db}}"
 	{{daoCollConst .Dao.Name}} = "{{.Dao.Coll}}"
-	{{.Dao.Name}}SchemaVersion uint32 = 1
+	{{.Dao.Name}}SchemaVersion uint32 = {{schemaVersion .Dao}}
 )
 
 // New{{.Dao.Name}} creates a new {{.Dao.Name}} instance with initialized maps/slices.
@@ -44,6 +44,14 @@ func New{{.Dao.Name}}() *{{.Dao.Name}} {
 	d.{{fieldVar .Name}} = {{mapNewExpr . "0"}}
 {{- end}}
 {{- end}}
+	// Wire the nested callbacks here, not only on the hydration paths. A
+	// component reaches a nested value directly (dao.GetEquipment().SetX)
+	// and never goes through this DAO's own setter, so an entity that was
+	// CREATED rather than loaded would have an unbound nested value: the
+	// change marks nothing, never enters the persist patch, and is lost
+	// without a word until the entity has been stored and read back once
+	// (U-0245).
+	d.Init()
 	return d
 }
 

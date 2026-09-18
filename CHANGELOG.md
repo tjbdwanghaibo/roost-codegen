@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`//roost:dao` 支持 `schema=N`**（默认 1，0 与非数字拒绝）。`<Dao>SchemaVersion` 此前写死为 1，于是生成的
+  `Migrate` 里 `from` 与 `target` 恒等——**框架整套迁移机制没有任何生成的工程能触发**。
+- **game-demo：装备栏与数据版本迁移**（§9.6）。`PlayerDao.Equipment` 是 demo 的第一个嵌套 DAO 字段
+  （struct 里套指针 map，正是 U-0236 / U-0238 两个 P1 所在的形状，此前生成的工程零使用方）；
+  穿装备是一个事务（取出、穿上、换下的放回），属性 Gear 层改从**穿戴集**算。
+  `db/migrations` 演示"改形状"的迁移：v1 的扁平 `weapon_id` 变成 v2 的 `equipment` 槽位；注册是显式的，
+  测试既测变换也测**接线**（`RestorePersisted` 真的会跑）。新端点 `Equip`(10018)。
+
+### Fixed
+
+- **新建的 DAO 现在也接嵌套回调**（U-0245，C2，T-139）。`Init()` 此前只在装载路径上被调用，`New<Dao>()` 不调——
+  于是**新建**的实体在第一次存盘前，所有穿过嵌套值的写入都不标脏、不进补丁、**不报错**。
+  三个条件凑齐才藏住它：运行时门的 harness 各自调了 `Init()`、顶层 Kind 3 的 setter 自己会绑、demo 没有嵌套字段。
+  掉坑的是"只穿过嵌套值改"——组件的正常写法。记录：`roost-core/docs/bugfix/U-0245-fresh-dao-nested-wiring.md`。
+
 ## [v1.15.12] - 2026-09-18
 
 ### Fixed

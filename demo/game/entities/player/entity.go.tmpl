@@ -17,6 +17,16 @@ const SyncTopicPlayer = "player"
 // IPlayerEntity is the lock-safe business view used by Nest handlers.
 type IPlayerEntity interface{ entity.IThreadSafeEntity }
 
+// IPlayerFullEntity is for a handler that needs several components at once —
+// equipping touches the bag, the equipment and the attribute container, and
+// they have to move in one transaction.
+type IPlayerFullEntity interface {
+	entity.IThreadSafeEntity
+	BagComp() *BagComponent
+	EquipmentComp() *EquipmentComponent
+	AttributeComp() *AttributeComponent
+}
+
 // Category is the kind's lock rank; ranks are acquired lowest first. The
 // demo's AddExp locks a World (rank 2) and a Player (rank 4) in one
 // transaction, so the two kinds must sit in different ranks, in the order the
@@ -49,6 +59,7 @@ type Player struct {
 	bag     *BagComponent     `comp:"CompTypeBag"`
 	attr    *AttributeComponent `comp:"CompTypeAttribute"`
 	mapComp *MapComponent       `comp:"CompTypeMap"`
+	gear    *EquipmentComponent `comp:"CompTypeEquipment"`
 	dao     *db.PlayerDao     `dao:"player"`
 }
 

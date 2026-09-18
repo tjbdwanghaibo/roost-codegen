@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -28,7 +29,13 @@ type DaoDef struct {
 	Coll    string // collection name, e.g. "players"
 	Db      string // logical database name, e.g. "game"
 	DbScope string // global or sid
-	Fields  []FieldDef
+	// Schema is the DAO's schema version, from `schema=` (1 when omitted).
+	// Raising it is what lets a project run a migration: the generated
+	// Migrate hands the stored document's version and this one to
+	// migration.MigrateDAO, and with a constant version those two could
+	// never differ.
+	Schema uint32
+	Fields []FieldDef
 }
 
 // RedisDaoDef is a Redis DAO struct definition.
@@ -226,11 +233,16 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {
 				if dbScope == "" {
 					dbScope = "global"
 				}
+				schema, err := parseSchemaParam(m.params["schema"])
+				if err != nil {
+					return fmt.Errorf("line %d: //roost:dao on %s: %w", m.line, typeSpec.Name.Name, err)
+				}
 				defs.Daos = append(defs.Daos, DaoDef{
 					Name:    typeSpec.Name.Name,
 					Coll:    m.params["coll"],
 					Db:      m.params["db"],
 					DbScope: dbScope,
+					Schema:  schema,
 					Fields:  fields,
 				})
 				break
@@ -609,4 +621,23 @@ func exprString(expr ast.Expr) string {
 	default:
 		return "any"
 	}
+}
+
+// parseSchemaParam reads `schema=`. Absent means 1 — the version every
+// definition has always had, so omitting it changes nothing.
+//
+// Zero is refused rather than defaulted: a DAO at version 0 would make every
+// stored document look newer than the code, and the migration runner would
+// have nothing to run toward. A non-number is refused because silently
+// ignoring a typo here means the migration nobody notices is not running.
+func parseSchemaParam(value string) (uint32, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 1, nil
+	}
+	parsed, err := strconv.ParseUint(value, 10, 32)
+	if err != nil || parsed == 0 {
+		return 0, fmt.Errorf("schema=%q is not a positive version number", value)
+	}
+	return uint32(parsed), nil
 }

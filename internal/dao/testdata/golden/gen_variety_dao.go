@@ -39,6 +39,14 @@ func NewVarietyDao() *VarietyDao {
 	d := &VarietyDao{}
 	d.fastItems = fmap.NewFastMap[int64, int32](0, fmap.HashInteger[int64])
 	d.shardedTags = fmap.NewShardedSafeMap[int32, string](32, fmap.HashInteger[int32])
+	// Wire the nested callbacks here, not only on the hydration paths. A
+	// component reaches a nested value directly (dao.GetEquipment().SetX)
+	// and never goes through this DAO's own setter, so an entity that was
+	// CREATED rather than loaded would have an unbound nested value: the
+	// change marks nothing, never enters the persist patch, and is lost
+	// without a word until the entity has been stored and read back once
+	// (U-0245).
+	d.Init()
 	return d
 }
 

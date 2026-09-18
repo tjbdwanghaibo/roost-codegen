@@ -77,13 +77,35 @@ func TestFinalIsBasePlusGearWithThePowerDerivedOnce(t *testing.T) {
 	if !ok {
 		t.Fatal("the gear layer was not installed at init")
 	}
-	// Through the real bag method, in a real transaction: the generated
-	// persist setters refuse to run outside one, and AddItem is also what
-	// triggers the gear refresh in production.
-	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "add_item", func() (any, error) {
-		return subject.BagComp().AddItem(ironSword, 1)
+	// Worn, not carried. The gear layer is a projection of the EQUIPMENT, so
+	// a sword in the bag changes nothing — which is the point of moving it
+	// there. Through the real methods in a real transaction, because the
+	// generated persist setters refuse to run outside one.
+	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "carry", func() (any, error) {
+		if _, err := subject.BagComp().AddItem(ironSword, 1); err != nil {
+			return nil, err
+		}
+		// Inside the transaction: RefreshGear writes the attribute maps, and
+		// the generated persist setters refuse to run outside one.
+		subject.AttributeComp().RefreshGear()
+		return nil, nil
 	}); err != nil {
 		t.Fatalf("grant the sword: %v", err)
+	}
+	if carried, _ := gameattr.CombatLive(component.Container(), Gear); carried.Attack != 0 {
+		t.Fatalf("carrying the sword raised the gear layer to attack %d; only wearing it should", carried.Attack)
+	}
+	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "equip", func() (any, error) {
+		if _, err := subject.BagComp().RemoveItem(ironSword, 1); err != nil {
+			return nil, err
+		}
+		if _, _, err := subject.EquipmentComp().Equip(ironSword, 1); err != nil {
+			return nil, err
+		}
+		subject.AttributeComp().RefreshGear()
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("equip the sword: %v", err)
 	}
 
 	if gear.Attack != item.Attack {

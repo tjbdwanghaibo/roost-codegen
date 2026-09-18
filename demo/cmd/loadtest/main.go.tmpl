@@ -416,6 +416,20 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			}
 			return nil
 		}))
+	// equip: wear the sword the scenario granted. The response says which
+	// slot it went in — the client does not choose, because a slot is a
+	// property of the item.
+	action.MustRegisterCall[pb.EquipRequest, pb.EquipResponse](actions, protocols, "equip", msgid.MsgEquip,
+		action.OnResp(func(rb *robot.Context, resp *pb.EquipResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.Slot == 0 {
+				return fmt.Errorf("the item was equipped into slot 0")
+			}
+			rb.Blackboard.Set("equipped_slot", int64(resp.Slot))
+			return nil
+		}))
 	// rank_top: the leaderboard. Every robot cleared a dungeon, so every
 	// robot must be ON the board — and its own value must be exactly 1 no
 	// matter how many times it replayed the finish, which is what the
@@ -627,6 +641,8 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalRankTopRequest(message)
 	case *pb.MoveRequest:
 		return pb.MarshalMoveRequest(message)
+	case *pb.EquipRequest:
+		return pb.MarshalEquipRequest(message)
 	default:
 		return nil, fmt.Errorf("pb codec: no marshal for %T", value)
 	}
@@ -738,6 +754,12 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 		*message = *decoded
 	case *pb.MoveResponse:
 		decoded, err := pb.UnmarshalMoveResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.EquipResponse:
+		decoded, err := pb.UnmarshalEquipResponse(data)
 		if err != nil {
 			return err
 		}

@@ -109,22 +109,26 @@ func (component *AttributeComponent) LevelUp(levels int32) {
 	component.persist()
 }
 
-// RefreshGear recomputes the gear layer from the bag. Called after the bag
-// changes: the layer is a projection of the items, so it is rebuilt rather
-// than patched — a patch would need to know what the previous items were.
+// RefreshGear recomputes the gear layer from what the player is WEARING.
+// Called after the equipment changes: the layer is a projection of the worn
+// set, so it is rebuilt rather than patched — a patch would need to know what
+// was worn before.
 func (component *AttributeComponent) RefreshGear() {
 	gear, ok := gameattr.CombatLive(component.container, Gear)
 	if !ok {
 		return
 	}
 	attack, hp := int64(0), int64(0)
-	component.owner.Dao().RangeItems(func(itemID int64, count int32) bool {
+	// From what is WORN, not from the whole bag: carrying a sword in the bag
+	// should not make a player stronger, and the earlier version of this
+	// counted every stack (there was nowhere else to read equipment from).
+	component.owner.EquipmentComp().RangeWorn(func(_ int32, itemID int64, level int32) bool {
 		item, found := generated.ItemByID(itemID)
-		if !found || count <= 0 {
+		if !found {
 			return true
 		}
-		attack += item.Attack * int64(count)
-		hp += item.HP * int64(count)
+		attack += item.Attack * int64(level)
+		hp += item.HP * int64(level)
 		return true
 	})
 	if gear.Attack == attack && gear.HP == hp {
