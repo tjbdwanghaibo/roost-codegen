@@ -9,6 +9,7 @@ import (
 
 	"{{MODULE}}/game/chatroom"
 	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
 	world "{{MODULE}}/game/entities/world"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/skills"
@@ -42,6 +43,7 @@ type Controller struct {
 	battles    atomic.Pointer[battleRouter]
 	scene      atomic.Pointer[sceneJoiner]
 	worldID    int64
+	sceneID    int64
 
 	// The skill catalog, compiled from game/skills/*.json on first use.
 	skillsOnce   sync.Once
@@ -129,10 +131,14 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
+	sceneID, err := entity.BuildEntityID(lifecycle.WorldSceneUniqueID, sceneentity.EntityKindScene)
+	if err != nil {
+		return nil, fmt.Errorf("player controller: %w", err)
+	}
 	return &Controller{
 		registry: registry, nestClient: client, players: players,
 		matcher: matcher, messaging: messaging, mailer: mailer, sessions: sessions, ranking: ranking,
-		presence: chatroom.NewPresence(), worldID: worldID,
+		presence: chatroom.NewPresence(), worldID: worldID, sceneID: sceneID,
 	}, nil
 }
 
@@ -248,6 +254,14 @@ func (controller *Controller) Scene() (sceneJoiner, error) {
 	}
 	controller.scene.Store(&joiner)
 	return joiner, nil
+}
+
+// WorldSceneID is the full entity id of the one map this process runs.
+func (controller *Controller) WorldSceneID() int64 {
+	if controller == nil {
+		return 0
+	}
+	return controller.sceneID
 }
 
 // WorldID is the full entity id of this process's World.

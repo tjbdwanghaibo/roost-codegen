@@ -47,6 +47,7 @@ type Player struct {
 	profile *ProfileComponent `comp:"CompTypeProfile"`
 	bag     *BagComponent     `comp:"CompTypeBag"`
 	attr    *AttributeComponent `comp:"CompTypeAttribute"`
+	mapComp *MapComponent       `comp:"CompTypeMap"`
 	dao     *db.PlayerDao     `dao:"player"`
 }
 

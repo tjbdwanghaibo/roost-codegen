@@ -199,6 +199,30 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
   deliver 那条仍然是"两次提交"：mail 服务的去重是第二层，不是同一条记录。
 - **需要 core ≥ v1.15.6 / kit ≥ v1.14.7**：此前 Mongo 存储上任何步骤拒绝都进不了补偿（U-0225，`step result timeout` 反复出现），送给玩家 1 那一段会卡住。
 
+## 地图：Scene 是一个实体，它的 system 各自带锁
+
+`game/entities/scene` 是地图实体：有 id、有框架驱动的生命周期、GM 能寻址、将来能跨进程——但**没有 DAO**
+（`noPersist=true lifetime=runtime_rebuild`），因为一张地图每次启动都是从配置重建出来的。
+
+```
+Scene 实体 ─ OnInitFinish ─▶ sceneruntime.Runtime{ terrain, path_find }   按序 Start，逆序 Stop
+   │
+   └─ Terrain() / PathFind()  →  game/scene 里声明的接口，不是实现
+```
+
+- **system 自带锁，不借实体锁**。地形查询来自端点、来自刷新计时器、来自 AOI tick；让它们都去拿 Scene 的实体锁，
+  等于让地图成为这个场景里所有事情的瓶颈。实体锁排的是**实体状态**的事务顺序，"这里能不能站"不是那个问题。
+- **位置的权威在 DAO，别处不缓存**。读位置 → `MapComponent.Pos()` → DAO；写位置 → `MapComponent.MoveTo()` → DAO。
+  AOI 将来会持一份 id→坐标的索引，那是索引不是第二个真相：只由这一条写入路径更新，永远不被当作"X 在哪"的答案读出来。
+  两个可写的真相就是重连之后玩家出现在别处的那种 bug。
+- **移动是两实体事务**（Scene rank 2 → Player rank 4）：位置改动与地图交出去的地面必须一致，所以它们一起提交、一起回滚。
+  `durability=async` 而不是 `strict`——移动要持久，但不该每一步都等 fsync。
+- **玩家不占地**（`Walkable` 而不是 `Occupy`）：两个玩家可以站在同一点，于是断线也没有残留占位要回收。占位留给真正会挡路的东西
+  （地图里的墙、将来判定为实心的怪）。
+- **落点用 `Place` 向外一圈圈找**：地图每次重建，玩家记住的位置可能不再可用；返回最近的可站点，而不是"某个"可站点。
+  登录不会因为地面变了而失败。
+- 拒绝只有一个码（`scene_position`）：越界、被占、不在地图上共用它——能精确知道哪些点被占的客户端，等于拿到了所有人的位置。
+
 ## 服务端权威状态同步：Player 是复制主体，scene 是它的调度器
 
 `sync=true` 的实体有一个 **sync 主体**（`Player.Sync()`）：版本、脏掩码、packer。scene 是它的另一半——谁订阅了谁、

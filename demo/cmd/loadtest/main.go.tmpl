@@ -390,6 +390,32 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 		}
 		return nil
 	}})
+	// move: one step on the map. The response carries the position the
+	// server settled on — a refused move answers with where the player still
+	// is, so a client snaps back instead of drifting.
+	action.MustRegisterCall[pb.MoveRequest, pb.MoveResponse](actions, protocols, "move", msgid.MsgMove,
+		action.OnResp(func(rb *robot.Context, resp *pb.MoveResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			rb.Blackboard.Set("pos_x", resp.X)
+			rb.Blackboard.Set("pos_y", resp.Y)
+			return nil
+		}))
+	// The same move onto a point outside the map. The server must refuse it,
+	// and a demo whose map accepts anything is a demo that proves nothing
+	// about terrain.
+	action.MustRegisterCall[pb.MoveRequest, pb.MoveResponse](actions, protocols, "move_out_of_bounds", msgid.MsgMove,
+		action.OnResp(func(rb *robot.Context, resp *pb.MoveResponse) error {
+			if resp.Code == 0 {
+				return fmt.Errorf("a move to a point outside the map was accepted: (%d,%d)", resp.X, resp.Y)
+			}
+			raw, _ := rb.Blackboard.Get("pos_x")
+			if before, ok := raw.(int64); ok && resp.X != before {
+				return fmt.Errorf("a refused move answered with x=%d, want the position the player still has (%d)", resp.X, before)
+			}
+			return nil
+		}))
 	// rank_top: the leaderboard. Every robot cleared a dungeon, so every
 	// robot must be ON the board — and its own value must be exactly 1 no
 	// matter how many times it replayed the finish, which is what the
@@ -599,6 +625,8 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalBattleInputRequest(message)
 	case *pb.RankTopRequest:
 		return pb.MarshalRankTopRequest(message)
+	case *pb.MoveRequest:
+		return pb.MarshalMoveRequest(message)
 	default:
 		return nil, fmt.Errorf("pb codec: no marshal for %T", value)
 	}
@@ -704,6 +732,12 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 		*message = *decoded
 	case *pb.RankTopResponse:
 		decoded, err := pb.UnmarshalRankTopResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.MoveResponse:
+		decoded, err := pb.UnmarshalMoveResponse(data)
 		if err != nil {
 			return err
 		}

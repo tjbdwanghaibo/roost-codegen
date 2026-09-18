@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"{{MODULE}}/game/chatroom"
+	lifecycle "{{MODULE}}/game/lifecycle"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	player_agent "{{MODULE}}/game/player_agent"
 	"{{MODULE}}/protocol/pb"
@@ -33,6 +34,13 @@ func (controller *Controller) HandleEnterGame(context *player_agent.Context, req
 	// a different lock, a separate Nest call after the Player one completed.
 	if err := syncsender.NewRecordEnterSender(controller.NestClient()).Sync_RecordEnter(context.Context(), controller.WorldID()); err != nil {
 		slog.Warn("enter_game: world did not record the login", "player_id", context.PlayerID, "err", err)
+	}
+	// On the map. The position is the player's own state, so it is written in
+	// a transaction like everything else; the scene only answers "where can
+	// this player stand".
+	spawn := lifecycle.WorldSceneConfig().Spawn
+	if _, err := syncsender.NewEnterSceneSender(controller.NestClient()).MultiSync_EnterScene(context.Context(), subject.ID(), controller.WorldSceneID(), spawn.X, spawn.Y); err != nil {
+		slog.Warn("enter_game: player not placed on the map", "player_id", context.PlayerID, "err", err)
 	}
 	// From here on the player receives world-channel pushes.
 	controller.Presence().Add(context.PlayerID)

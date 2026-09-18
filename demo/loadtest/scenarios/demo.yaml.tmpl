@@ -148,8 +148,19 @@ scenarios:
             # (the DAO field is nopersist) and only exists on the wire, so
             # asking for it here is what proves the attribute container is
             # actually wired into replication rather than just into Mongo.
-            fields: level,exp,attr_base,attr_final
+            fields: level,exp,attr_base,attr_final,pos_x
             timeout: 10s
+        # The map: one step, then a step off the edge of the world. The
+        # second one must be refused — and must answer with the position the
+        # player still has.
+        - action: move
+          param:
+            x: 501
+            y: 500
+        - action: move_out_of_bounds
+          param:
+            x: 100000
+            y: 100000
         # The leaderboard. The clear was counted through the rank service with
         # the run id as the request id, so the replay above did not count a
         # second time — the board is where that shows.

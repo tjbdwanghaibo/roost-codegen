@@ -6,6 +6,15 @@
 
 ### Added
 
+- **game-demo：地图第一批——Scene 实体、terrain / pathfind 两个 system、位置与移动**（§9.4.1）。
+  `game/entities/scene` 是地图实体（无 DAO，`noPersist=true lifetime=runtime_rebuild`，每次启动从配置重建），
+  它持有 `game/scene/runtime` 的 system 组合并按接口导出（`Terrain()` / `PathFind()`）；**每个 system 自带锁**，
+  因为地形查询来自端点、计时器与将来的 AOI tick，不该去排队等实体锁。
+  位置的权威在 Player 的 DAO（`PosX` / `PosY` / `SceneID`，`persist,sync`），读写都只经 `MapComponent`——
+  于是移动**没有单独的广播**，它走第十二批那条复制链。移动是 Scene + Player 的两实体事务（rank 2 → rank 4，`durability=async`）；
+  玩家不占地（`Walkable` 而非 `Occupy`），所以断线没有残留占位。落点用 `Place` 向外一圈圈找最近可站点，
+  地图重建后玩家记住的位置不可用也不会导致登录失败。新增端点 `Move`(10017)、错误码 `scene_position`(100013)，
+  机器人加 `move` 与 `move_out_of_bounds`（越界必须被拒，且答复里带玩家仍然所在的位置）。
 - **game-demo：服务端权威状态同步（`sync=true` 的第一个使用方）**（§9.3.1）。Player 成为复制主体，
   `internal/service/<game>/scene.go` 是它的调度器：`Player.Sync()`（版本 / 脏掩码 / packer）→ `room.RoomBroadcaster`
   （谁订阅了谁、何时 flush）→ `room.RoomTransportSink`（每会话线帧）→ demo 的 TCP 推送（新消息 `EntitySync` 10103）。
