@@ -6,6 +6,8 @@
 
 ### Added
 
+- **game-demo：邮件附件的领取做成恰好一次**（§9.1 第 1 条，与 dungeon 清关奖励同形）。`ClaimMail` 的三步里，中间那一步换成 `ClaimMailReward` 事务：邮件 id 与道具进同一条 WAL 记录（`db/def/player.go` 的 `MailClaims` 账本、`Bag.ClaimMailReward`、新 errcode `mail_claim`(100011)）。三次调用不可能合成一个事务——邮件在另一个进程——所以窗口是真的：发放成功、`CommitClaim` 丢失、预留到期、重试用同一个 token 再预留一次；邮件服务只能算作重复**尝试**（它无从知道游戏发没发），游戏这边知道，第二次发放什么也不做。账本按时间清理，保留期长于 `mail.send_ttl`（720h），论证在 `game/rewards`。随工程生成 `game/handler/claim_mail_reward_test.go`：真实 handler 跑在真实 Nest 事务里（一个只发一个实体的 Getter + 记录型 committer + 工程自己的配置数据），去掉账本判断即红（重放拿到第二叠）。机器人加 `claim_mail_replay`。仍然开着的两处写在 README。
+
 - **生成工程一条命令起全部服务：`make dev-run` / `dev-stop` / `dev-status` / `dev-smoke`**（`deploy/dev/run.sh`，codegen 受控）。按托管服务 → 业务服务的顺序 `go build` 后起每个进程、等各自 `/readyz`，有 `cmd/accountctl` 的工程（game-demo）顺手把 sid 注册进 account；pid 与日志在 `.dev/`（已入 .gitignore）。配套：**每个服务的本机配置有自己的 ops 端口**（业务服务按名从 9100 起，托管服务接在后面；生产配置仍统一 9100），此前五个进程都监听 9100、同机只能起一个。
 - **game-demo：chat 服务进链路**。`internal/service/chat/collaborators.go` 给出写成决定的策略（world / private 开放、group 拒绝、system 只读）、唯一的 `text` 类型与授予的系统路径；`game/chatroom/` 是游戏侧契约（频道、文本校验、每进程 presence）；新协议 `SendChat`（10006）、`ChatHistory`（10007）、推送 `ChatMessage`（10101）；EnterGame 经 `PublishSystem` 在 world 频道公告登录并扇出；机器人脚本加 send_chat → wait_push → chat_history。观测配置补 account / chat 的抓取目标。
 - **`-template game` / `game-demo` 托管第五个服务：session**（`frameworkCatalog` 加 `session`：`NewMod(Release(), Metrics())`，配置 `session.key_prefix / run_ttl / request_ttl`；collaborator `Release()` 默认拒绝）。demo 给出释放器实现与副本链路：`EnterDungeon`（10010，Enter 幂等、一个 owner 一个活 run）/ `FinishDungeon`（10011，Finish 后经 AddExp 两实体事务发 100 exp，够升一级再走一遍奖励邮件）；机器人 claim_mail 后 enter_dungeon → finish_dungeon。ops 端口 session 9105，观测配置补抓取目标。

@@ -81,11 +81,18 @@ internal/service/game/level_up_mail.go     durable consumer + Mongo inbox（每�
 
 ```
 ListMail 端点  ─ List(playerID, cursor, limit) ─▶ mail 服务（按认证玩家作用域，服务端不需要端点再查归属）
-ClaimMail 端点 ─ ReserveClaim(mailID, "") ─▶ mail 服务：交出附件 + 对 (玩家, 邮件) 恒定的 token
-               ─ Sync_AddItem(reward)      ─▶ Nest 锁 Player 的一笔事务（与 AddItem 端点同一个 Sender）
-               ─ CommitClaim(token)        ─▶ mail 服务：标记已领；重试同 token 幂等
+ClaimMail 端点 ─ ReserveClaim(mailID, "")      ─▶ mail 服务：交出附件 + 对 (玩家, 邮件) 恒定的 token
+               ─ Sync_ClaimMailReward(...)    ─▶ Nest 锁 Player 的一笔事务：道具 + **邮件 id 记进账本**，同一条 WAL 记录
+               ─ CommitClaim(token)           ─▶ mail 服务：标记已领；重试同 token 幂等
 ```
 
+- **领取是恰好一次的**：中间那一步把邮件 id 和道具放进同一条 WAL 记录（`game/handler/claim_mail_reward.go`）。
+  三次调用不可能合成一个事务——邮件在另一个进程——所以窗口是真的：发放成功、`CommitClaim` 丢了、预留到期、重试用同一个 token 再预留一次。
+  邮件服务只能把它算作重复**尝试**（它无从知道游戏发没发），游戏这边知道：第二次发放在账本上撞到自己，什么也不做，回的还是同一组数字。
+  没有账本时这里就是第二叠道具——`game/handler/claim_mail_reward_test.go` 把这条钉住了（去掉账本判断即红）。
+- **账本的界是时间**：保留期必须长于游戏能发出的最长邮件（生成配置 `mail.send_ttl` 720h），论证写在 `game/rewards`；
+  清理在写入口做，不需要清扫器。发的邮件很多的游戏应该改成"commit 成功后就忘掉"或把账本放到邮件那侧。
+- **仍然开着的**：预留成功但发放前崩溃（邮件被占到租约到期，玩家等，什么都没丢）；`CommitClaim` 丢失（账本挡的是重复**发放**，不是重复尝试）。
 - `Claimable` 是 mail 服务对"现在领会成功吗"的回答，客户端不用从 Status 猜（Status 表达不了"被在途投递占着"）。
 - 附件解不出奖励、或 AddItem 被拒（背包满）时 `CancelClaim` 归还预留，邮件不会卡在"held"直到租约到期。
 - **demo 明确没做的一步**：把 claim token 带进 Nest 事务当幂等键。进程在 AddItem 之后、CommitClaim 之前死掉，租约到期后重试会再发一次

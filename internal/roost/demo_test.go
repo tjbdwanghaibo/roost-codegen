@@ -218,7 +218,8 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		"game/battle/battle.go", "protocol/def/battle_input.go", "protocol/def/battle_frame.go",
 		"game/controllers/player/battle_input.go", "internal/service/game/battle.go",
 		"game/dungeon/dungeon.go", "game/dungeon/dungeon_test.go", "game/handler/claim_dungeon.go", "internal/errors/dungeon_run.go",
-		"internal/service/game/battle_test.go"} {
+		"internal/service/game/battle_test.go", "game/handler/claim_mail_reward.go",
+		"game/handler/claim_mail_reward_test.go", "internal/errors/mail_claim.go"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("demo did not write %s: %v", rel, err)
 		}
@@ -226,8 +227,17 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if mailer := read("internal/service/game/level_up_mail.go"); !strings.Contains(mailer, "rewards.Encode(rewards.LevelUpReward(") {
 		t.Errorf("the level-up mail carries no reward attachment, so ClaimMail has nothing to claim")
 	}
-	if claim := read("game/controllers/player/claim_mail.go"); !strings.Contains(claim, ".ReserveClaim(") || !strings.Contains(claim, ".Sync_AddItem(") || !strings.Contains(claim, ".CommitClaim(") {
-		t.Errorf("claim_mail does not run the reserve → grant → commit sequence")
+	// The grant in the middle carries its own identity: the mail id is
+	// recorded on the Player in the same transaction as the items, so a
+	// retry after a lost CommitClaim cannot grant a second stack.
+	if claim := read("game/controllers/player/claim_mail.go"); !strings.Contains(claim, ".ReserveClaim(") || !strings.Contains(claim, ".Sync_ClaimMailReward(") || !strings.Contains(claim, ".CommitClaim(") {
+		t.Errorf("claim_mail does not run the reserve → ledgered grant → commit sequence")
+	}
+	if claim := read("game/handler/claim_mail_reward.go"); !strings.Contains(claim, "ClaimMailReward(mailID, nowUnix)") || !strings.Contains(claim, "rollback=undo durability=strict") {
+		t.Errorf("the mail claim handler does not record the mail id in the granting transaction")
+	}
+	if dao := read("db/def/player.go"); !strings.Contains(dao, "MailClaims map[string]int64") {
+		t.Errorf("the Player DAO has no ledger for mail attachment claims")
 	}
 	if conn := read("loadtest/playertcp/conn.go"); !strings.Contains(conn, "header[3]&flagServerPush == 0 && wire != 0") {
 		t.Errorf("the robot transport does not classify frames by the server-push flag; a push carrying a pending wire sequence would be taken for the response")

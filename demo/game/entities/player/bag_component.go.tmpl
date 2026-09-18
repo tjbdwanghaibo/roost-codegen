@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	generated "{{MODULE}}/configs/generated"
+	"{{MODULE}}/game/rewards"
 	apperrors "{{MODULE}}/internal/errors"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/errcode"
@@ -89,6 +90,41 @@ func (component *BagComponent) RemoveItem(itemID int64, count int32) (int32, err
 	}
 	dao.SetItems(itemID, current-count)
 	return current - count, nil
+}
+
+// ClaimMailReward records that this mail's attachment has been granted and
+// reports whether this call is the one that recorded it. A second call for
+// the same mail returns false and changes nothing — that is what makes the
+// grant exactly-once even when the mail service's commit is lost, because the
+// record lands in the same Nest transaction as the items.
+//
+// Pruning is on the write path and by time; game/rewards explains why a time
+// bound is the only bound that holds here.
+func (component *BagComponent) ClaimMailReward(mailID string, nowUnix int64) bool {
+	dao := component.Owner().Dao()
+	if _, claimed := dao.GetMailClaims(mailID); claimed {
+		return false
+	}
+	var stale []string
+	dao.RangeMailClaims(func(key string, claimedAt int64) bool {
+		if rewards.ClaimExpired(claimedAt, nowUnix) {
+			stale = append(stale, key)
+		}
+		return true
+	})
+	for _, key := range stale {
+		dao.DelMailClaims(key)
+	}
+	dao.SetMailClaims(mailID, nowUnix)
+	return true
+}
+
+// MailRewardClaimed reports whether a mail's attachment has already been
+// granted. It is a read for callers holding the lock; the claim itself must
+// go through ClaimMailReward, inside the transaction that grants.
+func (component *BagComponent) MailRewardClaimed(mailID string) bool {
+	_, claimed := component.Owner().Dao().GetMailClaims(mailID)
+	return claimed
 }
 
 // ItemCount is the current amount held for itemID.

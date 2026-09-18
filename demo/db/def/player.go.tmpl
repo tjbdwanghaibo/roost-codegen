@@ -13,4 +13,9 @@ type PlayerDao struct {
 	// by time in ClaimDungeonRun; see game/dungeon for why a time bound is
 	// the only bound that holds (RR-20260917-08).
 	DungeonClaims map[string]int64 `bson:"dungeon_claims" dao:"persist,map=fast"`
+	// MailClaims is the same ledger for mail attachments: mail id → when it
+	// was granted. It closes the window the three-step claim leaves open —
+	// reserve and grant succeed, the commit is lost, and the retry would
+	// grant a second stack (see game/controllers/player/claim_mail.go).
+	MailClaims map[string]int64 `bson:"mail_claims" dao:"persist,map=fast"`
 }

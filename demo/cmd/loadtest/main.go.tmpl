@@ -311,12 +311,33 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			return fmt.Errorf("no claimable mail yet (%d in the box)", len(resp.Mails))
 		}))
 	action.MustRegisterCall[pb.ClaimMailRequest, pb.ClaimMailResponse](actions, protocols, "claim_mail", msgid.MsgClaimMail,
-		action.OnResp(func(_ *robot.Context, resp *pb.ClaimMailResponse) error {
+		action.OnResp(func(rb *robot.Context, resp *pb.ClaimMailResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
 				return err
 			}
 			if resp.ItemID <= 0 || resp.Count <= 0 || resp.BagCount < resp.Count {
 				return fmt.Errorf("claim granted nothing: item=%d count=%d bag=%d", resp.ItemID, resp.Count, resp.BagCount)
+			}
+			// Remember what the bag holds so a replay can be judged.
+			rb.Blackboard.Set("claimed_bag_count", int64(resp.BagCount))
+			return nil
+		}))
+	// The same claim again. The mail service refuses a mail it has already
+	// committed (a coded answer), and if it ever lets one through, the
+	// Player's ledger makes the grant a no-op — either way the bag must not
+	// grow. Without the ledger the second grant is a second stack, which is
+	// the window a lost CommitClaim opens.
+	action.MustRegisterCall[pb.ClaimMailRequest, pb.ClaimMailResponse](actions, protocols, "claim_mail_replay", msgid.MsgClaimMail,
+		action.OnResp(func(rb *robot.Context, resp *pb.ClaimMailResponse) error {
+			raw, _ := rb.Blackboard.Get("claimed_bag_count")
+			before, _ := raw.(int64)
+			if resp.Code != 0 {
+				// A coded refusal is the expected answer for a mail the
+				// service has already committed.
+				return nil
+			}
+			if int64(resp.BagCount) > before {
+				return fmt.Errorf("replayed claim granted again: bag %d → %d", before, resp.BagCount)
 			}
 			return nil
 		}))

@@ -63,6 +63,10 @@ scenarios:
                   param:
                     limit: 20
         - action: claim_mail
+        # Claim the same mail again. The mail service refuses a committed
+        # mail, and the Player's ledger makes the grant a no-op if one ever
+        # gets through — the bag must not grow either way.
+        - action: claim_mail_replay
         # A gift to oneself: the saga debits the Bag (step 1), then mails
         # the item (step 2) — two transaction domains, one durable
         # operation. The saga starts asynchronously (start effect → outbox →

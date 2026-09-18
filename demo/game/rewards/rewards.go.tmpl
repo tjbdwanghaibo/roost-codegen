@@ -10,6 +10,42 @@ import (
 	"fmt"
 )
 
+// ClaimRetentionSeconds is how long the Player remembers that it has been
+// paid for a mail.
+//
+// The rule is the same one the dungeon ledger follows (game/dungeon): the
+// record must outlive every replay that could still reach the grant. A replay
+// reaches it only through ReserveClaim, which needs the mail to still exist
+// and be unclaimed — so the hold has to outlast the longest-lived mail the
+// game can send. The generated configuration keeps mail for `mail.send_ttl`
+// (720h), and this demo's mails expire in 7 days; 31 days covers both with
+// room for a raised TTL.
+//
+// A game that sends thousands of mails per player should not carry a month of
+// ids on the Player: either drop the record once CommitClaim has succeeded
+// (after that no replay can reserve the mail again) or keep the ledger on the
+// mail side. The demo takes the simple bound because it is the one that is
+// provably safe without a second transaction.
+const ClaimRetentionSeconds int64 = 31 * 24 * 60 * 60
+
+// ClaimExpired reports whether a claim recorded at claimedAt may be forgotten
+// at nowUnix.
+func ClaimExpired(claimedAt, nowUnix int64) bool {
+	if claimedAt <= 0 {
+		return true
+	}
+	return nowUnix-claimedAt > ClaimRetentionSeconds
+}
+
+// ClaimResult is what the granting transaction reports back. Claimed is false
+// for a replay: this mail was already paid for, and the transaction changed
+// nothing. BagCount is what the player holds of the item either way, so the
+// client's answer is true in both cases.
+type ClaimResult struct {
+	Claimed  bool
+	BagCount int32
+}
+
 // Reward is what a mail attachment grants: one stack of one item.
 type Reward struct {
 	ItemID int64 `json:"item_id"`
