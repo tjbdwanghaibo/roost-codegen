@@ -22,7 +22,9 @@ cp "$here"/internal/dao/testdata/golden/*.go "$work/gen/"
 # The redis DAO goldens reference the fixture's definition types (CacheSession,
 # RawSession), which are not generated; they are text-only goldens here.
 rm -f "$work"/gen/gen_*_redis_dao.go
-sed '/^\/\/go:build daoruntime$/d' "$here/internal/dao/testdata/runtime/roundtrip_test.go" > "$work/gen/roundtrip_test.go"
+for t in "$here"/internal/dao/testdata/runtime/*_test.go; do
+	sed '/^\/\/go:build daoruntime$/d' "$t" > "$work/gen/$(basename "$t")"
+done
 
 cd "$work"
 GOWORK=off go mod init daogoldenruntime >/dev/null

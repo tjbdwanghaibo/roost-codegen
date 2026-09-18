@@ -35,3 +35,29 @@ func daoSliceDocs[V, D any](src []V, conv func(V) D) []D {
 	return out
 }
 `
+
+// fieldCarriesChildHook reports whether a nested struct's field holds nested
+// children whose changes have to reach this struct through a callback. Those
+// are the fields that need bind/unbind helpers: which child notifies which
+// parent is runtime wiring, and it has to be re-established on every path
+// that changes what the field holds — the setter, a restore from storage, and
+// the rollback undo (RR-20260918-03).
+func fieldCarriesChildHook(defs *Definitions, f FieldDef) bool {
+	switch f.Kind {
+	case 1:
+		return f.IsPtr && isNestedType(defs, f.SliceElem)
+	case 2:
+		return f.IsPtr && isNestedType(defs, f.MapVal)
+	case 3:
+		return isNestedType(defs, f.TypeStr)
+	}
+	return false
+}
+
+// fieldDetachesOldChildren narrows fieldCarriesChildHook to the fields whose
+// previous contents survive the assignment as separate objects and therefore
+// have to be released. A nested value field is overwritten in place — there is
+// no old object left to notify anyone — so it is bound but never unbound.
+func fieldDetachesOldChildren(defs *Definitions, f FieldDef) bool {
+	return fieldCarriesChildHook(defs, f) && (f.Kind != 3 || f.IsPtr)
+}

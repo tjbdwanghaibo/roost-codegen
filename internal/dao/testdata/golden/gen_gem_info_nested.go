@@ -89,7 +89,10 @@ func (s *GemInfo) GetLevel() int32 { return s.level }
 func (s *GemInfo) SetID(v int32) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := s.id
-		if err := tx.RecordUndo(s, uint64(0), func() error { s.id = old; return nil }); err != nil {
+		if err := tx.RecordUndo(s, uint64(0), func() error {
+			s.id = old
+			return nil
+		}); err != nil {
 			// A mutation without undo coverage silently breaks rollback;
 			// failing loudly matches the generated DAO setters.
 			panic(fmt.Errorf("GemInfo: record undo: %w", err))
@@ -104,7 +107,10 @@ func (s *GemInfo) SetID(v int32) {
 func (s *GemInfo) SetLevel(v int32) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := s.level
-		if err := tx.RecordUndo(s, uint64(1), func() error { s.level = old; return nil }); err != nil {
+		if err := tx.RecordUndo(s, uint64(1), func() error {
+			s.level = old
+			return nil
+		}); err != nil {
 			// A mutation without undo coverage silently breaks rollback;
 			// failing loudly matches the generated DAO setters.
 			panic(fmt.Errorf("GemInfo: record undo: %w", err))

@@ -89,7 +89,10 @@ func (s *Position) GetY() int32 { return s.y }
 func (s *Position) SetX(v int32) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := s.x
-		if err := tx.RecordUndo(s, uint64(0), func() error { s.x = old; return nil }); err != nil {
+		if err := tx.RecordUndo(s, uint64(0), func() error {
+			s.x = old
+			return nil
+		}); err != nil {
 			// A mutation without undo coverage silently breaks rollback;
 			// failing loudly matches the generated DAO setters.
 			panic(fmt.Errorf("Position: record undo: %w", err))
@@ -104,7 +107,10 @@ func (s *Position) SetX(v int32) {
 func (s *Position) SetY(v int32) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := s.y
-		if err := tx.RecordUndo(s, uint64(1), func() error { s.y = old; return nil }); err != nil {
+		if err := tx.RecordUndo(s, uint64(1), func() error {
+			s.y = old
+			return nil
+		}); err != nil {
 			// A mutation without undo coverage silently breaks rollback;
 			// failing loudly matches the generated DAO setters.
 			panic(fmt.Errorf("Position: record undo: %w", err))

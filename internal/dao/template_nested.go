@@ -62,20 +62,8 @@ func (s *{{.Nested.Name}}) setBSONDoc(doc {{lower1 .Nested.Name}}BSONDoc) {
 	s.set{{.Name}}RawMap({{fromWire . (printf "doc.%s" .Name)}})
 {{- else}}
 	s.{{fieldVar .Name}} = {{fromWire . (printf "doc.%s" .Name)}}
-{{- if and (eq .Kind 1) (isNested .SliceElem) .IsPtr}}
-	for _, val := range s.{{fieldVar .Name}} {
-		if val != nil {
-			val.SetNotify(s.Mark)
-		}
-	}
-{{- else if and (eq .Kind 3) (isNested .TypeStr)}}
-{{- if .IsPtr}}
-	if s.{{fieldVar .Name}} != nil {
-		s.{{fieldVar .Name}}.SetNotify(s.Mark)
-	}
-{{- else}}
-	s.{{fieldVar .Name}}.SetNotify(s.Mark)
-{{- end}}
+{{- if hasHook .}}
+	s.bind{{.Name}}()
 {{- end}}
 {{- end}}
 {{- end}}
@@ -130,18 +118,77 @@ func (s {{$.Nested.Name}}) {{fieldVar .Name}}RawMap() {{rawMapType .}} {
 func (s *{{$.Nested.Name}}) set{{.Name}}RawMap(src {{rawMapType .}}) {
 	s.{{fieldVar .Name}} = {{mapNewExpr . "len(src)"}}
 	for key, val := range src {
-{{- if and (isNested .MapVal) .IsPtr}}
-		// A child's change has to reach this struct, or the DAO above sees
-		// nothing and the change never enters the persist patch
-		// (RR-20260917-05). Bound here as well as in the setter, because a
-		// restore is how a loaded document gets its children.
+		s.{{fieldVar .Name}}.Set(key, val)
+	}
+{{- if hasHook .}}
+	// A restore is how a loaded document gets its children, so it is one of
+	// the paths that establishes ownership (RR-20260917-05).
+	s.bind{{.Name}}()
+{{- end}}
+}
+{{end}}
+{{- end}}
+{{range .Nested.Fields}}
+{{- if hasHook .}}
+// bind{{.Name}}{{if hasDetach .}} / unbind{{.Name}}{{end}} move{{if hasDetach .}}{{else}}s{{end}} the notification ownership of
+// {{.Name}}'s children and nothing else: no dirty mark, no undo record. That is
+// what makes them callable from inside a rollback undo, where the transaction
+// is already rolledBack and a public setter would register another undo and
+// fail (RR-20260918-03). Every path that changes what the field holds — the
+// setter, a restore from storage, the undo — releases what it drops and binds
+// what it ends up with, so "which children notify this struct" always equals
+// "which children the field holds".
+func (s *{{$.Nested.Name}}) bind{{.Name}}() {
+{{- if eq .Kind 2}}
+	if s.{{fieldVar .Name}} == nil {
+		return
+	}
+	s.{{fieldVar .Name}}.Range(func(_ {{.MapKey}}, val {{mapValType .}}) bool {
 		if val != nil {
 			val.SetNotify(s.Mark)
 		}
-{{- end}}
-		s.{{fieldVar .Name}}.Set(key, val)
+		return true
+	})
+{{- else if eq .Kind 1}}
+	for _, val := range s.{{fieldVar .Name}} {
+		if val != nil {
+			val.SetNotify(s.Mark)
+		}
 	}
+{{- else if .IsPtr}}
+	if s.{{fieldVar .Name}} != nil {
+		s.{{fieldVar .Name}}.SetNotify(s.Mark)
+	}
+{{- else}}
+	s.{{fieldVar .Name}}.SetNotify(s.Mark)
+{{- end}}
 }
+{{- if hasDetach .}}
+
+func (s *{{$.Nested.Name}}) unbind{{.Name}}() {
+{{- if eq .Kind 2}}
+	if s.{{fieldVar .Name}} == nil {
+		return
+	}
+	s.{{fieldVar .Name}}.Range(func(_ {{.MapKey}}, val {{mapValType .}}) bool {
+		if val != nil {
+			val.SetNotify(nil)
+		}
+		return true
+	})
+{{- else if eq .Kind 1}}
+	for _, val := range s.{{fieldVar .Name}} {
+		if val != nil {
+			val.SetNotify(nil)
+		}
+	}
+{{- else}}
+	if s.{{fieldVar .Name}} != nil {
+		s.{{fieldVar .Name}}.SetNotify(nil)
+	}
+{{- end}}
+}
+{{- end}}
 {{end}}
 {{- end}}
 {{range .Nested.Fields}}
@@ -197,7 +244,18 @@ func (s *{{$.Nested.Name}}) {{.Name}}Len() int {
 func (s *{{$.Nested.Name}}) Set{{.Name}}(v {{if eq .Kind 2}}{{rawMapType .}}{{else}}{{.TypeStr}}{{end}}) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := s.{{fieldVar .Name}}
-		if err := tx.RecordUndo(s, uint64({{$idx}}), func() error { s.{{fieldVar .Name}} = old; return nil }); err != nil {
+		if err := tx.RecordUndo(s, uint64({{$idx}}), func() error {
+{{- if hasDetach .}}
+			// The callbacks are not part of the field's value, so restoring
+			// the value does not restore them (RR-20260918-03).
+			s.unbind{{.Name}}()
+{{- end}}
+			s.{{fieldVar .Name}} = old
+{{- if hasHook .}}
+			s.bind{{.Name}}()
+{{- end}}
+			return nil
+		}); err != nil {
 			// A mutation without undo coverage silently breaks rollback;
 			// failing loudly matches the generated DAO setters.
 			panic(fmt.Errorf("{{$.Nested.Name}}: record undo: %w", err))
@@ -209,52 +267,36 @@ func (s *{{$.Nested.Name}}) Set{{.Name}}(v {{if eq .Kind 2}}{{rawMapType .}}{{el
 		s.Mark()
 	}
 {{- else if eq .Kind 2}}
-{{- if and (isNested .MapVal) .IsPtr}}
-	// The children being replaced stop reporting: a detached child marking
-	// a parent it no longer belongs to is a dirty flag nobody can explain
+{{- if hasDetach .}}
+	// The children being replaced stop reporting: a detached child marking a
+	// parent it no longer belongs to is a dirty flag nobody can explain
 	// (RR-20260917-05).
-	if s.{{fieldVar .Name}} != nil {
-		s.{{fieldVar .Name}}.Range(func(_ {{.MapKey}}, old {{mapValType .}}) bool {
-			if old != nil {
-				old.SetNotify(nil)
-			}
-			return true
-		})
-	}
+	s.unbind{{.Name}}()
 {{- end}}
 	s.{{fieldVar .Name}} = {{mapNewExpr . "len(v)"}}
 	for key, val := range v {
-{{- if and (isNested .MapVal) .IsPtr}}
-		if val != nil {
-			val.SetNotify(s.Mark)
-		}
-{{- end}}
 		s.{{fieldVar .Name}}.Set(key, val)
 	}
+{{- if hasHook .}}
+	s.bind{{.Name}}()
+{{- end}}
 	s.Mark()
 {{- else if eq .Kind 1}}
-{{- if and (isNested .SliceElem) .IsPtr}}
-	for _, old := range s.{{fieldVar .Name}} {
-		if old != nil {
-			old.SetNotify(nil)
-		}
-	}
+{{- if hasDetach .}}
+	s.unbind{{.Name}}()
 {{- end}}
 	s.{{fieldVar .Name}} = append({{.TypeStr}}(nil), v...)
-{{- if and (isNested .SliceElem) .IsPtr}}
-	for _, val := range s.{{fieldVar .Name}} {
-		if val != nil {
-			val.SetNotify(s.Mark)
-		}
-	}
+{{- if hasHook .}}
+	s.bind{{.Name}}()
 {{- end}}
 	s.Mark()
 {{- else}}
+{{- if hasDetach .}}
+	s.unbind{{.Name}}()
+{{- end}}
 	s.{{fieldVar .Name}} = v
-{{- if and (isNested .TypeStr) .IsPtr}}
-	if s.{{fieldVar .Name}} != nil {
-		s.{{fieldVar .Name}}.SetNotify(s.Mark)
-	}
+{{- if hasHook .}}
+	s.bind{{.Name}}()
 {{- end}}
 	s.Mark()
 {{- end}}

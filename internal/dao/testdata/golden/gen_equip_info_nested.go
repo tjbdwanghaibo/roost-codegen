@@ -20,6 +20,9 @@ type EquipInfo struct {
 	level                int32
 	star                 int32
 	gems                 *fmap.SmallSafeMap[int32, *GemInfo]
+	runes                []*GemInfo
+	core                 *GemInfo
+	shape                Position
 }
 
 // --- wire form (persistence, rollback capture, sync) ---
@@ -36,6 +39,9 @@ type equipInfoBSONDoc struct {
 	Level int32                     `bson:"level"`
 	Star  int32                     `bson:"star"`
 	Gems  map[int32]*gemInfoBSONDoc `bson:"gems"`
+	Runes []*gemInfoBSONDoc         `bson:"runes"`
+	Core  *gemInfoBSONDoc           `bson:"core"`
+	Shape positionBSONDoc           `bson:"shape"`
 }
 
 // bsonDoc is the value receiver on purpose: containers hold EquipInfo values
@@ -45,6 +51,9 @@ func (s EquipInfo) bsonDoc() equipInfoBSONDoc {
 		Level: s.level,
 		Star:  s.star,
 		Gems:  daoMapDocs(s.gemsRawMap(), gemInfoPtrBSONDoc),
+		Runes: daoSliceDocs(s.runes, gemInfoPtrBSONDoc),
+		Core:  gemInfoPtrBSONDoc(s.core),
+		Shape: s.shape.bsonDoc(),
 	}
 }
 
@@ -52,6 +61,12 @@ func (s *EquipInfo) setBSONDoc(doc equipInfoBSONDoc) {
 	s.level = doc.Level
 	s.star = doc.Star
 	s.setGemsRawMap(daoMapDocs(doc.Gems, gemInfoPtrFromBSONDoc))
+	s.runes = daoSliceDocs(doc.Runes, gemInfoPtrFromBSONDoc)
+	s.bindRunes()
+	s.core = gemInfoPtrFromBSONDoc(doc.Core)
+	s.bindCore()
+	s.shape = positionFromBSONDoc(doc.Shape)
+	s.bindShape()
 }
 
 func equipInfoFromBSONDoc(doc equipInfoBSONDoc) EquipInfo {
@@ -102,15 +117,99 @@ func (s EquipInfo) gemsRawMap() map[int32]*GemInfo {
 func (s *EquipInfo) setGemsRawMap(src map[int32]*GemInfo) {
 	s.gems = fmap.NewSmallSafeMap[int32, *GemInfo](len(src))
 	for key, val := range src {
-		// A child's change has to reach this struct, or the DAO above sees
-		// nothing and the change never enters the persist patch
-		// (RR-20260917-05). Bound here as well as in the setter, because a
-		// restore is how a loaded document gets its children.
+		s.gems.Set(key, val)
+	}
+	// A restore is how a loaded document gets its children, so it is one of
+	// the paths that establishes ownership (RR-20260917-05).
+	s.bindGems()
+}
+
+// bindGems / unbindGems move the notification ownership of
+// Gems's children and nothing else: no dirty mark, no undo record. That is
+// what makes them callable from inside a rollback undo, where the transaction
+// is already rolledBack and a public setter would register another undo and
+// fail (RR-20260918-03). Every path that changes what the field holds — the
+// setter, a restore from storage, the undo — releases what it drops and binds
+// what it ends up with, so "which children notify this struct" always equals
+// "which children the field holds".
+func (s *EquipInfo) bindGems() {
+	if s.gems == nil {
+		return
+	}
+	s.gems.Range(func(_ int32, val *GemInfo) bool {
 		if val != nil {
 			val.SetNotify(s.Mark)
 		}
-		s.gems.Set(key, val)
+		return true
+	})
+}
+
+func (s *EquipInfo) unbindGems() {
+	if s.gems == nil {
+		return
 	}
+	s.gems.Range(func(_ int32, val *GemInfo) bool {
+		if val != nil {
+			val.SetNotify(nil)
+		}
+		return true
+	})
+}
+
+// bindRunes / unbindRunes move the notification ownership of
+// Runes's children and nothing else: no dirty mark, no undo record. That is
+// what makes them callable from inside a rollback undo, where the transaction
+// is already rolledBack and a public setter would register another undo and
+// fail (RR-20260918-03). Every path that changes what the field holds — the
+// setter, a restore from storage, the undo — releases what it drops and binds
+// what it ends up with, so "which children notify this struct" always equals
+// "which children the field holds".
+func (s *EquipInfo) bindRunes() {
+	for _, val := range s.runes {
+		if val != nil {
+			val.SetNotify(s.Mark)
+		}
+	}
+}
+
+func (s *EquipInfo) unbindRunes() {
+	for _, val := range s.runes {
+		if val != nil {
+			val.SetNotify(nil)
+		}
+	}
+}
+
+// bindCore / unbindCore move the notification ownership of
+// Core's children and nothing else: no dirty mark, no undo record. That is
+// what makes them callable from inside a rollback undo, where the transaction
+// is already rolledBack and a public setter would register another undo and
+// fail (RR-20260918-03). Every path that changes what the field holds — the
+// setter, a restore from storage, the undo — releases what it drops and binds
+// what it ends up with, so "which children notify this struct" always equals
+// "which children the field holds".
+func (s *EquipInfo) bindCore() {
+	if s.core != nil {
+		s.core.SetNotify(s.Mark)
+	}
+}
+
+func (s *EquipInfo) unbindCore() {
+	if s.core != nil {
+		s.core.SetNotify(nil)
+	}
+}
+
+// bindShape moves the notification ownership of
+// Shape's children and nothing else: no dirty mark, no undo record. That is
+// what makes them callable from inside a rollback undo, where the transaction
+// is already rolledBack and a public setter would register another undo and
+// fail (RR-20260918-03). Every path that changes what the field holds — the
+// setter, a restore from storage, the undo — releases what it drops and binds
+// what it ends up with, so "which children notify this struct" always equals
+// "which children the field holds".
+func (s *EquipInfo) bindShape() {
+	s.shape.SetNotify(s.Mark)
 }
 
 func (s *EquipInfo) GetLevel() int32 { return s.level }
@@ -139,10 +238,38 @@ func (s *EquipInfo) GemsLen() int {
 	return s.gems.Len()
 }
 
+func (s *EquipInfo) GetRunes(idx int) (*GemInfo, bool) {
+	if idx < 0 || idx >= len(s.runes) {
+		var zero *GemInfo
+		return zero, false
+	}
+	return s.runes[idx], true
+}
+
+func (s *EquipInfo) RangeRunes(f func(idx int, val *GemInfo) bool) {
+	if f == nil {
+		return
+	}
+	for idx, val := range s.runes {
+		if !f(idx, val) {
+			return
+		}
+	}
+}
+
+func (s *EquipInfo) RunesLen() int { return len(s.runes) }
+
+func (s *EquipInfo) GetCore() *GemInfo { return s.core }
+
+func (s *EquipInfo) GetShape() *Position { return &s.shape }
+
 func (s *EquipInfo) SetLevel(v int32) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := s.level
-		if err := tx.RecordUndo(s, uint64(0), func() error { s.level = old; return nil }); err != nil {
+		if err := tx.RecordUndo(s, uint64(0), func() error {
+			s.level = old
+			return nil
+		}); err != nil {
 			// A mutation without undo coverage silently breaks rollback;
 			// failing loudly matches the generated DAO setters.
 			panic(fmt.Errorf("EquipInfo: record undo: %w", err))
@@ -157,7 +284,10 @@ func (s *EquipInfo) SetLevel(v int32) {
 func (s *EquipInfo) SetStar(v int32) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := s.star
-		if err := tx.RecordUndo(s, uint64(1), func() error { s.star = old; return nil }); err != nil {
+		if err := tx.RecordUndo(s, uint64(1), func() error {
+			s.star = old
+			return nil
+		}); err != nil {
 			// A mutation without undo coverage silently breaks rollback;
 			// failing loudly matches the generated DAO setters.
 			panic(fmt.Errorf("EquipInfo: record undo: %w", err))
@@ -172,29 +302,89 @@ func (s *EquipInfo) SetStar(v int32) {
 func (s *EquipInfo) SetGems(v map[int32]*GemInfo) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := s.gems
-		if err := tx.RecordUndo(s, uint64(2), func() error { s.gems = old; return nil }); err != nil {
+		if err := tx.RecordUndo(s, uint64(2), func() error {
+			// The callbacks are not part of the field's value, so restoring
+			// the value does not restore them (RR-20260918-03).
+			s.unbindGems()
+			s.gems = old
+			s.bindGems()
+			return nil
+		}); err != nil {
 			// A mutation without undo coverage silently breaks rollback;
 			// failing loudly matches the generated DAO setters.
 			panic(fmt.Errorf("EquipInfo: record undo: %w", err))
 		}
 	}
-	// The children being replaced stop reporting: a detached child marking
-	// a parent it no longer belongs to is a dirty flag nobody can explain
+	// The children being replaced stop reporting: a detached child marking a
+	// parent it no longer belongs to is a dirty flag nobody can explain
 	// (RR-20260917-05).
-	if s.gems != nil {
-		s.gems.Range(func(_ int32, old *GemInfo) bool {
-			if old != nil {
-				old.SetNotify(nil)
-			}
-			return true
-		})
-	}
+	s.unbindGems()
 	s.gems = fmap.NewSmallSafeMap[int32, *GemInfo](len(v))
 	for key, val := range v {
-		if val != nil {
-			val.SetNotify(s.Mark)
-		}
 		s.gems.Set(key, val)
 	}
+	s.bindGems()
+	s.Mark()
+}
+
+func (s *EquipInfo) SetRunes(v []*GemInfo) {
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old := s.runes
+		if err := tx.RecordUndo(s, uint64(3), func() error {
+			// The callbacks are not part of the field's value, so restoring
+			// the value does not restore them (RR-20260918-03).
+			s.unbindRunes()
+			s.runes = old
+			s.bindRunes()
+			return nil
+		}); err != nil {
+			// A mutation without undo coverage silently breaks rollback;
+			// failing loudly matches the generated DAO setters.
+			panic(fmt.Errorf("EquipInfo: record undo: %w", err))
+		}
+	}
+	s.unbindRunes()
+	s.runes = append([]*GemInfo(nil), v...)
+	s.bindRunes()
+	s.Mark()
+}
+
+func (s *EquipInfo) SetCore(v *GemInfo) {
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old := s.core
+		if err := tx.RecordUndo(s, uint64(4), func() error {
+			// The callbacks are not part of the field's value, so restoring
+			// the value does not restore them (RR-20260918-03).
+			s.unbindCore()
+			s.core = old
+			s.bindCore()
+			return nil
+		}); err != nil {
+			// A mutation without undo coverage silently breaks rollback;
+			// failing loudly matches the generated DAO setters.
+			panic(fmt.Errorf("EquipInfo: record undo: %w", err))
+		}
+	}
+	s.unbindCore()
+	s.core = v
+	s.bindCore()
+	s.Mark()
+}
+
+func (s *EquipInfo) SetShape(v Position) {
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old := s.shape
+		if err := tx.RecordUndo(s, uint64(5), func() error {
+			s.shape = old
+			s.bindShape()
+			return nil
+		}); err != nil {
+			// A mutation without undo coverage silently breaks rollback;
+			// failing loudly matches the generated DAO setters.
+			panic(fmt.Errorf("EquipInfo: record undo: %w", err))
+		}
+	}
+	s.shape = v
+	s.bindShape()
 	s.Mark()
 }

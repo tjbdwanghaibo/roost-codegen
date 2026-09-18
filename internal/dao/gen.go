@@ -79,6 +79,8 @@ func nestedFuncMap(defs *Definitions) template.FuncMap {
 		"rawMapType": rawMapType,
 		"hasMaps":    hasMapFields,
 		"isNested":   func(typeName string) bool { return isNestedType(defs, typeName) },
+		"hasHook":    func(f FieldDef) bool { return fieldCarriesChildHook(defs, f) },
+		"hasDetach":  func(f FieldDef) bool { return fieldDetachesOldChildren(defs, f) },
 		"wireType":   func(f FieldDef) string { return wireType(defs, f) },
 		"toWire":     func(f FieldDef, expr string) string { return toWire(defs, f, expr) },
 		"fromWire":   func(f FieldDef, expr string) string { return fromWire(defs, f, expr) },
