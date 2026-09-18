@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.15.11] - 2026-09-18
+
 ### Added
 
 - **每个 DAO 生成同步字段词汇表 `<Dao>SyncFields()`**（M-12 / ARCH-06，需 core ≥ 下一版）。
