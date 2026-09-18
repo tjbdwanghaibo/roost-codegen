@@ -217,7 +217,8 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		"internal/service/game/gift_saga.go", "internal/errors/item_short.go",
 		"game/battle/battle.go", "protocol/def/battle_input.go", "protocol/def/battle_frame.go",
 		"game/controllers/player/battle_input.go", "internal/service/game/battle.go",
-		"game/dungeon/dungeon.go", "game/dungeon/dungeon_test.go", "game/handler/claim_dungeon.go", "internal/errors/dungeon_run.go"} {
+		"game/dungeon/dungeon.go", "game/dungeon/dungeon_test.go", "game/handler/claim_dungeon.go", "internal/errors/dungeon_run.go",
+		"internal/service/game/battle_test.go"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("demo did not write %s: %v", rel, err)
 		}
@@ -269,6 +270,11 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// registered call).
 	if manager := read("internal/service/game/battle.go"); !strings.Contains(manager, "lockstep.NewRoom(") || !strings.Contains(manager, "room.Tick(ctx)") || !strings.Contains(manager, "battleDrainWindow") {
 		t.Errorf("battle.go does not open a lockstep room, drive it or keep a drain window for the last keyframe's hash reports")
+	}
+	// The start grace is its own timer: waiting for a first command instead
+	// meant a room nobody typed in never cut a frame (RR-20260917-09).
+	if manager := read("internal/service/game/battle.go"); !strings.Contains(manager, "grace := time.NewTimer(battleStartGrace)") || !strings.Contains(manager, "case <-grace.C:") {
+		t.Errorf("the battle room has no independent start-grace timer, so its declared start-anyway semantics do not hold")
 	}
 	if matchmaker := read("internal/service/game/matchmaker.go"); !strings.Contains(matchmaker, "battles.Open(match.ID, members)") {
 		t.Errorf("the matchmaker does not open a battle for a formed match")
