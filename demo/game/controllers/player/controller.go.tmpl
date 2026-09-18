@@ -12,6 +12,7 @@ import (
 	sceneentity "{{MODULE}}/game/entities/scene"
 	world "{{MODULE}}/game/entities/world"
 	lifecycle "{{MODULE}}/game/lifecycle"
+	"{{MODULE}}/game/purchase"
 	"{{MODULE}}/game/skills"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/entity"
@@ -20,6 +21,7 @@ import (
 	svcchat "github.com/tjbdwanghaibo/roost-kit/service/chat"
 	svcmail "github.com/tjbdwanghaibo/roost-kit/service/mail"
 	svcmatch "github.com/tjbdwanghaibo/roost-kit/service/match"
+	svcplatform "github.com/tjbdwanghaibo/roost-kit/service/platform"
 	svcrank "github.com/tjbdwanghaibo/roost-kit/service/rank"
 	svcsession "github.com/tjbdwanghaibo/roost-kit/service/session"
 )
@@ -39,12 +41,17 @@ type Controller struct {
 	mailer     svcmail.Mail
 	sessions   svcsession.Session
 	ranking    svcrank.Rank
+	payments   svcplatform.Platform
+	purchases  atomic.Pointer[purchaseDrainer]
 	presence   *chatroom.Presence
 	transport  atomic.Pointer[pushTransport]
 	battles    atomic.Pointer[battleRouter]
 	scene      atomic.Pointer[sceneJoiner]
 	worldID    int64
 	sceneID    int64
+	// paymentSecret is the demo's stand-in for a payment provider's signing
+	// key. A real game process does not hold one (see the purchase endpoint).
+	paymentSecret string
 
 	// The skill catalog, compiled from game/skills/*.json on first use.
 	skillsOnce   sync.Once
@@ -69,6 +76,13 @@ type sceneJoiner interface {
 	Leave(ctx context.Context, subjectID int64)
 }
 
+// purchaseDrainer is the slice of the game service's paid-order drain an
+// endpoint uses: settle whatever the platform service has recorded for this
+// player. Looked up by capability name for the same reason the scene is.
+type purchaseDrainer interface {
+	DrainPlayer(ctx context.Context, playerID int64) ([]purchase.Settlement, error)
+}
+
 // pushTransport is the slice of the player TCP Runtime the endpoints use.
 // It is an interface here, and the capability is looked up by name, because
 // the transport package imports the protocol binding that constructs this
@@ -91,6 +105,10 @@ const battleCapability app.ModName = "{{GAME_SERVICE}}.battle"
 // sceneCapability is what internal/service/<game> publishes its scene under
 // (SceneCapability there).
 const sceneCapability app.ModName = "{{GAME_SERVICE}}.scene"
+
+// purchaseCapability is what internal/service/<game> publishes its paid-order
+// drain under (PurchaseCapability there).
+const purchaseCapability app.ModName = "{{GAME_SERVICE}}.purchases"
 
 // FromRegistry is what the generated protocol binding calls once per
 // process; keep its signature.
@@ -129,6 +147,19 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if !ok || ranking == nil {
 		return nil, fmt.Errorf("player controller: capability %q not found; list rank under services.<game>.uses", svcrank.CapabilityName)
 	}
+	// The demo plays the payment provider, so this process needs the secret
+	// the platform service checks callbacks with. Refused here rather than at
+	// the first purchase: an empty secret turns every callback into an
+	// invalid-signature refusal, which reads as an attack rather than as a
+	// missing configuration key.
+	paymentSecret := registry.Config().GetString("platform.payment_secret")
+	if paymentSecret == "" {
+		return nil, fmt.Errorf("player controller: platform.payment_secret is empty; the demo signs its own payment callbacks with it")
+	}
+	payments, ok := app.Lookup[svcplatform.Platform](registry, svcplatform.CapabilityName)
+	if !ok || payments == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; list platform under services.<game>.uses", svcplatform.CapabilityName)
+	}
 	worldID, err := entity.BuildEntityID(lifecycle.WorldUniqueID, world.EntityKindWorld)
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
@@ -140,6 +171,7 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	return &Controller{
 		registry: registry, nestClient: client, players: players,
 		matcher: matcher, messaging: messaging, mailer: mailer, sessions: sessions, ranking: ranking,
+		payments: payments, paymentSecret: paymentSecret,
 		presence: chatroom.NewPresence(), worldID: worldID, sceneID: sceneID,
 	}, nil
 }
@@ -256,6 +288,38 @@ func (controller *Controller) Scene() (sceneJoiner, error) {
 	}
 	controller.scene.Store(&joiner)
 	return joiner, nil
+}
+
+// Payments is the platform service: the process that owns paid orders.
+func (controller *Controller) Payments() svcplatform.Platform {
+	if controller == nil {
+		return nil
+	}
+	return controller.payments
+}
+
+// PaymentSecret is what this process signs simulated provider callbacks with.
+func (controller *Controller) PaymentSecret() string {
+	if controller == nil {
+		return ""
+	}
+	return controller.paymentSecret
+}
+
+// Purchases is the paid-order drain, looked up lazily like the scene.
+func (controller *Controller) Purchases() (purchaseDrainer, error) {
+	if controller == nil {
+		return nil, errors.New("player controller: nil")
+	}
+	if drain := controller.purchases.Load(); drain != nil {
+		return *drain, nil
+	}
+	drain, ok := app.Lookup[purchaseDrainer](controller.registry, purchaseCapability)
+	if !ok || drain == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; the purchase drain is not running", purchaseCapability)
+	}
+	controller.purchases.Store(&drain)
+	return drain, nil
 }
 
 // WorldSceneID is the full entity id of the one map this process runs.

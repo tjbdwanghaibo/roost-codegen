@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+### Added
+
+- **game-demo：付费订单走通两个进程，以及 U-0234 留给部署的那个待发货索引**（§9.7）。platform 是 kit 仅剩两个零使用服务之一，
+  这一批让 game 模板把它也托管起来：新端点 `Purchase`(10019) → 游戏进程签一份回调（**demo 在扮演支付渠道**，
+  真实工程里游戏进程不该持有这把密钥，端点注释写清了）→ platform 进程验签、按 order id 只插不改地登记、调用部署的 deliverer
+  → deliverer 把**已解析好的**发货内容写成 Redis 里的一条 grant（platform 进程没有 Entity，能做的"已发货"只能是把欠什么写成持久记录）
+  → 游戏进程抽干 grant：一个 Nest 事务把道具加进背包并**把 order id 写进同一条 WAL 记录**，提交之后才删 grant。
+  反过来的顺序任何一次崩溃都会吞掉一笔已付款的发货。新增 `game/purchase`（目录、key 布局、grant 记录、领取窗口）、
+  `game/handler/grant_purchase.go` 与账本 `PlayerDao.PurchaseClaims`（加字段不需要迁移，`schema=` 仍是 2）、
+  `internal/service/game/purchase_drain.go`、`internal/service/platform/{collaborators,pending_index}.go`，
+  两个错误码（`purchase_grant` 100014、`purchase_expired` 100015），机器人动作 `purchase` / `purchase_again`。
+  索引的四件事：重启续接（Redis sorted set）、分页（`limit` 之外的下一 tick 再说）、公平（score 是下次值得一试的时刻，
+  反复失败的那笔在往后挪自己）、退休（**问服务**而不是盯自己的写入——订单还能以 exhausted 或被运维 settled 结束，
+  两者都不经过 deliverer）。需要 **kit ≥ v1.14.10**（`platform.RegistryBound`）。
+- **`frameworkServiceSpec.ModChain`：托管服务的可选协作者也能生成接线**。此前只有 `NewMod(...)` 的参数会生成，
+  `Mod.WithPendingOrders(...)` 这种"有可辩护的默认值、但不能是隐形的"协作者没有入口，
+  项目在 collaborators 文件里写了也没人读。platform 用它生成 `.WithPendingOrders(servicePlatform.Pending())`，
+  默认 collaborators 文件里同时有一个返回 nil 的 `Pending()`。
+
+### Fixed
+
+- **platform 的生成配置块补上 `session_secret` / `payment_secret`**。Mod 在 `Init` 里对空值直接拒绝
+  （未设置的支付密钥会把每一次渠道回调变成验签失败——看起来像攻击的静默故障），所以少了这两行的 starter 配置
+  是一个**起不来的进程**；account 的块早就按 `CHANGE_ME` 发了。测试
+  `internal/roost/framework_mod_chain_promises_test.go`。
+
 ## [v1.15.13] - 2026-09-19
 
 ### Added

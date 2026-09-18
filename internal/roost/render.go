@@ -394,7 +394,11 @@ func renderBootstrap(m Manifest) string {
 			for _, mod := range mods {
 				fmt.Fprintf(&b, ",\n\t\t%s", renderModConstructor(m, mod, allMods, name))
 			}
-			fmt.Fprintf(&b, ",\n\t\tsvc%s.NewMod(%s))\n", spec.Package, strings.Join(args, ", "))
+			var chain strings.Builder
+			for _, call := range spec.ModChain {
+				fmt.Fprintf(&chain, ".%s", strings.Replace(call, "(", "(service"+safeIdent(name)+".", 1))
+			}
+			fmt.Fprintf(&b, ",\n\t\tsvc%s.NewMod(%s)%s)\n", spec.Package, strings.Join(args, ", "), chain.String())
 			continue
 		}
 		fmt.Fprintf(&b, "\ta.RegisterServer(app.ServiceName(%q), service%s.New()", name, safeIdent(name))

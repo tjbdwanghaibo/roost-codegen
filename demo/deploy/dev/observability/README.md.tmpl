@@ -5,7 +5,7 @@
 
 ```bash
 docker compose -f deploy/dev/observability/docker-compose.yaml up -d
-# game / mail / match 在宿主机上跑（ops 端口：{{GAME_SERVICE}} 9100，account 9101，chat 9102，mail 9103，match 9104，rank 9105，session 9106——生成的配置已按此分配，`make dev-run` 直接可用），压测加 -metrics-addr 127.0.0.1:9300
+# game / mail / match 在宿主机上跑（ops 端口：{{GAME_SERVICE}} 9100，account 9101，chat 9102，mail 9103，match 9104，platform 9105，rank 9106，session 9107——生成的配置已按此分配，`make dev-run` 直接可用），压测加 -metrics-addr 127.0.0.1:9300
 open http://127.0.0.1:3000        # admin / admin，仪表盘 "Roost game-demo" 已预置
 ```
 

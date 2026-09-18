@@ -103,6 +103,16 @@ func applyDemoTemplate(m *Manifest, gameService string) error {
 	if err := applyGameTemplate(m, gameService); err != nil {
 		return err
 	}
+	// The game process reads the platform service's grant records out of the
+	// same Redis that service writes them to (game/purchase, and the drain in
+	// internal/service/<game>/purchase_drain.go). It is the only cross-process
+	// handover in the demo that is not a bus call, and it is one because the
+	// delivering side has to make it durable before it may answer "delivered".
+	game := m.Services[gameService]
+	if resolved, err := resolveMods(game.Mods); err == nil && !contains(resolved, "redis") {
+		game.Mods = append(game.Mods, "redis")
+		m.Services[gameService] = game
+	}
 	for _, feature := range []string{"protocol", "entity", "nest", "dao", "config", "errcode", "attribute"} {
 		if !contains(m.Features, feature) {
 			m.Features = append(m.Features, feature)
@@ -169,6 +179,56 @@ func enableDemoPlayerTCP(root, gameService string) error {
 	return err
 }
 
+// demoPaymentSecrets gives the platform service its two secrets in the DEV
+// configs and tells the game process the same payment secret.
+//
+// The game process holding a payment secret is the demo playing the payment
+// provider (game/controllers/player/purchase.go says so at length): a real
+// store signs callbacks with a key no game process has. What is not a demo
+// shortcut is where the keys live — the platform Mod refuses an empty
+// session_secret or payment_secret at Init, so a starter config that omits
+// them is a process that cannot start. The production example keeps CHANGE_ME.
+func demoPaymentSecrets(root, gameService string) error {
+	platformPath := filepath.Join(root, "configs", "service", "config.platform.yaml")
+	raw, err := os.ReadFile(platformPath)
+	if err != nil {
+		return err
+	}
+	const before = "  session_secret: CHANGE_ME\n  payment_secret: CHANGE_ME\n"
+	const after = "  session_secret: dev-platform-session-secret\n  payment_secret: dev-platform-payment-secret\n"
+	if !strings.Contains(string(raw), before) {
+		return fmt.Errorf("%s: expected the platform secrets to replace", platformPath)
+	}
+	if err := writeAtomic(platformPath, []byte(strings.Replace(string(raw), before, after, 1)), 0o644); err != nil {
+		return err
+	}
+	// The game side: the key prefix it reads grants under, and the secret it
+	// signs its simulated callbacks with. Appended rather than templated
+	// because the game process does not host the platform service, so nothing
+	// generates a platform block for it.
+	gamePath := filepath.Join(root, "configs", "service", "config."+gameService+".yaml")
+	gameRaw, err := os.ReadFile(gamePath)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(string(gameRaw), "\nplatform:\n") {
+		return nil
+	}
+	block := "platform:\n  key_prefix: " + platformKeyPrefix(string(raw)) + "\n  payment_secret: dev-platform-payment-secret\n"
+	return writeAtomic(gamePath, append(append([]byte(nil), gameRaw...), []byte(block)...), 0o644)
+}
+
+// platformKeyPrefix reads the prefix out of the platform service's own config,
+// so the two processes cannot be given different ones by an edit to one file.
+func platformKeyPrefix(platformConfig string) string {
+	for _, line := range strings.Split(platformConfig, "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "key_prefix:"); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return "roost:platform"
+}
+
 func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 	return []demoScaffoldStep{
 		{add: &AddOptions{Kind: "component", Name: "Profile", Entity: "Player"}, why: "Player's identity state"},
@@ -212,6 +272,8 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/errors/mail_claim.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/scene_position.go", why: "one code for out of bounds / taken / not on a map: a client that learns which points are occupied has everyone's positions"},
 		{write: "internal/errors/dungeon_claim_window.go", why: "a reward refused for being too old has to be a named refusal, not a quiet zero"},
+		{write: "internal/errors/purchase_grant.go", why: "a grant with no order id or no payment moment cannot be made exactly-once"},
+		{write: "internal/errors/purchase_expired.go", why: "a paid order past its claim window is a refusal an operator has to be able to find"},
 		{write: "game/gameplay/attribute/combat.go", why: "the attribute profile: three attributes, one derived by formula, plus the dirty mask the generator writes through"},
 		{write: "game/gameplay/attribute/combat_test.go", why: "the derived attribute follows its inputs and a container snapshot is a copy"},
 		{write: "game/equipment/equipment.go", why: "which slots exist and what may go in one: a game decision, not the DAO's"},
@@ -342,6 +404,13 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "protocol", Name: "Equip", Group: "game", Handler: "player"}, why: "wearing an item: the slot is the item's property, not the client's choice"},
 		{write: "protocol/def/equip.go", why: "ask with an item id, get back the slot it went in and what came off"},
 		{write: "game/controllers/player/equip.go", why: "the endpoint only addresses the transaction; every decision is under the Player's lock"},
+		{write: "game/purchase/purchase.go", why: "what the game process and the platform process both have to agree on about a paid order: catalogue, key layout, grant record, claim window"},
+		{add: &AddOptions{Kind: "handler", Name: "GrantPurchase", Entity: "Player", Component: "Bag"}, why: "a paid order becomes items: the order id lands in the same WAL record as the grant"},
+		{write: "game/handler/grant_purchase.go", why: "the third instance of one shape: authoritative moment in, identity recorded in the same transaction, admission and pruning the same predicate"},
+		{write: "game/handler/grant_purchase_test.go", why: "the replay a client cannot produce: the same order drained twice grants once, and a grant past its window is refused rather than repeated"},
+		{add: &AddOptions{Kind: "protocol", Name: "Purchase", Group: "game", Handler: "player"}, why: "buying: the demo plays the payment provider, everything around that is real"},
+		{write: "protocol/def/purchase.go", why: "a product id in; the order, the receipt's replay flag and the bag count out"},
+		{write: "game/controllers/player/purchase.go", why: "sign a callback, let the platform service record and deliver it, then drain the grant into the bag"},
 		{add: &AddOptions{Kind: "protocol", Name: "RankTop", Group: "game", Handler: "player"}, why: "reading a leaderboard: a bounded page, and the board is the server's choice"},
 		{write: "protocol/def/rank_top.go", why: "the board page on the wire, with this player's own rank alongside it"},
 		{write: "game/controllers/player/rank_top.go", why: "Page + Rank through the typed rank client"},
@@ -387,6 +456,11 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/gm.go", why: "GM commands on the admin registry: add item / add exp / send mail / world stats, served by ops over HTTP behind a token"},
 		{run: enableDemoAdmin, why: "the dev config enables the ops admin endpoint with a dev token, so the GM commands are reachable on a developer machine"},
 		{write: "cmd/accountctl/main.go", why: "the operator surface account keeps off the bus: register the game server so CreateRole works"},
+		{write: "internal/service/game/purchase_drain.go", why: "the game side of the platform handover: grant under the Player's lock, then delete the record — never the other order"},
+		{write: "internal/service/platform/collaborators.go", why: "a platform service that verifies a demo channel, resolves the player and records a durable grant instead of pretending it can reach an Entity"},
+		{write: "internal/service/platform/pending_index.go", why: "the paid-but-undelivered index U-0234 left to the deployment: persistent, paged, fair, and retired by asking the service"},
+		{write: "internal/service/platform/pending_index_test.go", why: "the index's four promises against a map, so the retry loop's only input is not the untested part"},
+		{run: demoPaymentSecrets, why: "the platform service refuses to start without its two secrets; the game process signs its simulated callbacks with the same payment secret"},
 		{write: "internal/service/account/collaborators.go", why: "an account service that can log a demo user in and mint ids from Redis"},
 		{write: "internal/service/chat/collaborators.go", why: "a chat service with a written-down policy, one text type and a granted system path"},
 		{write: "internal/service/session/collaborators.go", why: "a session service whose releaser frees the demo's (resource-less) dungeon"},

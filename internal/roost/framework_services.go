@@ -24,10 +24,17 @@ import (
 // identity verifier — are business decisions, so they live in a file the
 // generator creates once and never overwrites, with fail-closed defaults.
 type frameworkServiceSpec struct {
-	Package    string
-	Interface  string
-	Depends    []string
-	ModArgs    []string
+	Package   string
+	Interface string
+	Depends   []string
+	ModArgs   []string
+	// ModChain is the optional collaborators a hosted service wires AFTER
+	// NewMod, as chained calls on the returned Mod (kit's own shape for a
+	// collaborator that has a defensible "none" — platform's pending-order
+	// index is the first). Each entry is a method call whose argument names a
+	// function in the project's collaborators file, so the default file must
+	// define it too.
+	ModChain   []string
 	Collabs    string
 	ConfigFunc func(project string) string
 }
@@ -98,6 +105,58 @@ func Broadcast() mail.Deliverer { return nil }
 `,
 		ConfigFunc: func(project string) string {
 			return "match:\n  key_prefix: roost:" + project + ":match\n  ticket_ttl: 60s\n  sweep_queues: []\n"
+		},
+	},
+	"platform": {
+		Package: "platform", Interface: "Platform", Depends: []string{"redis", "nats"},
+		ModArgs:  []string{"Verify()", "Players()", "Deliver()", "Metrics()"},
+		ModChain: []string{"WithPendingOrders(Pending())"},
+		Collabs: `// Verify checks a provider callback's signature. The default refuses: a
+// platform service that cannot tell a real callback from a forged one must not
+// deliver anything, and "accept everything in development" is the setting that
+// reaches production.
+func Verify() platform.Verifier {
+	return platform.VerifierFunc(func(context.Context, platform.Credential) (platform.Verified, error) {
+		return platform.Verified{}, errors.New("platform: callback verifier is not configured; implement Verify() in internal/service/%[1]s/collaborators.go")
+	})
+}
+
+// Players resolves a channel account to this server's player id.
+func Players() platform.PlayerResolver {
+	return platform.PlayerResolverFunc(func(context.Context, platform.Verified) (int64, error) {
+		return 0, errors.New("platform: player resolver is not configured; implement Players() in internal/service/%[1]s/collaborators.go")
+	})
+}
+
+// Deliver grants what was paid for. It is called at most once per order by
+// the service, but it MUST be idempotent anyway: the service retries after a
+// failure it could not classify, and a grant that ran and then failed to
+// report looks identical to one that never ran.
+func Deliver() platform.Deliverer {
+	return platform.DelivererFunc(func(context.Context, platform.Order) error {
+		return errors.New("platform: deliverer is not configured; implement Deliver() in internal/service/%[1]s/collaborators.go")
+	})
+}
+
+// Pending is this deployment's index of paid-but-undelivered orders: what the
+// background retry loop reads every tick. nil is a defensible answer — a
+// channel that re-delivers its callbacks recovers without one — and it is the
+// default here because an index is a durable structure only the deployment can
+// place. The Server says at start which mode it is in, so "off" is a visible
+// choice rather than a silent one.
+//
+// An implementation keeps entries while an order is not terminal, retires them
+// when it is, pages within the limit it is given, and survives a restart.
+// It may implement platform.RegistryBound to receive the process's registry.
+func Pending() platform.PendingOrders { return nil }
+`,
+		ConfigFunc: func(project string) string {
+			// session_secret and payment_secret are refused when empty at Init
+			// (an unset payment secret turns every provider callback into an
+			// invalid-signature refusal), so they are emitted as CHANGE_ME
+			// rather than omitted: a starter config whose process cannot start
+			// reads as a broken generator.
+			return "platform:\n  key_prefix: roost:" + project + ":platform\n  session_secret: CHANGE_ME\n  payment_secret: CHANGE_ME\n  session_ttl: 30m\n  delivery_attempts: 8\n"
 		},
 	},
 	"rank": {

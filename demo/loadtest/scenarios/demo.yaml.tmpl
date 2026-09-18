@@ -153,6 +153,17 @@ scenarios:
         - action: equip
           param:
             item_id: 2001
+        # A paid order, across the platform process: the endpoint signs a
+        # callback, the platform service records and delivers it, the grant
+        # lands in Redis and the game drains it into the bag. Then a second
+        # order for the same product — a different order id, so it is paid
+        # again and the bag moves again.
+        - action: purchase
+          param:
+            product_id: potion_pack
+        - action: purchase_again
+          param:
+            product_id: potion_pack
         # The map: one step, then a step off the edge of the world. The
         # second one must be refused — and must answer with the position the
         # player still has.

@@ -1,0 +1,52 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/purchase"
+	"{{MODULE}}/game/rewards"
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/errcode"
+)
+
+// handlerGrantPurchase puts a paid order's goods in the bag, at most once per
+// order.
+//
+// It is the third instance of one shape — dungeon clear, mail attachment,
+// paid order — and the shape is: an authoritative moment comes in with the
+// request, the identity is recorded in the SAME transaction as the items, and
+// the record may be forgotten exactly when a replay can no longer arrive.
+// Here the authoritative moment is the payment, which the platform service
+// stamped on the order; the game never invents it, because a moment the game
+// chooses would move every time the drain retried.
+//
+// The admission check and the pruning check are the same predicate on the
+// same number. A grant whose window has closed is refused rather than granted
+// silently — if it were merely pruned, a grant that outlived the ledger would
+// be granted a second time, which is exactly the defect RR-20260918-05
+// registered against the mail ledger.
+//
+//roost:nest rollback=undo durability=strict
+func handlerGrantPurchase(target player.IBagEntity, orderID string, itemID int64, count int32, paidAtUnix int64, nowUnix int64) (purchase.GrantResult, error) {
+	if orderID == "" || paidAtUnix <= 0 {
+		return purchase.GrantResult{}, errcode.Wrap(apperrors.ErrPurchaseGrant, nil, "order_id", orderID, "paid_at_unix", paidAtUnix)
+	}
+	windowClosesAt := paidAtUnix + purchase.ClaimRetentionSeconds
+	bag := target.BagComp()
+	if rewards.ClaimWindowClosed(windowClosesAt, nowUnix) {
+		// Too late to claim, and the ledger has already forgotten it. The
+		// drain turns this into "drop the grant" rather than a retry: there
+		// is no state that can make it claimable again.
+		return purchase.GrantResult{BagCount: bag.ItemCount(itemID)},
+			errcode.Wrap(apperrors.ErrPurchaseExpired, nil, "order_id", orderID, "closed_at_unix", windowClosesAt)
+	}
+	if !bag.ClaimPurchase(orderID, windowClosesAt, nowUnix) {
+		// Already granted. Not an error: the drain deletes the grant on this
+		// answer exactly as it does on a fresh one.
+		return purchase.GrantResult{BagCount: bag.ItemCount(itemID)}, nil
+	}
+	held, err := bag.AddItem(itemID, count)
+	if err != nil {
+		return purchase.GrantResult{}, err
+	}
+	return purchase.GrantResult{Granted: true, BagCount: held}, nil
+}

@@ -49,6 +49,18 @@ func (controller *Controller) HandleEnterGame(context *player_agent.Context, req
 		// just do not see the others until the next login.
 		slog.Warn("enter_game: player did not join the replicated scene", "player_id", context.PlayerID, "err", joinErr)
 	}
+	// Anything paid for while this player was offline is settled now. The
+	// platform service recorded the grant durably when the payment landed;
+	// this is the moment the player is in hand, so it is the moment the goods
+	// reach the bag. Best effort — a drain that fails leaves the grants where
+	// they are and the next login takes them.
+	if drain, drainErr := controller.Purchases(); drainErr != nil {
+		slog.Warn("enter_game: paid orders not settled", "player_id", context.PlayerID, "err", drainErr)
+	} else if settled, drainErr := drain.DrainPlayer(context.Context(), context.PlayerID); drainErr != nil {
+		slog.Warn("enter_game: paid orders not settled", "player_id", context.PlayerID, "err", drainErr)
+	} else if len(settled) > 0 {
+		slog.Info("enter_game: settled paid orders on login", "player_id", context.PlayerID, "count", len(settled))
+	}
 	// From here on the player receives world-channel pushes.
 	controller.Presence().Add(context.PlayerID)
 	// The game announces the login on the world channel through the chat

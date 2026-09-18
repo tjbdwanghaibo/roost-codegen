@@ -50,6 +50,18 @@ type PlayerDao struct {
 	// reserve and grant succeed, the commit is lost, and the retry would
 	// grant a second stack (see game/controllers/player/claim_mail.go).
 	MailClaims map[string]int64 `bson:"mail_claims" dao:"persist,map=fast"`
+	// PurchaseClaims is the same ledger for paid orders: order id -> the
+	// moment after which that grant can no longer be claimed (payment time
+	// plus game/purchase.ClaimRetentionSeconds). The platform service runs in
+	// another process and records a grant there; this is what makes the game
+	// side of that handover exactly-once, because the id lands in the same
+	// WAL record as the items.
+	//
+	// Adding a field needs no migration step: BSON decode gives an absent map
+	// its zero value, so a document written by the previous build loads as a
+	// player who has claimed nothing. What needs a step is a change of SHAPE
+	// (see db/migrations/player.go), which is why schema= is still 2.
+	PurchaseClaims map[string]int64 `bson:"purchase_claims" dao:"persist,map=fast"`
 }
 
 // Equipment is a nested struct: the generator gives it its own dirty

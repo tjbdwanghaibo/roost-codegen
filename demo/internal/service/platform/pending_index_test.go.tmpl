@@ -1,0 +1,216 @@
+package Platform
+
+import (
+	"context"
+	"errors"
+	"sort"
+	"testing"
+
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+	"github.com/tjbdwanghaibo/roost-kit/service/platform"
+)
+
+// What the index promises the retry loop, tested against a map rather than a
+// Redis: it pages within the limit it is given, it hands back the oldest due
+// orders first, it leaves entries whose backoff has not elapsed alone, and it
+// retires entries whose order the service says is finished — including the
+// two terminal states a deliverer never sees (exhausted, settled).
+
+type fakeZSet struct {
+	entries map[string]float64
+	err     error
+}
+
+func newFakeZSet() *fakeZSet { return &fakeZSet{entries: map[string]float64{}} }
+
+func (z *fakeZSet) ZAdd(_ context.Context, _ string, members ...fredis.Z) (int64, error) {
+	if z.err != nil {
+		return 0, z.err
+	}
+	for _, member := range members {
+		z.entries[member.Member] = member.Score
+	}
+	return int64(len(members)), nil
+}
+
+func (z *fakeZSet) ZRem(_ context.Context, _ string, members ...any) (int64, error) {
+	for _, member := range members {
+		delete(z.entries, member.(string))
+	}
+	return int64(len(members)), nil
+}
+
+func (z *fakeZSet) ZRangeWithScores(_ context.Context, _ string, start, stop int64) ([]fredis.Z, error) {
+	if z.err != nil {
+		return nil, z.err
+	}
+	all := make([]fredis.Z, 0, len(z.entries))
+	for member, score := range z.entries {
+		all = append(all, fredis.Z{Member: member, Score: score})
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].Score != all[j].Score {
+			return all[i].Score < all[j].Score
+		}
+		return all[i].Member < all[j].Member
+	})
+	if start < 0 || start >= int64(len(all)) {
+		return nil, nil
+	}
+	if stop >= int64(len(all)) {
+		stop = int64(len(all)) - 1
+	}
+	return all[start : stop+1], nil
+}
+
+// fakeOrders is the platform service as far as the index is concerned.
+type fakeOrders struct {
+	orders map[string]platform.Order
+	err    error
+}
+
+func (f *fakeOrders) AuthSession(context.Context, platform.Credential) (platform.Session, error) {
+	return platform.Session{}, nil
+}
+
+func (f *fakeOrders) HandleCallback(context.Context, []byte, string) (platform.Receipt, error) {
+	return platform.Receipt{}, nil
+}
+
+func (f *fakeOrders) Order(_ context.Context, orderID string) (platform.Order, bool, error) {
+	if f.err != nil {
+		return platform.Order{}, false, f.err
+	}
+	order, found := f.orders[orderID]
+	return order, found, nil
+}
+
+func newTestIndex(t *testing.T, now int64, orders map[string]platform.Order) (*pendingIndex, *fakeZSet, *fakeOrders) {
+	t.Helper()
+	store, service := newFakeZSet(), &fakeOrders{orders: orders}
+	return &pendingIndex{
+		client: store, key: "test:platform:pending",
+		orders: service, now: func() int64 { return now },
+	}, store, service
+}
+
+func pending(state platform.DeliveryState) platform.Order {
+	return platform.Order{OrderID: "o", State: state}
+}
+
+func TestTheIndexPagesAndAnswersOldestFirst(t *testing.T) {
+	orders := map[string]platform.Order{}
+	index, store, _ := newTestIndex(t, 1000, orders)
+	for _, id := range []string{"c", "a", "b"} {
+		orders[id] = platform.Order{OrderID: id, State: platform.DeliveryReserved}
+	}
+	// Scores ascending a < b < c, inserted out of order.
+	store.entries["c"], store.entries["a"], store.entries["b"] = 300, 100, 200
+	due, err := index.PendingOrders(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(due) != 2 || due[0] != "a" || due[1] != "b" {
+		t.Fatalf("due = %v, want the two oldest in order", due)
+	}
+	if _, err := index.PendingOrders(context.Background(), 0); err != nil {
+		t.Errorf("a zero limit should be an empty answer, not an error: %v", err)
+	}
+}
+
+// An order that keeps failing moves its own score forward, so it cannot
+// starve the orders queued behind it.
+func TestAFailingOrderDoesNotStarveTheOnesBehindIt(t *testing.T) {
+	orders := map[string]platform.Order{
+		"slow": {OrderID: "slow", State: platform.DeliveryReserved},
+		"new":  {OrderID: "new", State: platform.DeliveryReserved},
+	}
+	index, store, _ := newTestIndex(t, 1000, orders)
+	store.entries["slow"] = 100
+	store.entries["new"] = 200
+	if due, _ := index.PendingOrders(context.Background(), 1); len(due) != 1 || due[0] != "slow" {
+		t.Fatalf("first read = %v, want the older one", due)
+	}
+	// The attempt failed: the service pushed its next attempt out, and the
+	// deliverer re-tracks it at that score.
+	if err := index.track(context.Background(), "slow", 900); err != nil {
+		t.Fatalf("track: %v", err)
+	}
+	due, _ := index.PendingOrders(context.Background(), 1)
+	if len(due) != 1 || due[0] != "new" {
+		t.Fatalf("second read = %v, want the order that was queued behind it", due)
+	}
+}
+
+func TestAnOrderInBackoffIsNotOffered(t *testing.T) {
+	orders := map[string]platform.Order{"later": {OrderID: "later", State: platform.DeliveryReserved}}
+	index, store, _ := newTestIndex(t, 1000, orders)
+	store.entries["later"] = 2000
+	due, err := index.PendingOrders(context.Background(), 8)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(due) != 0 {
+		t.Fatalf("due = %v, want nothing: the backoff has not elapsed", due)
+	}
+	if len(store.entries) != 1 {
+		t.Fatal("an order that is merely waiting was retired")
+	}
+}
+
+// Retirement asks the service, so the states no deliverer ever sees are
+// retired too — and a delivered order stops being read.
+func TestTerminalAndVanishedOrdersRetire(t *testing.T) {
+	for name, order := range map[string]platform.Order{
+		"delivered": pending(platform.DeliveryDelivered),
+		"exhausted": pending(platform.DeliveryExhausted),
+		"settled":   pending(platform.DeliverySettled),
+	} {
+		index, store, _ := newTestIndex(t, 1000, map[string]platform.Order{"o": order})
+		store.entries["o"] = 100
+		due, err := index.PendingOrders(context.Background(), 8)
+		if err != nil {
+			t.Fatalf("%s: read: %v", name, err)
+		}
+		if len(due) != 0 {
+			t.Errorf("%s: offered a terminal order: %v", name, due)
+		}
+		if len(store.entries) != 0 {
+			t.Errorf("%s: a terminal order stayed in the index", name)
+		}
+	}
+	// An id with no record behind it can never be delivered.
+	index, store, _ := newTestIndex(t, 1000, map[string]platform.Order{})
+	store.entries["ghost"] = 100
+	if due, err := index.PendingOrders(context.Background(), 8); err != nil || len(due) != 0 {
+		t.Fatalf("due = %v, err = %v", due, err)
+	}
+	if len(store.entries) != 0 {
+		t.Error("an order id with no record stayed in the index forever")
+	}
+}
+
+// An order whose state could not be read stays: an attempt on an already
+// delivered order is a no-op, while retiring one that is not delivered is a
+// paid order nobody looks at again.
+func TestAnUnreadableOrderIsKept(t *testing.T) {
+	index, store, service := newTestIndex(t, 1000, map[string]platform.Order{})
+	store.entries["o"] = 100
+	service.err = errors.New("redis down")
+	if _, err := index.PendingOrders(context.Background(), 8); err == nil {
+		t.Fatal("a failed order read was reported as an empty batch")
+	}
+	if len(store.entries) != 1 {
+		t.Error("an order whose state is unknown was retired")
+	}
+}
+
+func TestAnUnboundIndexSaysSoInsteadOfReturningNothing(t *testing.T) {
+	index := &pendingIndex{}
+	if _, err := index.PendingOrders(context.Background(), 8); err == nil {
+		t.Fatal("an index with no Redis answered as though nothing were pending")
+	}
+	if err := index.track(context.Background(), "o", 1); err == nil {
+		t.Fatal("tracking into an unbound index succeeded")
+	}
+}

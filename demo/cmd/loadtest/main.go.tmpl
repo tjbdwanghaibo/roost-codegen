@@ -431,6 +431,62 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			rb.Blackboard.Set("equipped_slot", int64(resp.Slot))
 			return nil
 		}))
+	// purchase: a paid order end to end, across two processes. The endpoint
+	// signs a callback (the demo plays the payment provider), the platform
+	// service records and delivers the order, the grant lands in Redis and
+	// the game drains it into the bag under the Player's lock.
+	//
+	// What is asserted is the part that is easy to get wrong: the bag count
+	// has to MOVE by the product's count. A purchase that answers success
+	// without the goods arriving — because the drain silently failed, or
+	// because the grant was deleted before the transaction committed — would
+	// otherwise look exactly like a working one.
+	action.MustRegisterCall[pb.PurchaseRequest, pb.PurchaseResponse](actions, protocols, "purchase", msgid.MsgPurchase,
+		action.OnResp(func(rb *robot.Context, resp *pb.PurchaseResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.OrderID == "" {
+				return fmt.Errorf("the purchase produced no order id")
+			}
+			if !resp.Delivered {
+				return fmt.Errorf("order %s was recorded but not delivered", resp.OrderID)
+			}
+			if resp.BagCount < resp.Count {
+				return fmt.Errorf("order %s delivered %d of item %d but the bag holds %d",
+					resp.OrderID, resp.Count, resp.ItemID, resp.BagCount)
+			}
+			rb.Blackboard.Set("purchase_bag_count", int64(resp.BagCount))
+			rb.Blackboard.Set("purchase_order_id", resp.OrderID)
+			return nil
+		}))
+	// purchase_again: buying the same product a second time is a SECOND
+	// ORDER — the order id is derived from the frame sequence, so this is not
+	// a replay and it must be paid. The assertion is the one that would catch
+	// a ledger keyed on something coarser than the order (a product, a
+	// player): the bag has to move by the product's count again.
+	//
+	// The replay direction — the same order id granted twice — cannot be
+	// reached from a client, because a client cannot resend a frame sequence.
+	// It is asserted against the real handler in game/handler/
+	// grant_purchase_test.go instead, which is where that window lives.
+	action.MustRegisterCall[pb.PurchaseRequest, pb.PurchaseResponse](actions, protocols, "purchase_again", msgid.MsgPurchase,
+		action.OnResp(func(rb *robot.Context, resp *pb.PurchaseResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			rawCount, _ := rb.Blackboard.Get("purchase_bag_count")
+			first, _ := rawCount.(int64)
+			rawOrder, _ := rb.Blackboard.Get("purchase_order_id")
+			if previous, _ := rawOrder.(string); previous == resp.OrderID {
+				return fmt.Errorf("two purchases produced the same order id %q", resp.OrderID)
+			}
+			if int64(resp.BagCount) != first+int64(resp.Count) {
+				return fmt.Errorf("a second order for %d of item %d moved the bag from %d to %d",
+					resp.Count, resp.ItemID, first, resp.BagCount)
+			}
+			return nil
+		}))
 	// rank_top: the leaderboard. Every robot cleared a dungeon, so every
 	// robot must be ON the board — and its own value must be exactly 1 no
 	// matter how many times it replayed the finish, which is what the
@@ -644,6 +700,8 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalMoveRequest(message)
 	case *pb.EquipRequest:
 		return pb.MarshalEquipRequest(message)
+	case *pb.PurchaseRequest:
+		return pb.MarshalPurchaseRequest(message)
 	default:
 		return nil, fmt.Errorf("pb codec: no marshal for %T", value)
 	}
@@ -761,6 +819,12 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 		*message = *decoded
 	case *pb.EquipResponse:
 		decoded, err := pb.UnmarshalEquipResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.PurchaseResponse:
+		decoded, err := pb.UnmarshalPurchaseResponse(data)
 		if err != nil {
 			return err
 		}

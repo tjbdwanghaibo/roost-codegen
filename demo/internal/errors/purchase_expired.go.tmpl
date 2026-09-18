@@ -1,0 +1,9 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/errcode"
+
+// ErrPurchaseExpired: the claim window on a paid order has closed, so the
+// ledger no longer remembers it and granting again would be a second grant.
+// A refusal with a name, because a paid order that will not be delivered is
+// something an operator has to be able to find.
+var ErrPurchaseExpired = errcode.Define(100015, "purchase_expired", "purchase claim window closed")
