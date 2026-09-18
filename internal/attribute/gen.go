@@ -166,17 +166,38 @@ func generate(profile ProfileDef) ([]byte, error) {
 	fmt.Fprintf(&b, "\treturn meta, ok\n")
 	fmt.Fprintf(&b, "}\n\n")
 
-	fmt.Fprintf(&b, "func (s Snapshot) %s() (*%s, bool) {\n", profile.Name, profile.Name)
-	fmt.Fprintf(&b, "\tif s.Profile == nil { return nil, false }\n")
-	fmt.Fprintf(&b, "\tp, ok := s.Profile.(*%s)\n", profile.Name)
+	// Package-level accessors, not methods on Snapshot / Container: those two
+	// types come from the framework runtime (roost-core/attribute, re-exported
+	// by the project's attribute package as aliases), and Go does not allow
+	// methods on a type declared in another package. Methods here were why the
+	// feature could not be assembled from a shipped runtime at all
+	// (RR-20260917-06).
+	fmt.Fprintf(&b, "// %sOf reads this profile out of a snapshot. The snapshot already\n", profile.Name)
+	fmt.Fprintf(&b, "// holds a copy, so the returned profile is the caller's to mutate.\n")
+	fmt.Fprintf(&b, "func %sOf(snapshot Snapshot) (*%s, bool) {\n", profile.Name, profile.Name)
+	fmt.Fprintf(&b, "\tif snapshot.Profile == nil { return nil, false }\n")
+	fmt.Fprintf(&b, "\tp, ok := snapshot.Profile.(*%s)\n", profile.Name)
 	fmt.Fprintf(&b, "\tif !ok || p == nil { return nil, false }\n")
-	fmt.Fprintf(&b, "\tcp := *p\n")
-	fmt.Fprintf(&b, "\treturn &cp, true\n")
+	fmt.Fprintf(&b, "\treturn p, true\n")
 	fmt.Fprintf(&b, "}\n\n")
 
-	fmt.Fprintf(&b, "func (c *Container) %s(selector Selector) (*%s, bool) {\n", profile.Name, profile.Name)
-	fmt.Fprintf(&b, "\tif c == nil { return nil, false }\n")
-	fmt.Fprintf(&b, "\treturn c.Snapshot(selector).%s()\n", profile.Name)
+	fmt.Fprintf(&b, "// %sIn snapshots one layer of a container and reads this profile out\n", profile.Name)
+	fmt.Fprintf(&b, "// of it. A layer that holds nothing, or holds another profile, answers\n")
+	fmt.Fprintf(&b, "// (nil, false).\n")
+	fmt.Fprintf(&b, "func %sIn(container *Container, selector Selector) (*%s, bool) {\n", profile.Name, profile.Name)
+	fmt.Fprintf(&b, "\tif container == nil { return nil, false }\n")
+	fmt.Fprintf(&b, "\treturn %sOf(container.Snapshot(selector))\n", profile.Name)
+	fmt.Fprintf(&b, "}\n\n")
+
+	fmt.Fprintf(&b, "// %sLive reads the profile a layer holds without copying it: for the\n", profile.Name)
+	fmt.Fprintf(&b, "// owner of the subject, which already holds whatever lock the game uses.\n")
+	fmt.Fprintf(&b, "func %sLive(container *Container, selector Selector) (*%s, bool) {\n", profile.Name, profile.Name)
+	fmt.Fprintf(&b, "\tif container == nil { return nil, false }\n")
+	fmt.Fprintf(&b, "\tprofile, found := container.Live(selector)\n")
+	fmt.Fprintf(&b, "\tif !found { return nil, false }\n")
+	fmt.Fprintf(&b, "\tp, ok := profile.(*%s)\n", profile.Name)
+	fmt.Fprintf(&b, "\tif !ok || p == nil { return nil, false }\n")
+	fmt.Fprintf(&b, "\treturn p, true\n")
 	fmt.Fprintf(&b, "}\n")
 
 	return formatGo(b.Bytes())

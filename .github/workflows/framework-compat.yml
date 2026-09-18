@@ -33,13 +33,17 @@ jobs:
         scenario: [minimal, full, demo]
         consumer-go: ["1.27.x"]
         exclude:
-          # The demo template needs core >= v1.15.6 / kit >= v1.14.7 (entity
-          # categories, account.RegistryBound, match.NewMod(reporter), and the
-          # gift saga's step refusal → compensation, U-0225); the minimum set
-          # pins older tags on purpose. released and source-head both carry it
-          # (verified 2026-09-17, no go.work).
+          # The demo template needs core >= v1.15.7 / kit >= v1.14.8: entity
+          # categories, account.RegistryBound, match.NewMod(reporter), the
+          # gift saga's step refusal → compensation (U-0225) and now the
+          # attribute runtime (roost-core/attribute, U-0230). minimum pins
+          # older tags on purpose; released catches up at the next tag, so
+          # both are excluded until core v1.15.7 is out — source-head still
+          # runs the cell. Remove the released line at that release.
           - scenario: demo
             dependency-set: minimum
+          - scenario: demo
+            dependency-set: released
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

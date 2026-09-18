@@ -103,7 +103,7 @@ func applyDemoTemplate(m *Manifest, gameService string) error {
 	if err := applyGameTemplate(m, gameService); err != nil {
 		return err
 	}
-	for _, feature := range []string{"protocol", "entity", "nest", "dao", "config", "errcode"} {
+	for _, feature := range []string{"protocol", "entity", "nest", "dao", "config", "errcode", "attribute"} {
 		if !contains(m.Features, feature) {
 			m.Features = append(m.Features, feature)
 		}
@@ -208,6 +208,8 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/errors/battle_not_seated.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/battle_busy.go", why: "client-facing message instead of the TODO placeholder"},
 		{write: "internal/errors/dungeon_run.go", why: "client-facing message instead of the TODO placeholder"},
+		{write: "game/gameplay/attribute/combat.go", why: "the attribute profile: three attributes, one derived by formula, plus the dirty mask the generator writes through"},
+		{write: "game/gameplay/attribute/combat_test.go", why: "the derived attribute follows its inputs and a container snapshot is a copy"},
 		{write: "game/dungeon/dungeon.go", why: "what a clear is worth and why paying for one exactly once needs a claim ledger, not the request's own flag"},
 		{write: "game/dungeon/dungeon_test.go", why: "the claim retention rule as a table test, shipped with the project"},
 		{write: "game/battle/battle.go", why: "the lockstep contract: tick rate, frame budget, input encoding, seats and the deterministic simulation both clients run"},

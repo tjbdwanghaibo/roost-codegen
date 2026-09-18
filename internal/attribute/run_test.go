@@ -14,6 +14,7 @@ func TestRunGeneratesProfile(t *testing.T) {
 //roost:attribute index=1 max=4
 type PlayerProfile struct {
 	HP int64
+	dirtyMask uint64
 }
 `
 	if err := os.WriteFile(filepath.Join(dir, "profile.go"), []byte(source), 0o644); err != nil {

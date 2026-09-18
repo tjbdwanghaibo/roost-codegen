@@ -477,14 +477,17 @@ go run .../cmd/eventgen@latest \
 
 ```go
 //roost:attribute index=1 max=64
-type PlayerProfile struct {
+type Combat struct {
     HP     int64 `attr:"hp"`
     Attack int64 `attr:"attack"`
     Power  int64 `attr:"power"`
+
+    // 必须自带：每个生成的 setter 往这里 OR 自己的位。漏了会在生成期报错。
+    dirtyMask uint64
 }
 
 // 下划线方法表示派生属性公式；参数名对应输入字段。
-func (p *PlayerProfile) _Power(Attack int64, HP int64) int64 {
+func (p *Combat) _Power(Attack int64, HP int64) int64 {
     return Attack*2 + HP/10
 }
 ```
@@ -493,7 +496,18 @@ func (p *PlayerProfile) _Power(Attack int64, HP int64) int64 {
 go run .../cmd/attribute@latest -dir ./game/attribute
 ```
 
-生成属性 ID/mask、metadata、类型化 setter、dirty mask、派生属性 Update、clone/snapshot 和容器访问器。所在包需提供框架约定的 `AttrID`、`AttrValue`、`AttributeMeta`、`AttributeProfile`、`Snapshot`、`Container`、`Selector` 类型。派生公式出现环、未知字段或重复输出时生成失败。
+生成属性 ID/mask、metadata、类型化 setter、dirty mask、派生属性 Update、clone 以及包级访问器
+`<Name>Of(Snapshot)` / `<Name>In(*Container, Selector)` / `<Name>Live(*Container, Selector)`。
+
+**框架半在 `roost-core/attribute`**：`AttrID`、`AttrValue`、`Meta`、`Profile` 接口、`Selector`、`Snapshot`、`Container`。
+启用 `attribute` feature 的工程会拿到 codegen 受控的 `game/gameplay/attribute/runtime.go`，把这些以别名再导出成
+生成物使用的名字（`AttributeMeta`、`AttributeProfile`、`Snapshot`、`Container`、`Selector`），所以声明一个 profile 之后直接就能编译——
+以前这一层没有任何实现，整条 feature 生成出来就编译不过（RR-20260917-06）。访问器是**包级函数**而不是 `Snapshot` / `Container` 的方法：
+Go 不允许给外包类型定义方法，做成函数别名才成立。
+
+约定：profile 结构体自带 `dirtyMask uint64`（漏了生成期报错）；派生属性只能由公式写，`SetDirectAttr` 拒绝它们；
+派生公式出现环、未知字段或重复输出时生成失败。`scripts/attribute-runtime.sh` 把脚手架的 runtime、真实 profile 与生成物放进临时模块，
+对着钉住的 core 编译并跑一遍（类型化 setter / dirty / 公式 / 元数据 / 导入导出 / 快照隔离）。
 
 ## 12. webroute
 

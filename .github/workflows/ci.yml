@@ -48,6 +48,13 @@ jobs:
         name: dao goldens through the real codec
         run: sh scripts/dao-golden-runtime.sh
       - if: runner.os == 'Linux'
+        # The attribute feature is two halves (roost-core/attribute and this
+        # generator) and nothing checked that they fit: the generated code
+        # named types nobody shipped. Skips itself until the pinned core
+        # carries the package.
+        name: attribute profile through the real attribute runtime
+        run: sh scripts/attribute-runtime.sh
+      - if: runner.os == 'Linux'
         # Same exposure again for the entity generator's sync wiring: it named
         # a field and a constant Core does not have, and every text test
         # stayed green while no sync=true project could build.

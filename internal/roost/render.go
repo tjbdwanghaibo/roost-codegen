@@ -163,6 +163,17 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 		if err := addGo(path, body, false); err != nil {
 			return nil, err
 		}
+		if feature == "attribute" {
+			// The attribute generator's output leans on a framework contract
+			// (AttrID, AttributeProfile, Snapshot, Container, …). Shipping
+			// only an empty package meant `roost add attribute` produced code
+			// that referenced types nobody defined (RR-20260918 / RR-20260917-06);
+			// this file re-exports roost-core/attribute under those names and
+			// is codegen-owned, so an upgrade keeps it in step.
+			if err := addGo(dir+"/runtime.go", renderAttributeRuntime(packageName), true); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if hasFeature(m, "dao") {
 		if err := addGo("db/doc.go", "package db\n", false); err != nil {

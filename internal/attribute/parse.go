@@ -143,6 +143,21 @@ func buildProfile(name, pkg string, st *ast.StructType, params map[string]string
 		},
 		fieldMap: make(map[string]int),
 	}
+	// The one field a declaration must carry itself: every generated setter
+	// ORs its attribute's bit into it. Checked after the per-field rules, so
+	// a declaration with a real field problem still hears about that first
+	// (RR-20260917-06).
+	hasDirtyMask := false
+	for _, field := range st.Fields.List {
+		if exprString(field.Type) != "uint64" {
+			continue
+		}
+		for _, fieldName := range field.Names {
+			if fieldName.Name == "dirtyMask" {
+				hasDirtyMask = true
+			}
+		}
+	}
 	for _, field := range st.Fields.List {
 		if len(field.Names) == 0 {
 			continue
@@ -178,6 +193,9 @@ func buildProfile(name, pkg string, st *ast.StructType, params map[string]string
 			raw.fieldMap[fieldName.Name] = index
 			raw.def.Fields = append(raw.def.Fields, f)
 		}
+	}
+	if !hasDirtyMask {
+		return rawProfile{}, fmt.Errorf("%s must declare an unexported `dirtyMask uint64` field: the generated setters write through it", name)
 	}
 	return raw, nil
 }
