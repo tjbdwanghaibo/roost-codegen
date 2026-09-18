@@ -214,6 +214,22 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 					ent.SyncTopic = m.params["syncTopic"]
 					ent.SyncPacker = m.params["syncPacker"]
 					ent.SubjectPacker = m.params["subjectPacker"]
+					// Core takes exactly one packer factory
+					// (EntitySyncBuilderParam.PackerFactory). `subjectPacker`
+					// is the current spelling and `syncPacker` still works
+					// for projects written before the two collapsed into one;
+					// setting both would mean two values for one field, so it
+					// is refused here rather than resolved by a coin flip
+					// (RR-20260918-01).
+					if ent.SyncPacker != "" && ent.SubjectPacker != "" {
+						return nil, fmt.Errorf("%s:%d: //roost:entity sets both syncPacker=%s and subjectPacker=%s; they name the same factory (entity.EntitySyncBuilderParam.PackerFactory) — keep subjectPacker", filePath, m.line, ent.SyncPacker, ent.SubjectPacker)
+					}
+					if ent.SyncPacker != "" && !ent.Sync {
+						return nil, fmt.Errorf("%s:%d: //roost:entity has syncPacker=%s but sync is not true", filePath, m.line, ent.SyncPacker)
+					}
+					if ent.SubjectPacker != "" && !ent.Sync {
+						return nil, fmt.Errorf("%s:%d: //roost:entity has subjectPacker=%s but sync is not true", filePath, m.line, ent.SubjectPacker)
+					}
 
 					ent.Components, ent.Daos = extractFields(structType, content, fset)
 					ent.RemoteBase = hasRemoteEntityBase(structType)

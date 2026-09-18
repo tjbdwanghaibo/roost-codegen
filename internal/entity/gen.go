@@ -55,6 +55,7 @@ func generateInPackage(ent EntityDef, siblings []string, pkg string, outFile str
 		"ctor":               constructorName,
 		"quote":              quoteString,
 		"syncTopic":          syncTopicExpr,
+		"syncPackerFactory":  syncPackerFactoryExpr,
 		"daoCollectionConst": daoCollectionConstExpr,
 		"hasMethod":          hasMethod,
 		"join":               strings.Join,
@@ -207,6 +208,20 @@ func quoteString(s string) string {
 	return fmt.Sprintf("%q", s)
 }
 
+// syncPackerFactoryExpr resolves the one packer factory Core's
+// EntitySyncBuilderParam takes. Two marker spellings reach it: `subjectPacker`
+// (current) and `syncPacker` (kept working for projects written before the
+// two collapsed into one). They name the same thing — a
+// `func(entity.IThreadSafeEntity) entity.SubjectSyncPacker` — so a marker
+// that sets both is refused at parse time rather than silently picking one
+// (RR-20260918-01).
+func syncPackerFactoryExpr(e EntityDef) string {
+	if e.SubjectPacker != "" {
+		return e.SubjectPacker
+	}
+	return e.SyncPacker
+}
+
 func syncTopicExpr(s string) string {
 	if s == "" {
 		return `""`
@@ -357,14 +372,10 @@ func register{{.Entity.Name}}Entity() {
 {{- end}}
 {{- if .Entity.Sync}}
 			Sync: entity.EntitySyncBuilderParam{
-				Enabled:     true,
-				Topic:       {{syncTopic .Entity.SyncTopic}},
-				FlushPolicy: entity.SyncFlushOnEntityRelease,
-{{- if .Entity.SyncPacker}}
-				PackerFactory: {{.Entity.SyncPacker}},
-{{- end}}
-{{- if .Entity.SubjectPacker}}
-				SubjectPackerFactory: {{.Entity.SubjectPacker}},
+				Enabled: true,
+				Topic:   {{syncTopic .Entity.SyncTopic}},
+{{- if syncPackerFactory .Entity}}
+				PackerFactory: {{syncPackerFactory .Entity}},
 {{- end}}
 			},
 {{- end}}

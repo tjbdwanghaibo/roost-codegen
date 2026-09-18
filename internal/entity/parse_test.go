@@ -33,7 +33,11 @@ func TestParseDir(t *testing.T) {
 	if ent.EntityKind != "EntityKindPlayer" {
 		t.Fatalf("expected entityKind 'EntityKindPlayer', got %q", ent.EntityKind)
 	}
-	if !ent.Sync || ent.SyncTopic != "SyncTopicPlayer" || ent.SyncPacker != "clientsync.PlayerPacker" || ent.SubjectPacker != "clientsync.PlayerSubjectPacker" {
+	// One packer factory, one marker: Core's EntitySyncBuilderParam has a
+	// single PackerFactory, so subjectPacker is the spelling and syncPacker
+	// is its legacy alias. Setting both is refused at parse time
+	// (RR-20260918-01, sync_packer_markers_promises_test.go).
+	if !ent.Sync || ent.SyncTopic != "SyncTopicPlayer" || ent.SubjectPacker != "clientsync.PlayerSubjectPacker" || ent.SyncPacker != "" {
 		t.Fatalf("sync config = enabled:%v topic:%q packer:%q subject:%q", ent.Sync, ent.SyncTopic, ent.SyncPacker, ent.SubjectPacker)
 	}
 
@@ -99,8 +103,9 @@ func TestGenerate(t *testing.T) {
 		"Category: entity.MustEntityCategoryOfKind(EntityKindPlayer)",
 		"param.NormalizeID(EntityKindPlayer)",
 		`"SyncTopicPlayer"`,
-		"clientsync.PlayerPacker",
-		"SubjectPackerFactory: clientsync.PlayerSubjectPacker",
+		// Core's EntitySyncBuilderParam has one packer field; the fixture
+		// names it with the current marker (RR-20260918-01).
+		"PackerFactory: clientsync.PlayerSubjectPacker",
 		"e.EntityBase = entity.NewEntityBaseWithMutex(param.Id, param.Category, false, param.Mutex, param.Kind)",
 		"func (e *Player) Base() *entity.EntityBase",
 		"func (e *Player) BagComp() *BagComponent",

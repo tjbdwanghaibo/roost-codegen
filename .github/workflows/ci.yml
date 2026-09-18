@@ -48,6 +48,12 @@ jobs:
         name: dao goldens through the real codec
         run: sh scripts/dao-golden-runtime.sh
       - if: runner.os == 'Linux'
+        # Same exposure again for the entity generator's sync wiring: it named
+        # a field and a constant Core does not have, and every text test
+        # stayed green while no sync=true project could build.
+        name: sync entity through the real entity runtime
+        run: sh scripts/entity-sync-runtime.sh
+      - if: runner.os == 'Linux'
         # Same exposure, same gate for cfggen: its json tags, key types, index
         # and ref metadata are only ever compared as text here. This loads
         # real data through roost-core/configdata.

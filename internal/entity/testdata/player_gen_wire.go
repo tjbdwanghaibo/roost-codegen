@@ -38,11 +38,9 @@ func registerPlayerEntity() {
 			RemotePolicy: entity.RemotePolicyNone,
 			Lifetime:     entity.EntityLifetimePersistedHotCold,
 			Sync: entity.EntitySyncBuilderParam{
-				Enabled:              true,
-				Topic:                "SyncTopicPlayer",
-				FlushPolicy:          entity.SyncFlushOnEntityRelease,
-				PackerFactory:        clientsync.PlayerPacker,
-				SubjectPackerFactory: clientsync.PlayerSubjectPacker,
+				Enabled:       true,
+				Topic:         "SyncTopicPlayer",
+				PackerFactory: clientsync.PlayerSubjectPacker,
 			},
 		})
 	})
