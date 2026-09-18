@@ -34,6 +34,7 @@ import (
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/bus"
+	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/lockstep"
 	"github.com/tjbdwanghaibo/roost-core/metrics"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
@@ -1027,27 +1028,39 @@ func expectScene(ctx context.Context, rb *robot.Context, param any) error {
 	if !ok || watcher == nil {
 		return errors.New("scene_expect: no watcher on the blackboard; scene_watch must run first")
 	}
+	rawPlayer, _ := rb.Blackboard.Get("player_id")
+	playerID, _ := rawPlayer.(int64)
 	deadline := time.After(timeout)
 	for {
 		watcher.mu.Lock()
 		failure, subjects := watcher.failure, len(watcher.subjects)
 		missing := ""
 		if failure == nil && subjects > 0 {
-			for _, field := range wanted {
-				field = strings.TrimSpace(field)
-				if field == "" {
-					continue
+			// The fields are about THIS client, so they have to arrive on
+			// this client's own subject. Accepting them from any subject
+			// made the check pass on a peer's data — with several robots
+			// running, somebody else's equipment satisfied a client that
+			// had not equipped anything yet, and the scenario went green
+			// while the thing it tests had not happened.
+			own := bson.M(nil)
+			for subjectID, document := range watcher.subjects {
+				if entity.GetUniqueIDFromEntityID(subjectID) == playerID {
+					own = document
+					break
 				}
-				found := false
-				for _, document := range watcher.subjects {
-					if _, ok := document[field]; ok {
-						found = true
+			}
+			if own == nil {
+				missing = "this client's own subject"
+			} else {
+				for _, field := range wanted {
+					field = strings.TrimSpace(field)
+					if field == "" {
+						continue
+					}
+					if _, ok := own[field]; !ok {
+						missing = field
 						break
 					}
-				}
-				if !found {
-					missing = field
-					break
 				}
 			}
 		}

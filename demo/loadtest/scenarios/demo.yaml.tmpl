@@ -142,20 +142,6 @@ scenarios:
         # sync subject produced a delta, the scene's room framed it, and the
         # client decoded it. If this fails, replication is not carrying real
         # state changes — the rest of the run would not notice.
-        - action: scene_expect
-          param:
-            # Two subjects at least: this client's own state and one of the
-            # monsters the scene spawned near the spawn point. Monsters go
-            # through the same AOI and the same wire as players — if the
-            # pipeline had a special case for "not a player", this is where it
-            # would show.
-            subjects: 2
-            # attr_final is the composed attribute view: it is never stored
-            # (the DAO field is nopersist) and only exists on the wire, so
-            # asking for it here is what proves the attribute container is
-            # actually wired into replication rather than just into Mongo.
-            fields: level,exp,attr_base,attr_final,pos_x,equipment
-            timeout: 10s
         # Wear the sword. The item was granted by add_item above; equipping
         # takes it out of the bag and puts it on in ONE transaction, and the
         # attribute layer follows the worn set — so this is also what makes
@@ -178,6 +164,25 @@ scenarios:
           param:
             x: 100000
             y: 100000
+        - action: scene_expect
+          param:
+            # Everything below is asserted on THIS client's own subject, so
+            # every action that produces one of these fields has to have run
+            # already — hence this step sits after the clear, the equip and
+            # the move rather than in the middle of them.
+            #
+            # Two subjects at least: this client's own state and one of the
+            # monsters the scene spawned near the spawn point. Monsters go
+            # through the same AOI and the same wire as players — if the
+            # pipeline had a special case for "not a player", this is where it
+            # would show.
+            subjects: 2
+            # attr_final is the composed attribute view: it is never stored
+            # (the DAO field is nopersist) and only exists on the wire, so
+            # asking for it here is what proves the attribute container is
+            # actually wired into replication rather than just into Mongo.
+            fields: level,exp,attr_base,attr_final,pos_x,equipment
+            timeout: 10s
         # The leaderboard. The clear was counted through the rank service with
         # the run id as the request id, so the replay above did not count a
         # second time — the board is where that shows.
