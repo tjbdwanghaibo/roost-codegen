@@ -8,6 +8,7 @@ import (
 	"time"
 
 	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
 	world "{{MODULE}}/game/entities/world"
 	"{{MODULE}}/game/handler"
 	syncsender "{{MODULE}}/game/handler/syncsender"
@@ -17,6 +18,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/room"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
 	corestate "github.com/tjbdwanghaibo/roost-core/statesync"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -112,6 +114,27 @@ func decodeSceneFrames(t *testing.T, playerID int64, pushes []*pb.EntitySyncPush
 	return out
 }
 
+// newSceneArea builds the Scene Entity the bridge replicates. The interest
+// system lives there, so a bridge without one has nobody to ask.
+func newSceneArea(t *testing.T) *sceneentity.Scene {
+	t.Helper()
+	sceneentity.RegisterEntity()
+	id, err := entity.BuildEntityID(1, sceneentity.EntityKindScene)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: sceneentity.EntityKindScene, Id: id})
+	if err != nil {
+		t.Fatalf("build scene: %v", err)
+	}
+	area, ok := built.(*sceneentity.Scene)
+	if !ok {
+		t.Fatalf("the generated factory produced %T", built)
+	}
+	t.Cleanup(func() { area.OnDestroy(entity.DestroyReasonCommon) })
+	return area
+}
+
 func newScenePlayer(t *testing.T, uniqueID int64) *player.Player {
 	t.Helper()
 	player.RegisterEntity()
@@ -194,6 +217,7 @@ func TestSceneReplicatesOnePlayersChangeToAnother(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new scene: %v", err)
 	}
+	scene.SetArea(newSceneArea(t))
 	ctx := context.Background()
 	if err := scene.Start(ctx); err != nil {
 		t.Fatalf("start scene: %v", err)
@@ -210,10 +234,11 @@ func TestSceneReplicatesOnePlayersChangeToAnother(t *testing.T) {
 	)
 	watcher := newScenePlayer(t, watcherID)
 	mover := newScenePlayer(t, moverID)
-	if err := scene.Join(ctx, watcher); err != nil {
+	// Close enough to see each other: the enter radius is 120.
+	if err := scene.Join(ctx, watcher, spatial.Point{X: 500, Y: 500}); err != nil {
 		t.Fatalf("watcher joins: %v", err)
 	}
-	if err := scene.Join(ctx, mover); err != nil {
+	if err := scene.Join(ctx, mover, spatial.Point{X: 520, Y: 500}); err != nil {
 		t.Fatalf("mover joins: %v", err)
 	}
 	if scene.Members() != 2 {
@@ -273,6 +298,7 @@ func TestSceneRetiresASubjectOnLeave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new scene: %v", err)
 	}
+	scene.SetArea(newSceneArea(t))
 	ctx := context.Background()
 	if err := scene.Start(ctx); err != nil {
 		t.Fatalf("start scene: %v", err)
@@ -284,15 +310,15 @@ func TestSceneRetiresASubjectOnLeave(t *testing.T) {
 	})
 	watcher := newScenePlayer(t, 9101)
 	leaver := newScenePlayer(t, 9102)
-	if err := scene.Join(ctx, watcher); err != nil {
+	if err := scene.Join(ctx, watcher, spatial.Point{X: 500, Y: 500}); err != nil {
 		t.Fatal(err)
 	}
-	if err := scene.Join(ctx, leaver); err != nil {
+	if err := scene.Join(ctx, leaver, spatial.Point{X: 510, Y: 500}); err != nil {
 		t.Fatal(err)
 	}
 	recorder.take(9101)
 
-	scene.Leave(ctx, 9102)
+	scene.Leave(ctx, leaver.ID())
 	if scene.Members() != 1 {
 		t.Fatalf("the scene holds %d members after a leave, want 1", scene.Members())
 	}

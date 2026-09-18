@@ -37,7 +37,7 @@ const (
 // through the generated client (see framework_clients_gen.go), made from a
 // plain goroutine: never from inside an Entity lock, which is why the World
 // only learns about a match afterwards, through its own Nest handler.
-func startMatchmaker(ctx context.Context, registry *app.Registry, battles *battleManager) (func(), error) {
+func startMatchmaker(ctx context.Context, registry *app.Registry, battles *battleManager, scene *Scene) (func(), error) {
 	matcher, err := Match(registry)
 	if err != nil {
 		return nil, fmt.Errorf("matchmaker: %w", err)
@@ -74,7 +74,7 @@ func startMatchmaker(ctx context.Context, registry *app.Registry, battles *battl
 			case <-ticker.C:
 			}
 			for _, pool := range pools {
-				if err := formMatches(loopCtx, matcher, pool.Queue, pool.Grouping, recorder, transport, battles, worldID); err != nil && loopCtx.Err() == nil {
+				if err := formMatches(loopCtx, matcher, pool.Queue, pool.Grouping, recorder, transport, battles, scene, worldID); err != nil && loopCtx.Err() == nil {
 					slog.Warn("matchmaker: pass failed", "queue", pool.Queue.Key(), "err", err)
 				}
 			}
@@ -90,7 +90,7 @@ func startMatchmaker(ctx context.Context, registry *app.Registry, battles *battl
 // of candidates. A Commit that loses a race (a ticket was cancelled or taken
 // meanwhile) is not an error of this pass: the next tick reads fresh
 // candidates.
-func formMatches(ctx context.Context, matcher svcmatch.Matchmaker, queue svcmatch.Queue, grouping svcmatch.Grouping, recorder *syncsender.RecordMatchSender, transport *accessplayertcp.Runtime, battles *battleManager, worldID int64) error {
+func formMatches(ctx context.Context, matcher svcmatch.Matchmaker, queue svcmatch.Queue, grouping svcmatch.Grouping, recorder *syncsender.RecordMatchSender, transport *accessplayertcp.Runtime, battles *battleManager, scene *Scene, worldID int64) error {
 	candidates, err := matcher.Candidates(ctx, queue, matchmakerWindow)
 	if err != nil {
 		return fmt.Errorf("candidates: %w", err)
@@ -138,6 +138,14 @@ func formMatches(ctx context.Context, matcher svcmatch.Matchmaker, queue svcmatc
 		// addresses it by match id.
 		if err := battles.Open(match.ID, members); err != nil {
 			slog.Error("matchmaker: battle not opened", "match_id", match.ID, "err", err)
+		}
+		// A formed match is the demo's one social relationship: teammates see
+		// each other's state wherever they are, which is what a team frame or
+		// a minimap needs. It goes through the scene's relation source, so it
+		// is the same machinery as distance — and a teammate who is ALSO
+		// nearby is held by both, released only when the last one lets go.
+		if scene != nil {
+			scene.SetTeam(members)
 		}
 		push := &pb.MatchFoundPush{MatchID: match.ID, Members: members}
 		for _, member := range match.Members {

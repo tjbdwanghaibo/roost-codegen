@@ -84,10 +84,18 @@ func (s *Scene) PathFind() gamescene.PathFind {
 	return nil
 }
 
+func (s *Scene) Interest() gamescene.Interest {
+	if runtime := s.runtime.Load(); runtime != nil {
+		return runtime.Interest()
+	}
+	return nil
+}
+
 // ISceneEntity is the lock-safe business view for Nest handlers that address
 // a Scene.
 type ISceneEntity interface {
 	entity.IThreadSafeEntity
 	Terrain() gamescene.Terrain
 	PathFind() gamescene.PathFind
+	Interest() gamescene.Interest
 }

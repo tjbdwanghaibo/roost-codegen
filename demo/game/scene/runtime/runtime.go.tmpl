@@ -38,6 +38,7 @@ type Context struct {
 const (
 	SystemNameTerrain  = "terrain"
 	SystemNamePathFind = "path_find"
+	SystemNameInterest = "interest"
 )
 
 // Runtime owns the systems and nothing else. It is created by the Scene
@@ -47,6 +48,7 @@ type Runtime struct {
 
 	terrain  *TerrainSystem
 	pathFind *PathFindSystem
+	interest *InterestSystem
 
 	systems []System
 }
@@ -60,7 +62,8 @@ func New(owner scene.Entity, config scene.Config) (*Runtime, error) {
 
 	runtime.terrain = &TerrainSystem{}
 	runtime.pathFind = &PathFindSystem{}
-	runtime.systems = []System{runtime.terrain, runtime.pathFind}
+	runtime.interest = &InterestSystem{}
+	runtime.systems = []System{runtime.terrain, runtime.pathFind, runtime.interest}
 
 	for _, system := range runtime.systems {
 		if err := system.Init(runtime.ctx); err != nil {
@@ -110,4 +113,11 @@ func (r *Runtime) PathFind() scene.PathFind {
 		return nil
 	}
 	return r.pathFind
+}
+
+func (r *Runtime) Interest() scene.Interest {
+	if r == nil {
+		return nil
+	}
+	return r.interest
 }

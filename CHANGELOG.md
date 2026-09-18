@@ -6,6 +6,18 @@
 
 ### Added
 
+- **game-demo：地图第二批——AOI 接管订阅，距离与社会关系是同一种来源**（§9.4.2）。
+  `game/scene/runtime/interest.go` 把 `spatial.InterestManager`（自带锁：它明确不并发安全）与两个关系来源
+  （`self`、`team`）汇总成一份订阅：**第一个来源命中才 Subscribe，最后一个来源撤销才 Unsubscribe**——
+  一对 (观察者, 主体) 可能被多个来源同时持有，少了引用计数，队友走出视野就会把关系来源仍然需要的订阅退掉。
+  "订阅自己"因此不再是桥接里的特判，而是最退化的那种关系（`spatial` 本来就拒绝自观察）。
+  `internal/service/<game>/scene.go` 里"所有人订阅所有人"的两个循环删掉，它退化成**复制桥接**：只负责把兴趣系统
+  交回的变更说给 room 听。匹配成队经 `SetTeam` 喂进 team 关系——好友 / 同盟是同一个类型换一个 feed。
+  **全程用 entity id**（跨 kind 唯一；unique id 只在 kind 内唯一，会让 Player 42 与 Monster 42 相撞），
+  转成传输会话只在 `RoomSessionResolver` 一处发生。滞回 120/150，格边长 150 ≈ 视野半径（比值的理由写在注释里，
+  框架不强制——见 W-2026-09-18-05）。分带暂时只一档，等字段掩码可裁剪（W-2026-09-18-02）。
+  测试：`game/scene/runtime/interest_test.go` 五条——自己经关系订阅、距离进出、**边界抖动不产生任何事件**、
+  关系在距离撤销后仍保住订阅、离场双向释放。
 - **game-demo：地图第一批——Scene 实体、terrain / pathfind 两个 system、位置与移动**（§9.4.1）。
   `game/entities/scene` 是地图实体（无 DAO，`noPersist=true lifetime=runtime_rebuild`，每次启动从配置重建），
   它持有 `game/scene/runtime` 的 system 组合并按接口导出（`Terrain()` / `PathFind()`）；**每个 system 自带锁**，

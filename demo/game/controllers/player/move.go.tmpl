@@ -10,6 +10,7 @@ import (
 	player "{{MODULE}}/game/entities/player"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/errcode"
+	"github.com/tjbdwanghaibo/roost-core/spatial"
 )
 
 // HandleMove moves the player one point.
@@ -43,6 +44,12 @@ func (controller *Controller) HandleMove(context *player_agent.Context, request 
 			return &pb.MoveResponse{Code: code, Reason: reason}, nil
 		}
 		return &pb.MoveResponse{Code: code, Reason: reason, X: position.X, Y: position.Y}, nil
+	}
+	// The map moved; tell the replication side so interest follows. It is
+	// after the transaction on purpose: the DAO is the authority and the
+	// interest index follows it, never the other way round.
+	if scene, err := controller.Scene(); err == nil {
+		scene.Moved(context.Context(), playerEntityID, spatial.Point{X: request.X, Y: request.Y})
 	}
 	return &pb.MoveResponse{X: request.X, Y: request.Y}, nil
 }

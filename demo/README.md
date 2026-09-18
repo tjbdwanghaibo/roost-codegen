@@ -243,12 +243,36 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
   （已登记给 review）。要自己的客户端协议的项目在这里换成自己的消息。
 - **持久化水位**：`kit/dataengine` 的 `DurableLSN` 装进 `RoomManagerConfig.DurableWatermark`。流水线提交的部署会在 WAL 落盘前
   就确认事务，把这种内容外发等于让客户端看到服务端还可能丢掉的状态；房间会压住它直到水位追上。
-- **没有兴趣管理**：所有人订阅所有人，O(n²)，只因为 demo 世界只有几个机器人。AOI 应该插在 `Subscribe` / `Unsubscribe` 前面，
-  scene 的其余部分不用动。
+- **谁订阅谁不在这里决定**：Scene 实体的兴趣系统决定（距离 + 社会关系），交回一串订阅变更，这个文件只负责说给 room 听。
+  加一种关系（好友、同盟）不会碰到这个文件。
 - **没有断连回调**：生成的接入层不通知会话关闭，所以"谁还在线"靠两条——推送失败就把人摘掉，以及有人入场时按
   `ActiveSessions` 扫一遍陈旧成员。chat 的 presence 有同样的问题。
 - 机器人 `scene_watch` / `scene_expect` 是真客户端：解码、合并、断言。**推送消息必须在 loadtest 注册解码器**，
   否则推送到了也解不出来、静默丢弃。
+
+## 兴趣：距离是一种来源，关系是另一种
+
+"谁该收到谁的状态"由 Scene 实体的兴趣系统回答。它把**每一种理由都做成同一种来源**：
+
+```
+spatial.InterestManager ─┐
+self（永远看得见自己）   ─┼─▶ 汇总（按来源计数 + 档位合并）─▶ []SubscriptionChange ─▶ room.Subscribe/Unsubscribe
+team（匹配成队的队友）   ─┘
+```
+
+- **自己不是特例，是一种关系**。`spatial` 明确拒绝自观察（`evaluatePair` 第一行就 `observer.id == subject` 返回），
+  而"我永远看得见自己"也确实不是距离的事——它是最退化的那种社会关系。做成来源之后，桥接里一行特判都没有。
+- **一对 (观察者, 主体) 可能被多个来源同时持有**（队友正好站在旁边）。所以汇总层按来源计数：**第一个**来源命中才 Subscribe，
+  **最后一个**来源撤销才 Unsubscribe。少了这一步，队友走远时距离来源发 Leave，会把关系来源仍然需要的订阅退掉——
+  而这种 bug 只在"两个来源重叠又分开"的时序里出现（`interest_test.go` 里钉住了这条）。
+- **档位合并取最高保真**（band 最小者胜）：关系压过距离，这就是"队友在地图另一头我也看得见他的状态"的代价。
+  分带本身暂时只有一档——档位要能裁字段才有意义，而生成的字段掩码常量是 DAO 包私有的（见 WANTED）。
+- **全程用 entity id**。entity id 把 unique id、kind、category 打包进一个 int64，跨 kind 唯一；unique id 只在 kind 内唯一，
+  拿它做索引会让 Player 42 和 Monster 42 相撞。转成传输会话只在一个地方发生：`RoomSessionResolver`。
+- **滞回**：进圈 120、出圈 150。在边界上来回微动不产生 Enter/Leave 抖动——每一次抖动都会重发一次快照。
+- **格边长选 150 ≈ 视野半径**：一个观察者订阅的格数是 `(⌈2·出圈半径/格边长⌉+1)²`，格子远小于视野不会让 AOI 更准
+  （半径判定本来就是精确的），只会让观察者每动一步的簿记成倍增加。框架不强制这个比值，所以它写在 `interest.go` 的注释里。
+- **没做**：多房间（`spatial.InterestCluster`）、非玩家主体（`Show`/`Hide` 的入口已经留好，第三批的怪会用）。
 
 ## 属性：层、合成，以及两种存储意图
 

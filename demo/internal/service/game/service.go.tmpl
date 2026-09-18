@@ -55,7 +55,8 @@ func (s *Service) Init(registry *app.Registry) error {
 	// The map, before anything can put a player on it. A scene is built from
 	// configuration on every start (noPersist), so this is a build, not a
 	// load.
-	if _, err := lifecycle.EnsureWorldScene(context.Background(), registry); err != nil {
+	area, err := lifecycle.EnsureWorldScene(context.Background(), registry)
+	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	subscription, err := startLevelUpMailer(context.Background(), registry)
@@ -82,12 +83,15 @@ func (s *Service) Init(registry *app.Registry) error {
 	if err := scene.Start(context.Background()); err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
+	// The replication bridge asks the Scene Entity's interest system who
+	// should be subscribed, so it has to know which scene it is replicating.
+	scene.SetArea(area)
 	if err := registry.Register(SceneCapability, scene); err != nil {
 		_ = scene.Close(context.Background())
 		return fmt.Errorf("{{GAME_SERVICE}}: publish scene: %w", err)
 	}
 	s.scene = scene
-	stop, err := startMatchmaker(context.Background(), registry, battles)
+	stop, err := startMatchmaker(context.Background(), registry, battles, scene)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}

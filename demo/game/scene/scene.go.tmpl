@@ -1,6 +1,7 @@
 package scene
 
 import (
+	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/spatial"
 )
 
@@ -81,4 +82,72 @@ type PathFind interface {
 // is about to create an import cycle.
 type Entity interface {
 	ID() int64
+}
+
+// --- 兴趣：谁应该收到谁的状态 ---
+
+// Source is one reason an observer should receive a subject's state. Space is
+// one reason; being in the same team, being on a friends list, being yourself
+// are others. They all answer the same question, so they all produce the same
+// events and the aggregator below does not care which is which.
+//
+// The event type is roost-core's: a relation simply never emits
+// BandChanged and always uses band 0.
+type Source interface {
+	// Name identifies the source in the aggregator's bookkeeping. Two sources
+	// must not share a name.
+	Name() string
+	// Flush drains the changes since the last call.
+	Flush() []spatial.InterestEvent
+}
+
+// Relations is a source driven by a set per observer: "these are the subjects
+// this observer is interested in regardless of where they are". Membership is
+// pushed in by whoever owns the relationship — the matchmaker for a team, an
+// account service for a friends list — and the source turns the difference
+// into Enter/Leave.
+type Relations interface {
+	// Set replaces an observer's set. Subjects that were in the old set and
+	// are not in the new one leave; the new ones enter.
+	Set(observer int64, subjects []int64)
+	// Clear drops an observer entirely (leaving everything it held).
+	Clear(observer int64)
+}
+
+// SubscriptionChange is what the aggregator asks the transport layer to do.
+// It is deliberately not a room call: the scene decides WHO should be
+// subscribed, and the process's replication assembly decides how to say it.
+type SubscriptionChange struct {
+	Observer  int64
+	Subject   int64
+	Subscribe bool
+	Profile   entity.SyncProfile
+}
+
+// Interest is the scene's interest system: the spatial source, the relation
+// sources, and the aggregation that turns all of them into one subscription
+// per (observer, subject).
+//
+// Everything here is keyed by **entity id** — the id that carries kind and
+// category, and is therefore unique across kinds. A unique id is only unique
+// within a kind, so an AOI keyed by it would collide a Player 42 with a
+// Monster 42. Translating to whatever the transport needs (a session, a
+// connection) is the transport's job, in one place.
+type Interest interface {
+	// Enter puts something that both sees and is seen (a player) into the
+	// scene. Observe puts in something that only sees; Show puts in something
+	// that only is seen (a monster, a dropped item).
+	Enter(id int64, at spatial.Point) error
+	Move(id int64, to spatial.Point) error
+	Leave(id int64) error
+	Show(id int64, at spatial.Point) error
+	MoveShown(id int64, to spatial.Point) error
+	Hide(id int64) error
+	// Team is the demo's one relation: the members of a formed match see each
+	// other wherever they are.
+	Team() Relations
+	// Tick drains every source and returns the subscription changes to apply.
+	// Calling it is the assembly's choice — the system is a state machine, not
+	// a goroutine.
+	Tick() []SubscriptionChange
 }
