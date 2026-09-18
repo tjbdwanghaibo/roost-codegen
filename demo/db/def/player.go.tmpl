@@ -7,4 +7,10 @@ type PlayerDao struct {
 	Exp   int64           `bson:"exp" dao:"persist,sync"`
 	Gold  int64           `bson:"gold" dao:"persist,sync"`
 	Items map[int64]int32 `bson:"items" dao:"persist,sync,map=fast"`
+	// DungeonClaims is the exactly-once ledger for dungeon clear rewards:
+	// run id → when it was paid (unix seconds). It is persisted but not
+	// synced — it is server bookkeeping, not state a client renders. Pruned
+	// by time in ClaimDungeonRun; see game/dungeon for why a time bound is
+	// the only bound that holds (RR-20260917-08).
+	DungeonClaims map[string]int64 `bson:"dungeon_claims" dao:"persist,map=fast"`
 }

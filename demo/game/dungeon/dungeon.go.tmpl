@@ -1,0 +1,54 @@
+package dungeon
+
+// Package dungeon is the game's side of the session service's bounded runs:
+// what a clear is worth, and how the game makes sure it pays for one exactly
+// once.
+//
+// The exactly-once part is the interesting one. `session.Finish` is
+// idempotent by design: finishing an already-finished run returns that run
+// with no error (it releases what the run held and leaves the finish time
+// alone), and a run whose deadline passed comes back as expired whatever the
+// caller asked for. So "the Finish call succeeded" does NOT mean "this call
+// is the one that resolved the run", and the request's own Success flag
+// means nothing at all — only the returned run.State is authoritative
+// (RR-20260917-08).
+//
+// That settles which runs deserve a reward. It does not settle how many
+// times one run is paid: two concurrent replays can both see a succeeded run.
+// The claim ledger does that: the reward transaction records the run id on
+// the Player and pays only when it is the transaction that recorded it.
+
+// ClearExp is what a cleared dungeon is worth. It is enough to level the
+// demo's Player up, so a clear also exercises the level-up → reward mail
+// chain.
+const ClearExp int64 = 100
+
+// ClaimRetentionSeconds is how long a claim record is kept.
+//
+// Why a time bound and not a count: the ledger has to outlive every replay
+// that could still reach the reward path, and a count cannot promise that.
+// A replay only reaches it through `session.Finish`, which needs the run to
+// still exist in the session service — once the run's storage TTL
+// (`session.run_ttl`, 30m in the generated configuration) elapses, Finish
+// answers ErrRunMissing and no reward path runs at all. So a claim kept
+// comfortably longer than that TTL can never be forgotten while a replay is
+// still possible. Raise this if you raise run_ttl.
+const ClaimRetentionSeconds int64 = 4 * 60 * 60
+
+// ClaimExpired reports whether a claim recorded at claimedAt may be
+// forgotten at nowUnix. A claim with a non-positive timestamp is garbage
+// from a hand-edited document and is forgotten on sight.
+func ClaimExpired(claimedAt, nowUnix int64) bool {
+	if claimedAt <= 0 {
+		return true
+	}
+	return nowUnix-claimedAt > ClaimRetentionSeconds
+}
+
+// ClaimResult is what the reward transaction reports back. Claimed is false
+// for a replay: the run was already paid, and this call changed nothing.
+type ClaimResult struct {
+	Claimed      bool
+	ExpGranted   int64
+	LevelsGained int32
+}

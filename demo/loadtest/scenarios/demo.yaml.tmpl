@@ -120,6 +120,13 @@ scenarios:
         - action: finish_dungeon
           param:
             success: true
+        # Replay the same finish. The session service answers idempotently
+        # (the run comes back as it stands), and the clear must not be paid
+        # twice — the reward transaction records the run id, so a second
+        # attempt grants nothing.
+        - action: finish_dungeon_replay
+          param:
+            success: true
         # Matchmaking: join the duel queue, then poll until the game's
         # matchmaker has paired this robot with another one. The ticket id
         # comes from the blackboard, where join_queue's OnResp put it.

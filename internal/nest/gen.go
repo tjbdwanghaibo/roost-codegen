@@ -417,7 +417,15 @@ func generatedTypeRefs(funcs []*FuncInfo, senderOnly bool, syncSenderOnly bool) 
 		for _, p := range f.Params {
 			track(p.Type)
 		}
-		if !senderOnly || syncSenderOnly {
+		// Only the sync sender writes a return type's name (its Sync_* /
+		// MultiSync_* signatures declare it). The handler-side file assigns
+		// the call's result to an `any`, so collecting the return types'
+		// packages there produced an import nothing referenced — a handler
+		// answering with a type from a third package made its own package
+		// fail to compile with "imported and not used" (U-0227). Existing
+		// handlers were unaffected only because their result types came from
+		// builtins or from a package an entity parameter already imported.
+		if syncSenderOnly {
 			for _, ret := range f.Returns {
 				track(ret.Type)
 			}

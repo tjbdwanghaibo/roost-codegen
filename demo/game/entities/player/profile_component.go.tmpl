@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"{{MODULE}}/game/dungeon"
 	"{{MODULE}}/game/effects"
 	apperrors "{{MODULE}}/internal/errors"
 	"github.com/tjbdwanghaibo/roost-core/entity"
@@ -88,6 +89,43 @@ func (component *ProfileComponent) AddExp(amount int64) (int32, error) {
 		return 0, fmt.Errorf("profile: %w", err)
 	}
 	return gained, nil
+}
+
+// ClaimDungeonRun records runID as paid and reports whether this call is the
+// one that recorded it. A second call for the same run returns false and
+// changes nothing, which is what makes the clear reward exactly-once: the
+// record lands in the same Nest transaction as the reward itself.
+//
+// Pruning happens here, on the write path, so the ledger is bounded without
+// a sweeper: anything older than the retention can no longer be replayed
+// (game/dungeon explains why), so forgetting it is safe. Everything moves
+// through generated mutators, so a handler that fails later takes the whole
+// ledger change back with the reward.
+func (component *ProfileComponent) ClaimDungeonRun(runID string, nowUnix int64) bool {
+	dao := component.Owner().Dao()
+	if _, claimed := dao.GetDungeonClaims(runID); claimed {
+		return false
+	}
+	var stale []string
+	dao.RangeDungeonClaims(func(key string, claimedAt int64) bool {
+		if dungeon.ClaimExpired(claimedAt, nowUnix) {
+			stale = append(stale, key)
+		}
+		return true
+	})
+	for _, key := range stale {
+		dao.DelDungeonClaims(key)
+	}
+	dao.SetDungeonClaims(runID, nowUnix)
+	return true
+}
+
+// DungeonRunClaimed reports whether a run has already been paid. It is a
+// read for callers holding the lock; the claim itself must go through
+// ClaimDungeonRun, inside the transaction that pays.
+func (component *ProfileComponent) DungeonRunClaimed(runID string) bool {
+	_, claimed := component.Owner().Dao().GetDungeonClaims(runID)
+	return claimed
 }
 
 // DisplayName and Level read current state for callers holding the Entity

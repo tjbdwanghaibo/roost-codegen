@@ -4,31 +4,44 @@ import (
 	"fmt"
 	"log/slog"
 
+	"{{MODULE}}/game/dungeon"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	player_agent "{{MODULE}}/game/player_agent"
 	"{{MODULE}}/protocol/pb"
+	"time"
+
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/errcode"
 	svcsession "github.com/tjbdwanghaibo/roost-kit/service/session"
 )
 
-// DungeonClearExp is what a cleared dungeon is worth. It is enough to level
-// the demo's Player up, so a clear also exercises the level-up → reward mail
-// chain.
-const DungeonClearExp int64 = 100
+// DungeonClearExp is what a cleared dungeon is worth; the value and the
+// exactly-once rules live in game/dungeon.
+const DungeonClearExp = dungeon.ClearExp
 
-// HandleFinishDungeon resolves the run with the session service, then grants
-// the clear's exp through the Player + World transaction the AddExp endpoint
-// uses. The order is deliberate: the session service checks the run is this
-// player's and still open (a finished or expired run is a coded refusal), so
-// the grant only happens for a run that was really resolved by this call.
+// HandleFinishDungeon resolves the run with the session service and pays for
+// it through the Player + World claim transaction.
 //
-// The two steps are not one transaction: a crash between them leaves a
-// finished run without its exp. That is the safe direction — a retry of
-// FinishDungeon is refused (ErrRunTerminal), so the exp is granted at most
-// once; a production game that must grant exactly once records the run id on
-// the Player inside the AddExp transaction and grants from there.
+// Two things decide whether this call pays, and neither is the request:
+//
+//   - **The run state the service returned.** Finish is idempotent: a run
+//     that is already terminal comes back as it stands with no error, and a
+//     run past its deadline comes back expired whatever outcome the caller
+//     asked for. So `request.Success` says only what the client wanted;
+//     `run.State == StateSucceeded` is the fact. Judging on the request paid
+//     for failed runs, expired runs and every replay (RR-20260917-08).
+//   - **The claim ledger.** Two replays can both see a succeeded run, so the
+//     reward transaction records the run id on the Player and pays only when
+//     it is the transaction that recorded it. Record and payment share one
+//     WAL record, so neither can happen without the other.
+//
+// The two calls are still not one transaction: a crash between Finish and
+// the claim leaves a resolved run unpaid. That direction is recoverable — a
+// retry of FinishDungeon returns the same succeeded run and the claim is
+// still unmade, so the client (or an operator) gets the reward on the next
+// attempt. This is the shape a production game wants; what it must add is a
+// retry that is not a client's goodwill.
 func (controller *Controller) HandleFinishDungeon(context *player_agent.Context, request *pb.FinishDungeonRequest) (*pb.FinishDungeonResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("finish_dungeon endpoint: context and request are required")
@@ -46,14 +59,16 @@ func (controller *Controller) HandleFinishDungeon(context *player_agent.Context,
 		return &pb.FinishDungeonResponse{Code: code, Reason: reason}, nil
 	}
 	response := &pb.FinishDungeonResponse{State: string(run.State), Outcome: run.Outcome}
-	if !request.Success {
+	// Only the run the service says succeeded earns a reward — not the one
+	// the request hoped for.
+	if run.State != svcsession.StateSucceeded {
 		return response, nil
 	}
 	entityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
 	if err != nil {
 		return nil, fmt.Errorf("finish_dungeon endpoint: %w", err)
 	}
-	gained, err := syncsender.NewAddExpSender(controller.NestClient()).MultiSync_AddExp(context.Context(), entityID, controller.WorldID(), DungeonClearExp)
+	result, err := syncsender.NewClaimDungeonSender(controller.NestClient()).MultiSync_ClaimDungeon(context.Context(), entityID, controller.WorldID(), run.ID, DungeonClearExp, time.Now().Unix())
 	if err != nil {
 		// The run is resolved either way; the reward failing is its own
 		// coded answer so the client can tell the two apart.
@@ -64,6 +79,10 @@ func (controller *Controller) HandleFinishDungeon(context *player_agent.Context,
 		response.Code, response.Reason = code, reason
 		return response, nil
 	}
-	response.ExpGranted, response.LevelsGained = DungeonClearExp, gained
+	// A replay answers with the run's terminal state and no reward: it was
+	// already paid, and saying so is more useful than repeating the numbers.
+	if result.Claimed {
+		response.ExpGranted, response.LevelsGained = result.ExpGranted, result.LevelsGained
+	}
 	return response, nil
 }

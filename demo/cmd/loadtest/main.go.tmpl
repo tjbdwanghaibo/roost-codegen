@@ -396,6 +396,23 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			}
 			return nil
 		}))
+	// The same call again, on the same run id. Finish is idempotent, so the
+	// service answers with the run as it stands — and the reward must not be
+	// paid a second time. A demo that pays here lets a client replay one
+	// frame for unlimited experience (RR-20260917-08).
+	action.MustRegisterCall[pb.FinishDungeonRequest, pb.FinishDungeonResponse](actions, protocols, "finish_dungeon_replay", msgid.MsgFinishDungeon,
+		action.OnResp(func(_ *robot.Context, resp *pb.FinishDungeonResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.State != "succeeded" {
+				return fmt.Errorf("replayed finish did not answer with the run as it stands: state=%q", resp.State)
+			}
+			if resp.ExpGranted != 0 || resp.LevelsGained != 0 {
+				return fmt.Errorf("replayed finish was paid again: exp=%d levels=%d", resp.ExpGranted, resp.LevelsGained)
+			}
+			return nil
+		}))
 	// skill_catalog: the server compiled game/skills/*.json at startup and
 	// lists the ids; the demo ships one, and a warning-free compile is part
 	// of the regression.

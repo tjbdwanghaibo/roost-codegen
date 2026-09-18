@@ -216,7 +216,8 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		"protocol/def/send_gift.go", "protocol/def/gift_status.go", "game/controllers/player/send_gift.go", "game/controllers/player/gift_status.go",
 		"internal/service/game/gift_saga.go", "internal/errors/item_short.go",
 		"game/battle/battle.go", "protocol/def/battle_input.go", "protocol/def/battle_frame.go",
-		"game/controllers/player/battle_input.go", "internal/service/game/battle.go"} {
+		"game/controllers/player/battle_input.go", "internal/service/game/battle.go",
+		"game/dungeon/dungeon.go", "game/dungeon/dungeon_test.go", "game/handler/claim_dungeon.go", "internal/errors/dungeon_run.go"} {
 		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("demo did not write %s: %v", rel, err)
 		}
@@ -244,6 +245,21 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	}
 	if cfg := read("configs/service/config.game.prod.example.yaml"); !strings.Contains(cfg, "admin_enabled: false") {
 		t.Errorf("production example config enables admin")
+	}
+	// The dungeon clear is paid on the authoritative run state, once per run:
+	// judging on the request's own Success flag paid for failed runs, expired
+	// runs and every replay (RR-20260917-08).
+	if endpoint := read("game/controllers/player/finish_dungeon.go"); !strings.Contains(endpoint, "run.State != svcsession.StateSucceeded") || !strings.Contains(endpoint, "MultiSync_ClaimDungeon(") || strings.Contains(endpoint, "if !request.Success {") {
+		t.Errorf("finish_dungeon still decides the reward from the request instead of the run the service returned")
+	}
+	if claim := read("game/handler/claim_dungeon.go"); !strings.Contains(claim, "ClaimDungeonRun(runID, nowUnix)") || !strings.Contains(claim, "rollback=undo durability=strict") {
+		t.Errorf("the claim handler does not record the run id in the rewarding transaction")
+	}
+	if dao := read("db/def/player.go"); !strings.Contains(dao, "DungeonClaims map[string]int64") {
+		t.Errorf("the Player DAO has no claim ledger for dungeon rewards")
+	}
+	if scenario := read("loadtest/scenarios/demo.yaml"); !strings.Contains(scenario, "finish_dungeon_replay") {
+		t.Errorf("the robot scenario never replays a finished dungeon, so a double reward would pass unnoticed")
 	}
 	// The lockstep battle: the room is opened by the matchmaker, owned by one
 	// goroutine, and its broadcast lane is the player TCP push. The robot
