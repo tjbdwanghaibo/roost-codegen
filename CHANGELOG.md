@@ -36,6 +36,15 @@
 
 ### Fixed
 
+- **game-demo：清关奖励的领取窗口，取代"反正重放不了"的保留期**（U-0237，C4，RR-20260918-04，T-131，**行为变化**）。
+  U-0226 的账本按 4 小时清理，论证是"`session.run_ttl` 30m 一到 run 就没了"——而 session 的 Runs/Claims **没有存储 TTL**，
+  `run_ttl` 管的是 run 能开多久，succeeded 的 run 可以被 Finish 到天荒地老。于是另一笔领取清掉旧记录后，重放旧 run 再发一次：
+  两次合法清关付出三份。现在账本存 run 的**结算时刻**（`run.FinishedAtUnix`，session 盖的章），准入与清理共用
+  `dungeon.ClaimWindowClosed`，于是"记录被清掉 ⟺ 该 run 被拒"，不再依赖任何别的服务的存储行为；准入检查在付款的那个事务里做。
+  过窗口是有名字的拒绝（新 errcode `dungeon_claim_window`(100012) + 端点 Warn 日志），不是静默的零——把重复发奖改成静默漏奖
+  只是换了个 bug。`handlerClaimDungeon` 与 `ClaimDungeonRun` 多一个 `resolvedAtUnix` 参数。旧记录存的是领取时刻（≥ 结算时刻），
+  按新读法只会更晚过期，**不需要迁移**。测试：随工程生成 `game/handler/claim_dungeon_test.go`（真实 Nest 引擎 + 真实生成实体，
+  复现审查那条"领 A → 窗口后领 B 清掉 A → 重放 A"的顺序）。记录：`roost-core/docs/bugfix/RR-20260918-04.md`。
 - **嵌套 child 的通知归属现在跟着字段内容走**（U-0236，C4，RR-20260918-03，T-130）。嵌套结构里再嵌套的 child
   （`map[K]*Child` / `[]*Child` / `*Child`）靠 callback 把变更上报给父结构，而 callback 不是字段值的一部分：
   回滚的 undo 闭包只把值设回去、`*Child` 的 setter 连正常替换都不解绑旧值，于是回滚之后对恢复出来的 child 的

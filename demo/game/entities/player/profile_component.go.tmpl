@@ -96,19 +96,30 @@ func (component *ProfileComponent) AddExp(amount int64) (int32, error) {
 // changes nothing, which is what makes the clear reward exactly-once: the
 // record lands in the same Nest transaction as the reward itself.
 //
+// The value stored is the run's **resolution time**, not the time of the
+// claim: that is the number the reward's deadline is computed from, so the
+// ledger and the admission check read the same fact (game/dungeon explains
+// why one number for both is the whole argument — RR-20260918-04).
+//
 // Pruning happens here, on the write path, so the ledger is bounded without
-// a sweeper: anything older than the retention can no longer be replayed
-// (game/dungeon explains why), so forgetting it is safe. Everything moves
-// through generated mutators, so a handler that fails later takes the whole
-// ledger change back with the reward.
-func (component *ProfileComponent) ClaimDungeonRun(runID string, nowUnix int64) bool {
+// a sweeper. It is safe because a record can only be dropped once the run it
+// names is past its claim window, and a run past its claim window is refused
+// before it ever reaches this function. Everything moves through generated
+// mutators, so a handler that fails later takes the whole ledger change back
+// with the reward.
+//
+// Records written by a build before RR-20260918-04 hold the claim time
+// instead, which is never earlier than the resolution time — under the new
+// reading they simply expire a little later, never sooner, so no old record
+// can start paying again.
+func (component *ProfileComponent) ClaimDungeonRun(runID string, resolvedAtUnix, nowUnix int64) bool {
 	dao := component.Owner().Dao()
 	if _, claimed := dao.GetDungeonClaims(runID); claimed {
 		return false
 	}
 	var stale []string
-	dao.RangeDungeonClaims(func(key string, claimedAt int64) bool {
-		if dungeon.ClaimExpired(claimedAt, nowUnix) {
+	dao.RangeDungeonClaims(func(key string, resolvedAt int64) bool {
+		if dungeon.ClaimWindowClosed(resolvedAt, nowUnix) {
 			stale = append(stale, key)
 		}
 		return true
@@ -116,7 +127,7 @@ func (component *ProfileComponent) ClaimDungeonRun(runID string, nowUnix int64) 
 	for _, key := range stale {
 		dao.DelDungeonClaims(key)
 	}
-	dao.SetDungeonClaims(runID, nowUnix)
+	dao.SetDungeonClaims(runID, resolvedAtUnix)
 	return true
 }
 

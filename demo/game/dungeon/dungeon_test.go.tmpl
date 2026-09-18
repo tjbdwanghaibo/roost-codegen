@@ -2,35 +2,40 @@ package dungeon
 
 import "testing"
 
-// The claim ledger's retention rule is the one piece of the exactly-once
-// argument that is pure logic, so it gets a table test here; the rest of the
-// argument (the ledger is written in the same transaction as the reward, and
-// only the run.State the session service returned earns one) is asserted end
-// to end by the robot scenario, which finishes a run twice and requires the
-// second answer to grant nothing.
-func TestClaimExpiredKeepsAClaimWellPastTheRunTTL(t *testing.T) {
+// The claim window is the one piece of the exactly-once argument that is pure
+// logic, so it gets a table test here; the rest of the argument (the ledger is
+// written in the same transaction as the reward, only the run.State the
+// session service returned earns one, and a run past the window is refused
+// rather than paid) is asserted against the real handler in
+// game/handler/claim_dungeon_test.go and end to end by the robot scenario.
+func TestClaimWindowClosedIsTheAdmissionAndThePruningRule(t *testing.T) {
 	const now int64 = 1_800_000_000
-	// session.run_ttl in the generated configuration is 30 minutes. A claim
-	// must survive at least that long, or a replay arriving while the run is
-	// still finishable would be paid a second time.
+	// session.run_ttl in the generated configuration is 30 minutes: how long
+	// a run may stay *open*. It is not a storage lifetime — a succeeded run
+	// stays in the session service and can be finished again indefinitely,
+	// which is why the window below cannot be derived from it
+	// (RR-20260918-04).
 	const runTTL int64 = 30 * 60
 	for name, test := range map[string]struct {
-		claimedAt int64
-		expired   bool
+		resolvedAt int64
+		closed     bool
 	}{
-		"just recorded":        {now, false},
-		"one run ttl old":      {now - runTTL, false},
-		"twice the run ttl":    {now - 2*runTTL, false},
-		"just inside the hold": {now - ClaimRetentionSeconds, false},
-		"just past the hold":   {now - ClaimRetentionSeconds - 1, true},
-		"absent":               {0, true},
-		"negative":             {-1, true},
+		"just resolved":          {now, false},
+		"one run ttl old":        {now - runTTL, false},
+		"just inside the window": {now - ClaimWindowSeconds, false},
+		"just past the window":   {now - ClaimWindowSeconds - 1, true},
+		"long past the window":   {now - 30*24*60*60, true},
+		"absent":                 {0, true},
+		"negative":               {-1, true},
 	} {
-		if got := ClaimExpired(test.claimedAt, now); got != test.expired {
-			t.Errorf("%s: ClaimExpired(%d, %d) = %v, want %v", name, test.claimedAt, now, got, test.expired)
+		if got := ClaimWindowClosed(test.resolvedAt, now); got != test.closed {
+			t.Errorf("%s: ClaimWindowClosed(%d, %d) = %v, want %v", name, test.resolvedAt, now, got, test.closed)
 		}
 	}
-	if ClaimRetentionSeconds <= runTTL {
-		t.Errorf("the claim hold (%ds) must outlast session.run_ttl (%ds) or a replayable run can be paid twice", ClaimRetentionSeconds, runTTL)
+	// A run resolved at the very end of its own life still has the whole
+	// window to be collected in; anything less and a legitimate first claim
+	// could be refused for being slow.
+	if ClaimWindowSeconds <= runTTL {
+		t.Errorf("the claim window (%ds) must outlast a run's own life (%ds), or a first claim can time out before the player can send it", ClaimWindowSeconds, runTTL)
 	}
 }

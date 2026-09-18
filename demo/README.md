@@ -155,8 +155,18 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
 - `internal/service/session/collaborators.go`：`Release()` 是 session 服务对每个附着资源恰好调一次的钩子；demo 的副本不占外部资源，所以是一行日志 + nil。
   真实游戏在这里释放实例 / 座位，返回 error 会让服务保留待释放并在下次 Enter / sweep 重试。
 - 第二局要等第一局结束：一个 owner 一个活 run 是服务的契约，重复 Enter 得到 `ErrAlreadyRunning` 的 coded 响应，不是第二个 run。
-- **Finish 与发奖不是一个事务**：进程死在两步之间，run 已终态、exp 没给；这是安全的方向——重试 Finish 被拒（`ErrRunTerminal`），exp 至多给一次。
-  要"恰好一次"的做法是在 AddExp 事务里把 run id 记到 Player 上再发。
+- **发奖是恰好一次的**：`ClaimDungeon` 事务把 run id 与经验、World 计数放进同一条 WAL 记录（`game/handler/claim_dungeon.go`），
+  重放找到账本里已有的 run id 就什么也不做。判发奖的依据是 `session.Finish` 返回的 `run.State`，不是请求里的 `Success`——
+  Finish 对终态 run 幂等返回，"调用成功"不等于"这次调用结算了它"。
+- **账本有期限，期限与"还能不能领"是同一条规则**：账本记的是 run 的**结算时刻**（`run.FinishedAtUnix`，session 服务盖的章，
+  不是 `time.Now()`），清理与准入共用 `dungeon.ClaimWindowClosed`。于是"记录被清掉"恒等于"这个 run 已过窗口、会被拒"，
+  不依赖 session 服务保留多久——**succeeded 的 run 在 session 服务里没有存储 TTL，可以被 Finish 到天荒地老**
+  （`run_ttl` 管的是 run 能开多久）。早先按"反正重放不了"给账本定 4 小时保留期是错的：另一笔领取顺手清掉旧记录之后，
+  重放旧 run 就又拿了一份（RR-20260918-04）。
+- **过窗口的领取是一条有名字的拒绝**（`dungeon_claim_window`，端点打 Warn 日志），不是静默的 0 ——
+  真的有玩家一直没领而窗口过了，这件事必须让运营看得见，补发是运营的口径。把重复发奖改成静默漏奖只是换了个 bug。
+- **Finish 与发奖仍不是一个事务**：进程死在两步之间，run 已终态、exp 没给；这是安全的方向——重试 FinishDungeon 会拿到同一个
+  succeeded run，账本还没记，下一次尝试就补上了。生产要补的是"重试不靠客户端的善意"。
 - session 进程默认不扫过期 run（`sweepOwners` 返回空并在日志里说明）：过期 run 由同一 owner 的下一次 Enter 懒解决。要及时释放资源的部署自己接 owner 列表。
 
 ## 跨域事务：送礼 saga（debit → deliver，失败补偿）

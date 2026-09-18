@@ -263,8 +263,18 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if endpoint := read("game/controllers/player/finish_dungeon.go"); !strings.Contains(endpoint, "run.State != svcsession.StateSucceeded") || !strings.Contains(endpoint, "MultiSync_ClaimDungeon(") || strings.Contains(endpoint, "if !request.Success {") {
 		t.Errorf("finish_dungeon still decides the reward from the request instead of the run the service returned")
 	}
-	if claim := read("game/handler/claim_dungeon.go"); !strings.Contains(claim, "ClaimDungeonRun(runID, nowUnix)") || !strings.Contains(claim, "rollback=undo durability=strict") {
+	if claim := read("game/handler/claim_dungeon.go"); !strings.Contains(claim, "ClaimDungeonRun(runID, resolvedAtUnix, nowUnix)") || !strings.Contains(claim, "rollback=undo durability=strict") {
 		t.Errorf("the claim handler does not record the run id in the rewarding transaction")
+	}
+	// The ledger is bounded, so forgetting a record and refusing a claim have
+	// to be the same condition — otherwise a pruned run is still payable and
+	// is paid twice (RR-20260918-04). The check is in the transaction that
+	// pays, against a time the session service minted, not time.Now().
+	if claim := read("game/handler/claim_dungeon.go"); !strings.Contains(claim, "dungeon.ClaimWindowClosed(resolvedAtUnix, nowUnix)") {
+		t.Errorf("the claim handler pays a run without checking whether its reward window is still open")
+	}
+	if endpoint := read("game/controllers/player/finish_dungeon.go"); !strings.Contains(endpoint, "resolvedAt := run.FinishedAtUnix") {
+		t.Errorf("finish_dungeon anchors the reward window on something other than the run's own resolution time")
 	}
 	if dao := read("db/def/player.go"); !strings.Contains(dao, "DungeonClaims map[string]int64") {
 		t.Errorf("the Player DAO has no claim ledger for dungeon rewards")

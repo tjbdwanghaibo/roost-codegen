@@ -8,10 +8,11 @@ type PlayerDao struct {
 	Gold  int64           `bson:"gold" dao:"persist,sync"`
 	Items map[int64]int32 `bson:"items" dao:"persist,sync,map=fast"`
 	// DungeonClaims is the exactly-once ledger for dungeon clear rewards:
-	// run id → when it was paid (unix seconds). It is persisted but not
-	// synced — it is server bookkeeping, not state a client renders. Pruned
-	// by time in ClaimDungeonRun; see game/dungeon for why a time bound is
-	// the only bound that holds (RR-20260917-08).
+	// run id -> the run's resolution time. The claim transaction records the
+	// run here and pays only when it is the one that recorded it. Entries
+	// are pruned by the same window that decides whether a claim is still
+	// admissible; see game/dungeon for why those have to be one number
+	// (RR-20260918-04).
 	DungeonClaims map[string]int64 `bson:"dungeon_claims" dao:"persist,map=fast"`
 	// MailClaims is the same ledger for mail attachments: mail id → when it
 	// was granted. It closes the window the three-step claim leaves open —

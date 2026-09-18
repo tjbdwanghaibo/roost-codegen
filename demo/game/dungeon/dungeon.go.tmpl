@@ -23,30 +23,63 @@ package dungeon
 // chain.
 const ClearExp int64 = 100
 
-// ClaimRetentionSeconds is how long a claim record is kept.
+// ClaimWindowSeconds is how long after a run resolves its clear reward may
+// still be claimed — and, by the same number, how long the claim ledger
+// remembers that it paid. One constant for both is not tidiness; it is the
+// argument.
 //
-// Why a time bound and not a count: the ledger has to outlive every replay
-// that could still reach the reward path, and a count cannot promise that.
-// A replay only reaches it through `session.Finish`, which needs the run to
-// still exist in the session service — once the run's storage TTL
-// (`session.run_ttl`, 30m in the generated configuration) elapses, Finish
-// answers ErrRunMissing and no reward path runs at all. So a claim kept
-// comfortably longer than that TTL can never be forgotten while a replay is
-// still possible. Raise this if you raise run_ttl.
-const ClaimRetentionSeconds int64 = 4 * 60 * 60
+// The first version of this bounded the ledger by "a run cannot be replayed
+// forever anyway": `session.run_ttl` is 30m, so a claim held 4h outlived
+// every replay. That is wrong, and review caught it (RR-20260918-04). Runs
+// and claims have **no storage TTL** in the session service — run_ttl is how
+// long a run may stay *open*. A run that succeeded stays succeeded, and
+// `session.Finish` keeps answering with that terminal state years later. So
+// forgetting a claim never became safe on its own: the next claim's pruning
+// dropped the old run's record, a replay of that old run found the ledger
+// empty, and it was paid a second time.
+//
+// The fix is to stop reasoning about what the session service forgets and
+// give the reward its own deadline, computed from a time the game did not
+// invent: the run's own resolution time, minted and stored by the session
+// service. A claim is refused once the run is older than this window, and
+// the ledger stores that same resolution time, so:
+//
+//	a record is pruned  ⟺  now - resolvedAt > ClaimWindowSeconds
+//	                    ⟺  a claim for that run is refused
+//
+// Pruned therefore implies refused, whatever order the calls arrive in, with
+// no assumption about any other service's storage. Raising or lowering this
+// value keeps the property; it only moves how long a client (or an operator
+// replaying by hand) has to collect.
+//
+// It must comfortably exceed how long a legitimate claim can be delayed: a
+// run resolved at its own deadline, plus reconnects and retries. 4h against
+// a 30m run_ttl leaves that margin.
+const ClaimWindowSeconds int64 = 4 * 60 * 60
 
-// ClaimExpired reports whether a claim recorded at claimedAt may be
-// forgotten at nowUnix. A claim with a non-positive timestamp is garbage
-// from a hand-edited document and is forgotten on sight.
-func ClaimExpired(claimedAt, nowUnix int64) bool {
-	if claimedAt <= 0 {
+// ClaimWindowClosed reports whether a run resolved at resolvedAtUnix is past
+// the point where its clear reward may still be paid at nowUnix. It is the
+// admission check on the reward path and the pruning predicate for the
+// ledger — deliberately the same function, because two predicates that drift
+// apart is exactly how RR-20260918-04 happened.
+//
+// A non-positive timestamp is a run whose resolution time cannot be proven
+// (a hand-edited document, a record written by an older build). It is
+// refused rather than paid: the ledger cannot promise exactly-once for a run
+// it cannot place in time, and refusing is the direction an operator can
+// correct.
+func ClaimWindowClosed(resolvedAtUnix, nowUnix int64) bool {
+	if resolvedAtUnix <= 0 {
 		return true
 	}
-	return nowUnix-claimedAt > ClaimRetentionSeconds
+	return nowUnix-resolvedAtUnix > ClaimWindowSeconds
 }
 
 // ClaimResult is what the reward transaction reports back. Claimed is false
-// for a replay: the run was already paid, and this call changed nothing.
+// for a replay: the run was already paid, and this call changed nothing. A
+// run past its claim window is not reported here at all — it comes back as a
+// coded error, so "you were paid already" and "this is too old to pay" never
+// look the same to the caller.
 type ClaimResult struct {
 	Claimed      bool
 	ExpGranted   int64
