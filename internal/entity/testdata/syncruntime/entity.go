@@ -32,7 +32,7 @@ func (avatarPacker) PackSubjectDelta(entity.SyncProfile, uint64) (entity.FrozenS
 	return entity.FrozenSyncPayload{}, nil
 }
 
-//roost:entity entityKind=EntityKindAvatar sync=true syncTopic=SyncTopicAvatar subjectPacker=AvatarPacker
+//roost:entity entityKind=EntityKindAvatar sync=true syncTopic="avatar" subjectPacker=AvatarPacker
 type Avatar struct {
 	*entity.EntityBase
 	entity.ComponentManager

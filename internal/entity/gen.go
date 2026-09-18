@@ -222,14 +222,33 @@ func syncPackerFactoryExpr(e EntityDef) string {
 	return e.SyncPacker
 }
 
+// syncTopicExpr renders the marker's value. Three spellings reach here, and
+// parse.go has already refused the fourth (a bare identifier, which used to be
+// quoted into the string of its own name — RR-20260918-07):
+//
+//	syncTopic=player               → "player"
+//	syncTopic="Player"             → "Player"      (already a literal)
+//	syncTopic=clientsync.Topic     → clientsync.Topic
 func syncTopicExpr(s string) string {
 	if s == "" {
 		return `""`
+	}
+	if quoted, ok := unquoteGoString(s); ok {
+		return quoteString(quoted)
 	}
 	if isConstExpr(s) {
 		return s
 	}
 	return quoteString(s)
+}
+
+// unquoteGoString reports whether the marker value was written as a quoted
+// literal and returns its contents.
+func unquoteGoString(s string) (string, bool) {
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return s[1 : len(s)-1], true
+	}
+	return "", false
 }
 
 func daoCollectionConstExpr(typeName string) string {

@@ -26,7 +26,7 @@ const SyncTopicMonster = "monster"
 // yet; deciding it now is cheaper than deciding it after the first monster id
 // exists, because the rank is encoded in the id.
 //
-//roost:entity id=4 entityKind=EntityKindMonster category=entity.EntityCategoryOther noPersist=true lifetime=ephemeral sync=true syncTopic=monster subjectPacker=NewMonsterSyncPacker
+//roost:entity id=4 entityKind=EntityKindMonster category=entity.EntityCategoryOther noPersist=true lifetime=ephemeral sync=true syncTopic="monster" subjectPacker=NewMonsterSyncPacker
 type Monster struct {
 	*entity.EntityBase
 	entity.ComponentManager

@@ -23,9 +23,9 @@ func writeSyncMarkerSource(t *testing.T, dir, name, body string) {
 
 func TestGeneratedSyncBlockOnlyNamesFieldsCoreHas(t *testing.T) {
 	for name, marker := range map[string]string{
-		"current spelling": "//roost:entity entityKind=EntityKindAvatar sync=true syncTopic=SyncTopicAvatar subjectPacker=AvatarPacker",
-		"legacy spelling":  "//roost:entity entityKind=EntityKindAvatar sync=true syncTopic=SyncTopicAvatar syncPacker=AvatarPacker",
-		"no packer":        "//roost:entity entityKind=EntityKindAvatar sync=true syncTopic=SyncTopicAvatar",
+		"current spelling": "//roost:entity entityKind=EntityKindAvatar sync=true syncTopic=\"avatar\" subjectPacker=AvatarPacker",
+		"legacy spelling":  "//roost:entity entityKind=EntityKindAvatar sync=true syncTopic=\"avatar\" syncPacker=AvatarPacker",
+		"no packer":        "//roost:entity entityKind=EntityKindAvatar sync=true syncTopic=\"avatar\"",
 	} {
 		dir := t.TempDir()
 		writeSyncMarkerSource(t, dir, "avatar.go", `package avatar
@@ -60,7 +60,7 @@ type Avatar struct {
 		// gofmt aligns the struct literal, so compare with the padding
 		// collapsed rather than against one exact spelling.
 		collapsed := strings.Join(strings.Fields(generated), " ")
-		if !strings.Contains(collapsed, "Enabled: true") || !strings.Contains(collapsed, `Topic: "SyncTopicAvatar"`) {
+		if !strings.Contains(collapsed, "Enabled: true") || !strings.Contains(collapsed, `Topic: "avatar"`) {
 			t.Errorf("%s: sync block lost its enabled/topic wiring:\n%s", name, generated)
 		}
 		wantFactory := strings.Contains(marker, "Packer=")

@@ -134,10 +134,7 @@ func (d *{{.Dao.Name}}) Init() {
 {{- if isNested .MapVal}}
 	if d.{{fieldVar .Name}} != nil {
 		d.{{fieldVar .Name}}.Range(func(key {{.MapKey}}, v {{mapValType .}}) bool {
-			if v != nil {
-				key, v := key, v
-				v.SetNotify(func() { d.mark{{.Name}}KeyDirty(key, v) })
-			}
+			d.bind{{.Name}}Value(key, v)
 			return true
 		})
 	}
@@ -147,9 +144,7 @@ func (d *{{.Dao.Name}}) Init() {
 {{- if eq .Kind 1}}
 {{- if .IsPtr}}
 {{- if isNested .SliceElem}}
-	for _, v := range d.{{fieldVar .Name}} {
-		v.SetNotify(d.mark{{.Name}}Dirty)
-	}
+	d.bind{{.Name}}Items()
 {{- end}}
 {{- end}}
 {{- end}}
@@ -248,6 +243,32 @@ func (d *{{$.Dao.Name}}) Get{{.Name}}(key {{.MapKey}}) ({{if .IsPtr}}*{{.MapVal}
 	return d.{{fieldVar .Name}}.Get(key)
 }
 
+{{- if and .IsPtr (isNested .MapVal)}}
+// bind{{.Name}}Value / unbind{{.Name}}Value move the notification ownership of
+// one entry's value, and nothing else: no dirty mark, no undo record. That is
+// what makes them callable from inside a rollback undo, where the transaction
+// is already rolledBack and a mutator would register another undo.
+//
+// It matters more here than for a plain nested field: the callback captures
+// the KEY as well as the value, so a value that left the map and kept its
+// callback does not merely mark the DAO dirty — it writes ITS content under
+// the key it no longer occupies (RR-20260918-10).
+func (d *{{$.Dao.Name}}) bind{{.Name}}Value(key {{.MapKey}}, val {{mapValType .}}) {
+	if val != nil {
+		val.SetNotify(func() { d.mark{{.Name}}KeyDirty(key, val) })
+	}
+}
+
+func (d *{{$.Dao.Name}}) unbind{{.Name}}Value(key {{.MapKey}}) {
+	if d.{{fieldVar .Name}} == nil {
+		return
+	}
+	if previous, ok := d.{{fieldVar .Name}}.Get(key); ok && previous != nil {
+		previous.SetNotify(nil)
+	}
+}
+{{- end}}
+
 func (d *{{$.Dao.Name}}) Set{{.Name}}(key {{.MapKey}}, val {{if .IsPtr}}*{{.MapVal}}{{else}}{{.MapVal}}{{end}}) {
 	if d.{{fieldVar .Name}} == nil {
 		d.{{fieldVar .Name}} = {{mapNewExpr . "0"}}
@@ -255,19 +276,25 @@ func (d *{{$.Dao.Name}}) Set{{.Name}}(key {{.MapKey}}, val {{if .IsPtr}}*{{.MapV
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old, existed := d.{{fieldVar .Name}}.Get(key)
 		d.recordUndoToken(tx, {{fieldMaskName $.Dao.Name .Name}}, key, func() error {
+{{- if and .IsPtr (isNested .MapVal)}}
+			// Whatever is in the entry now is being discarded; it must stop
+			// reporting before the original goes back in.
+			d.unbind{{.Name}}Value(key)
+{{- end}}
 			if existed { d.{{fieldVar .Name}}.Set(key, old) } else { d.{{fieldVar .Name}}.Delete(key) }
-			d.Init()
+{{- if and .IsPtr (isNested .MapVal)}}
+			if existed { d.bind{{.Name}}Value(key, old) }
+{{- end}}
 			return nil
 		})
 	}
-{{- if .IsPtr}}
-{{- if isNested .MapVal}}
-	if val != nil {
-		val.SetNotify(func() { d.mark{{.Name}}KeyDirty(key, val) })
-	}
-{{- end}}
+{{- if and .IsPtr (isNested .MapVal)}}
+	d.unbind{{.Name}}Value(key)
 {{- end}}
 	d.{{fieldVar .Name}}.Set(key, val)
+{{- if and .IsPtr (isNested .MapVal)}}
+	d.bind{{.Name}}Value(key, val)
+{{- end}}
 	d.mark{{.Name}}KeyDirty(key, val)
 }
 
@@ -278,16 +305,20 @@ func (d *{{$.Dao.Name}}) Del{{.Name}}(key {{.MapKey}}) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old, existed := d.{{fieldVar .Name}}.Get(key)
 		d.recordUndoToken(tx, {{fieldMaskName $.Dao.Name .Name}}, key, func() error {
-			if existed { d.{{fieldVar .Name}}.Set(key, old); d.Init() }
+			if existed {
+{{- if and .IsPtr (isNested .MapVal)}}
+				d.unbind{{.Name}}Value(key)
+{{- end}}
+				d.{{fieldVar .Name}}.Set(key, old)
+{{- if and .IsPtr (isNested .MapVal)}}
+				d.bind{{.Name}}Value(key, old)
+{{- end}}
+			}
 			return nil
 		})
 	}
-{{- if .IsPtr}}
-{{- if isNested .MapVal}}
-	if v, ok := d.{{fieldVar .Name}}.Get(key); ok && v != nil {
-		v.SetNotify(nil)
-	}
-{{- end}}
+{{- if and .IsPtr (isNested .MapVal)}}
+	d.unbind{{.Name}}Value(key)
 {{- end}}
 	if d.{{fieldVar .Name}}.Delete(key) {
 		d.mark{{.Name}}KeyDeleted(key)
@@ -309,21 +340,45 @@ func (d *{{$.Dao.Name}}) {{.Name}}Len() int {
 }
 {{end}}
 {{- if eq .Kind 1}}
+{{- if and .IsPtr (isNested .SliceElem)}}
+// bind{{.Name}}Items / unbind{{.Name}}Items move the notification ownership of
+// this slice's elements, and nothing else — no dirty mark, no undo record, so
+// they are callable from a rollback undo (RR-20260918-10).
+func (d *{{$.Dao.Name}}) bind{{.Name}}Items() {
+	for _, item := range d.{{fieldVar .Name}} {
+		if item != nil {
+			item.SetNotify(d.mark{{.Name}}Dirty)
+		}
+	}
+}
+
+func (d *{{$.Dao.Name}}) unbind{{.Name}}Items() {
+	for _, item := range d.{{fieldVar .Name}} {
+		if item != nil {
+			item.SetNotify(nil)
+		}
+	}
+}
+{{- end}}
+
 func (d *{{$.Dao.Name}}) Add{{.Name}}(v {{if .IsPtr}}*{{.SliceElem}}{{else}}{{.SliceElem}}{{end}}) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := d.{{fieldVar .Name}}
 		d.recordUndo(tx, {{fieldMaskName $.Dao.Name .Name}}, func() error {
+{{- if and .IsPtr (isNested .SliceElem)}}
+			d.unbind{{.Name}}Items()
+{{- end}}
 			d.{{fieldVar .Name}} = old
-			d.Init()
+{{- if and .IsPtr (isNested .SliceElem)}}
+			d.bind{{.Name}}Items()
+{{- end}}
 			return nil
 		})
 	}
-{{- if .IsPtr}}
-{{- if isNested .SliceElem}}
-	v.SetNotify(d.mark{{.Name}}Dirty)
-{{- end}}
-{{- end}}
 	d.{{fieldVar .Name}} = append(d.{{fieldVar .Name}}, v)
+{{- if and .IsPtr (isNested .SliceElem)}}
+	d.bind{{.Name}}Items()
+{{- end}}
 	d.mark{{.Name}}Dirty()
 }
 
@@ -331,19 +386,23 @@ func (d *{{$.Dao.Name}}) Set{{.Name}}All(v {{.TypeStr}}) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := d.{{fieldVar .Name}}
 		d.recordUndo(tx, {{fieldMaskName $.Dao.Name .Name}}, func() error {
+{{- if and .IsPtr (isNested .SliceElem)}}
+			d.unbind{{.Name}}Items()
+{{- end}}
 			d.{{fieldVar .Name}} = old
-			d.Init()
+{{- if and .IsPtr (isNested .SliceElem)}}
+			d.bind{{.Name}}Items()
+{{- end}}
 			return nil
 		})
 	}
-{{- if .IsPtr}}
-{{- if isNested .SliceElem}}
-	for _, item := range v {
-		item.SetNotify(d.mark{{.Name}}Dirty)
-	}
-{{- end}}
+{{- if and .IsPtr (isNested .SliceElem)}}
+	d.unbind{{.Name}}Items()
 {{- end}}
 	d.{{fieldVar .Name}} = append({{.TypeStr}}(nil), v...)
+{{- if and .IsPtr (isNested .SliceElem)}}
+	d.bind{{.Name}}Items()
+{{- end}}
 	d.mark{{.Name}}Dirty()
 }
 
@@ -381,15 +440,10 @@ func (d *{{$.Dao.Name}}) {{mapHelperName $.Dao.Name .Name}}() {{rawMapType .}} {
 func (d *{{$.Dao.Name}}) set{{.Name}}RawMap(src {{rawMapType .}}) {
 	d.{{fieldVar .Name}} = {{mapNewExpr . "len(src)"}}
 	for key, val := range src {
-{{- if .IsPtr}}
-{{- if isNested .MapVal}}
-		if val != nil {
-			key, val := key, val
-			val.SetNotify(func() { d.mark{{.Name}}KeyDirty(key, val) })
-		}
-{{- end}}
-{{- end}}
 		d.{{fieldVar .Name}}.Set(key, val)
+{{- if and .IsPtr (isNested .MapVal)}}
+		d.bind{{.Name}}Value(key, val)
+{{- end}}
 	}
 }
 {{end}}

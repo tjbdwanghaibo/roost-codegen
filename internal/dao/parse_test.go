@@ -44,9 +44,9 @@ func TestParseDefDir(t *testing.T) {
 		t.Fatalf("expected dbscope 'sid', got %q", dao.DbScope)
 	}
 
-	// Tmp (dao:"-") should be skipped, so 8 fields total
-	if len(dao.Fields) != 8 {
-		t.Fatalf("expected 8 fields, got %d: %v", len(dao.Fields), fieldNames(dao.Fields))
+	// Tmp (dao:"-") should be skipped, so 9 fields total
+	if len(dao.Fields) != 9 {
+		t.Fatalf("expected 9 fields, got %d: %v", len(dao.Fields), fieldNames(dao.Fields))
 	}
 
 	// Check LoginAt has persist-only tag

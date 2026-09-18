@@ -213,7 +213,6 @@ func (d *VarietyDao) SetFastItems(key int64, val int32) {
 			} else {
 				d.fastItems.Delete(key)
 			}
-			d.Init()
 			return nil
 		})
 	}
@@ -230,7 +229,6 @@ func (d *VarietyDao) DelFastItems(key int64) {
 		d.recordUndoToken(tx, varietyDaoFieldFastItems, key, func() error {
 			if existed {
 				d.fastItems.Set(key, old)
-				d.Init()
 			}
 			return nil
 		})
@@ -274,7 +272,6 @@ func (d *VarietyDao) SetShardedTags(key int32, val string) {
 			} else {
 				d.shardedTags.Delete(key)
 			}
-			d.Init()
 			return nil
 		})
 	}
@@ -291,7 +288,6 @@ func (d *VarietyDao) DelShardedTags(key int32) {
 		d.recordUndoToken(tx, varietyDaoFieldShardedTags, key, func() error {
 			if existed {
 				d.shardedTags.Set(key, old)
-				d.Init()
 			}
 			return nil
 		})

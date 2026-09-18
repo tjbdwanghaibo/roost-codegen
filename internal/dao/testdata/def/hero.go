@@ -11,6 +11,9 @@ type HeroDao struct {
 	Friends []int64
 	Pos     Position
 	Equips  map[int64]*EquipInfo
+	// Squad is the slice shape of the same ownership question: a top-level
+	// container of nested values (RR-20260918-10).
+	Squad []*EquipInfo
 }
 
 type Position struct {

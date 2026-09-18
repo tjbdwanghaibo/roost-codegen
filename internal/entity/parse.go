@@ -291,6 +291,11 @@ func validateMarkerValues(params map[string]string) error {
 	if v, ok := params["category"]; ok && !validCategoryParam(v) {
 		return fmt.Errorf(`category=%q is not a category constant expression (e.g. entity.EntityCategoryOther, view.EntityCategoryPlayer, EntityCategoryWorld)`, v)
 	}
+	if v, ok := params["syncTopic"]; ok {
+		if err := validateSyncTopicParam(v); err != nil {
+			return err
+		}
+	}
 	if v, ok := params["lifetime"]; ok && !validLifetimeParam(v) {
 		return fmt.Errorf(`lifetime=%q is not one of ephemeral|runtime_rebuild|persisted_hot_cold|resident|remote_managed|mirror_cache`, v)
 	}
@@ -705,4 +710,34 @@ func exprToString(expr ast.Expr) string {
 	default:
 		return fmt.Sprintf("%T", expr)
 	}
+}
+
+// validateSyncTopicParam refuses the one spelling that used to be accepted and
+// silently mean something else.
+//
+// syncTopic takes a topic NAME or a package-qualified constant. A bare
+// identifier is neither: it looks like a Go constant and was written out as
+// the string of its own name, so `syncTopic=SyncTopicPlayer` produced
+// Topic: "SyncTopicPlayer" and the entity subscribed to a topic nobody chose.
+// Nothing failed — not the generator, not the compiler — which is why this is
+// a refusal and not a documentation note (RR-20260918-07).
+//
+// What still passes: anything that cannot be mistaken for a constant (a
+// lower-case or quoted literal) and anything that unambiguously is one (a
+// qualified name).
+func validateSyncTopicParam(v string) error {
+	value := strings.TrimSpace(v)
+	if value == "" || strings.ContainsAny(value, "\"'`") || strings.Contains(value, ".") {
+		return nil
+	}
+	first := rune(value[0])
+	if first < 'A' || first > 'Z' {
+		return nil
+	}
+	for _, r := range value {
+		if (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+			return nil
+		}
+	}
+	return fmt.Errorf(`syncTopic=%s is ambiguous: a bare identifier is written out as the literal %q, not as the constant's value. Write the topic in quotes (syncTopic="%s"), write it in lower case, or name a package-qualified constant (syncTopic=pkg.%s)`, value, value, value, value)
 }

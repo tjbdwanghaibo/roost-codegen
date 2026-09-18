@@ -17,9 +17,11 @@ package testdata
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/nest"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 type ownershipCommitter struct{ records []nest.CommitRecord }
@@ -151,5 +153,166 @@ func TestReplacedNestedValueStillNotifies(t *testing.T) {
 	parent.GetShape().SetX(3)
 	if marks != 1 {
 		t.Fatalf("parent notifications = %d, want 1", marks)
+	}
+}
+
+// U-0238 · C4 · RR-20260918-10：顶层 DAO 的 map 值和 slice 元素，其"谁通知谁"
+// 必须跟着容器里的内容走。
+//
+// 这是 U-0236 的同胞：那次修的是嵌套结构内部的字段，这次是顶层 DAO 的容器。
+// 症状更重一档——顶层 map 值的回调里捕获了 **key**，所以一个被换掉的旧值后续
+// 的修改不只是多打一次脏标记，它会以当前 key 的名义进入持久化补丁，把游离对象
+// 的内容写到那个 key 上。
+
+// writtenPaths renders what a commit record would put in storage, so a failure
+// message can show it. A DAO at version 0 has never been written, so its
+// mutation carries the whole document instead of a patch — both are a write,
+// and the distinction matters only to the message.
+func writtenPaths(t *testing.T, record nest.CommitRecord) []string {
+	t.Helper()
+	var keys []string
+	for _, mutation := range record.Mutations {
+		if len(mutation.Patch.SetBSON) == 0 {
+			if len(mutation.Data) > 0 {
+				keys = append(keys, "<full document>")
+			}
+			continue
+		}
+		var document bson.D
+		if err := bson.Unmarshal(mutation.Patch.SetBSON, &document); err != nil {
+			t.Fatalf("decode patch: %v", err)
+		}
+		for _, element := range document {
+			keys = append(keys, element.Key)
+		}
+	}
+	return keys
+}
+
+func TestTopLevelMapValueOwnership(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		abort       bool
+		mutateOld   bool
+		wantRecords int
+	}{
+		// The value that left the map must not be able to write to it any
+		// more; the one that took its place must.
+		{"committed_old_is_detached", false, true, 0},
+		{"committed_new_is_owned", false, false, 1},
+		// And a rollback puts both facts back the way they were.
+		{"rolled_back_old_is_restored", true, true, 1},
+		{"rolled_back_new_is_detached", true, false, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hero := NewHeroDao()
+			hero.SetId(42)
+			oldValue := &EquipInfo{}
+			hero.setEquipsRawMap(map[int64]*EquipInfo{1: oldValue})
+			hero.Init()
+			newValue := &EquipInfo{}
+
+			committer := &ownershipCommitter{}
+			sentinel := errors.New("abort")
+			_, err := nest.RunIsolatedTransaction(context.Background(), committer, "replace",
+				func() (any, error) {
+					hero.SetEquips(1, newValue)
+					if test.abort {
+						return nil, sentinel
+					}
+					return nil, nil
+				})
+			if test.abort && !errors.Is(err, sentinel) {
+				t.Fatalf("transaction error = %v, want the sentinel", err)
+			}
+			if !test.abort && err != nil {
+				t.Fatalf("commit: %v", err)
+			}
+			committer.records = nil
+
+			target := newValue
+			if test.mutateOld {
+				target = oldValue
+			}
+			if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "touch",
+				func() (any, error) { target.SetLevel(9); return nil, nil }); err != nil {
+				t.Fatal(err)
+			}
+			if len(committer.records) != test.wantRecords {
+				paths := ""
+				if len(committer.records) > 0 {
+					paths = fmt.Sprintf(" (it would write %v)", writtenPaths(t, committer.records[0]))
+				}
+				t.Fatalf("mutating the %s value produced %d commit records, want %d%s",
+					map[bool]string{true: "old", false: "new"}[test.mutateOld],
+					len(committer.records), test.wantRecords, paths)
+			}
+			// The positive direction is worth an assertion of its own: the
+			// value the map holds must reach the patch under its own key.
+			if test.wantRecords == 1 {
+				if keys := writtenPaths(t, committer.records[0]); len(keys) == 0 {
+					t.Fatalf("the owning value produced a record that writes nothing")
+				}
+			}
+		})
+	}
+}
+
+// The slice shape of the same question. The callback here does not capture an
+// index, so a detached element can only mark the DAO dirty rather than write
+// under somebody else's key — a milder symptom of the same missing ownership
+// transfer, fixed by the same helpers.
+func TestTopLevelSliceItemOwnership(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		abort       bool
+		mutateOld   bool
+		wantRecords int
+	}{
+		{"committed_old_is_detached", false, true, 0},
+		{"committed_new_is_owned", false, false, 1},
+		{"rolled_back_old_is_restored", true, true, 1},
+		{"rolled_back_new_is_detached", true, false, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hero := NewHeroDao()
+			hero.SetId(42)
+			oldItem := &EquipInfo{}
+			hero.squad = []*EquipInfo{oldItem}
+			hero.Init()
+			newItem := &EquipInfo{}
+
+			committer := &ownershipCommitter{}
+			sentinel := errors.New("abort")
+			_, err := nest.RunIsolatedTransaction(context.Background(), committer, "replace",
+				func() (any, error) {
+					hero.SetSquadAll([]*EquipInfo{newItem})
+					if test.abort {
+						return nil, sentinel
+					}
+					return nil, nil
+				})
+			if test.abort && !errors.Is(err, sentinel) {
+				t.Fatalf("transaction error = %v, want the sentinel", err)
+			}
+			if !test.abort && err != nil {
+				t.Fatalf("commit: %v", err)
+			}
+			committer.records = nil
+
+			target := newItem
+			if test.mutateOld {
+				target = oldItem
+			}
+			if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "touch",
+				func() (any, error) { target.SetLevel(9); return nil, nil }); err != nil {
+				t.Fatal(err)
+			}
+			if len(committer.records) != test.wantRecords {
+				t.Fatalf("mutating the %s item produced %d commit records, want %d",
+					map[bool]string{true: "old", false: "new"}[test.mutateOld],
+					len(committer.records), test.wantRecords)
+			}
+		})
 	}
 }

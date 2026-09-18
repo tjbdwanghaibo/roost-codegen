@@ -86,6 +86,20 @@
 
 ### Fixed
 
+- **顶层 DAO 容器换掉成员后，游离的旧值不再能以原来的 key 写回**（U-0238，C4，RR-20260918-10，T-132，**P1**）。
+  `SetEquips(key, new)` 给 new 装回调却不解绑同 key 的 old，回滚的 undo 靠 `d.Init()` 兜底——而 `Init()` 只绑不解。
+  map 的回调**捕获 key**，所以一个已经离开容器的值后续任何修改都会以**它已不占有的那个 key** 的名义进入持久化补丁，
+  把游离对象的内容写到当前 key 上；这是数据错误，不是多余的脏标记。生成物现在每个这类字段多出
+  `bind<F>Value` / `unbind<F>Value`（slice 是 `bind/unbindItems`），setter、`Del`、raw 装载、`Init` 与两处 undo 统一改走它们，
+  undo 里的 `Init()` 删掉。与 U-0236 同源（那次是嵌套结构内部，这次是顶层容器）。
+  测试：`internal/dao/testdata/runtime/ownership_test.go` 新增 8 叶子，除记录条数外还解码补丁路径。
+  记录：`roost-core/docs/bugfix/RR-20260918-10.md`。
+- **`syncTopic` 的裸标识符改成拒绝，不再静默当字面量**（U-0239，C4，RR-20260918-07，T-133，**行为变化**）。
+  `syncTopic=SyncTopicPlayer` 生成的是字符串 `"SyncTopicPlayer"`——常量的**名字**，实体因此订阅到一个没人选过的 topic，
+  而生成成功、编译通过。现在解析阶段直接拒绝（首字母大写、无引号、无包名），错误信息给出三种明确写法；
+  `syncTopicExpr` 同时认已加引号的字面量（此前 `syncTopic="Player"` 会被二次加引号）。内置 fixture 与 demo 一并迁移。
+  **旧工程升级后 `make generate` 会报错而不是静默改行为**——注意它们实际订阅的是常量名那个字符串，改成常量值要与客户端一起改。
+  记录：`roost-core/docs/bugfix/RR-20260918-07.md`。
 - **game-demo：清关奖励的领取窗口，取代"反正重放不了"的保留期**（U-0237，C4，RR-20260918-04，T-131，**行为变化**）。
   U-0226 的账本按 4 小时清理，论证是"`session.run_ttl` 30m 一到 run 就没了"——而 session 的 Runs/Claims **没有存储 TTL**，
   `run_ttl` 管的是 run 能开多久，succeeded 的 run 可以被 Finish 到天荒地老。于是另一笔领取清掉旧记录后，重放旧 run 再发一次：
