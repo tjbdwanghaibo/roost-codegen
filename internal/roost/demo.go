@@ -228,6 +228,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/entities/monster/entity.go", why: "ephemeral, replicated, rebuilt by the spawner on every start"},
 		{write: "game/entities/monster/body_component.go", why: "the same position rule as the Player: read and written here, nowhere else"},
 		{write: "game/entities/monster/sync_packer.go", why: "the Player's packer with a different DAO"},
+		{write: "game/entities/monster/body_component_test.go", why: "the gate for a fully nopersist DAO: it must replicate and must never register a persistence mutation"},
 		{write: "configs/schema/spawn.go", why: "the scene's population as config data: how many, where, how long before one comes back"},
 		{write: "configs/table/spawn.csv", why: "three of one monster near the spawn point, back twenty seconds after dying"},
 		{write: "game/scene/scene.go", why: "the contract between the Scene Entity and its systems: the map's shape, and what a system promises"},

@@ -622,6 +622,32 @@ func (d *{{.Dao.Name}}) marshalPersistPatchBSON(change nest.PersistChange) (data
 	return dataengine.FieldPatch{SetBSON: raw, Unset: append([]string(nil), change.Unset...)}, nil
 }
 
+{{- if syncFields .Dao.Fields}}
+
+// {{.Dao.Name}}SyncFields is the vocabulary for this DAO's dirty masks: which
+// field each bit means, and what it is called on the wire.
+//
+// It exists because the bit constants themselves are unexported — a packer
+// written outside this package can hand a mask to MarshalSync but cannot look
+// inside it, which is fine until the game has its own client protocol and has
+// to decide what changed (ARCH-06).
+//
+// **Bit is stable only within this generated schema.** Anything that outlives
+// the build — a stored projection, a client's cached layout — keys on Name or
+// WireName. The bits are not an ABI.
+func {{.Dao.Name}}SyncFields() []dataengine.SyncFieldMeta {
+	return []dataengine.SyncFieldMeta{
+{{- range syncFields .Dao.Fields}}
+		{Name: "{{.Name}}", WireName: "{{bsonKey .Name}}", Bit: {{fieldMaskName $.Dao.Name .Name}}},
+{{- end}}
+	}
+}
+
+// SyncFields is the same table, reachable from a value — a packer holds the
+// DAO, not the package.
+func (d *{{.Dao.Name}}) SyncFields() []dataengine.SyncFieldMeta { return {{.Dao.Name}}SyncFields() }
+{{- end}}
+
 func (d *{{.Dao.Name}}) MarshalSync(mask uint64) []byte {
 	doc := bson.M{
 		"_id": d.id,

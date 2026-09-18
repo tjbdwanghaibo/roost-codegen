@@ -6,6 +6,14 @@
 
 ### Added
 
+- **每个 DAO 生成同步字段词汇表 `<Dao>SyncFields()`**（M-12 / ARCH-06，需 core ≥ 下一版）。
+  返回 `[]dataengine.SyncFieldMeta{Name, WireName, Bit}`：每字段的掩码常量是包私有的，所以写在别处的 packer
+  能把掩码交给 `MarshalSync` 却看不进去。**bit 只在同一份生成产物内稳定**，跨越构建的东西按 Name / WireName 键。
+  运行时门新增 `syncfields_test.go`：改一个字段、读**真正的**脏掩码、再和表对照——文本比对证明不了这份表正确，
+  表和 setter 都从同一个模板来，一起写错也一起绿。
+- **game-demo：两条契约测试**。`TestTheBridgeKeepsEveryIdInTheEntityIdSpace` 钉住"scene bridge 建的每个 id 都是完整
+  entity id，离开这个空间只在 session resolver 一处"（W-2026-09-18-06 的分流要求）；
+  `TestAnEphemeralMonsterReplicatesButNeverPersists` 是全 nopersist DAO 的门禁——必须复制、且不得注册任何持久化 mutation。
 - **game-demo：地图第三批——刷怪，以及"非玩家主体"走同一条链路**（§9.4.3）。新 `Monster` 实体
   （kind 4，`noPersist=true lifetime=ephemeral`，`sync=true`）作为"只被看、不看"的 subject 进兴趣系统
   （新的 `Show` / `Hide` 入口），其余一整条链路与 Player 同一份代码。**它的 DAO 每个字段都是 `nopersist,sync`**：
