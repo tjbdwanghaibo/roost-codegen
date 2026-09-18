@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.15.13] - 2026-09-19
+
 ### Added
 
 - **`//roost:dao` 支持 `schema=N`**（默认 1，0 与非数字拒绝）。`<Dao>SchemaVersion` 此前写死为 1，于是生成的
