@@ -11,10 +11,8 @@ import (
 	"{{MODULE}}/game/runtimeid"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	lifecycle "{{MODULE}}/game/lifecycle"
-	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
-	"github.com/tjbdwanghaibo/roost-core/fctx"
 )
 
 // spawnTick is how often the spawner asks the scene what is missing. It is a
@@ -50,7 +48,7 @@ func startSpawner(ctx context.Context, registry *app.Registry, area *sceneentity
 	if err != nil {
 		return nil, nil, fmt.Errorf("spawner: %w", err)
 	}
-	ids, err := runtimeid.New(processSid())
+	ids, err := runtimeid.New(processSid(registry))
 	if err != nil {
 		return nil, nil, fmt.Errorf("spawner: %w", err)
 	}
@@ -157,11 +155,20 @@ func (s *spawner) drain(ctx context.Context) {
 // processSid is this process's server id, the same number every other part of
 // the deployment is keyed by. It is required: a process that does not know
 // which server it is cannot mint ids that are unique across servers.
-func processSid() int32 {
-	if config, ok := fctx.RuntimeConfig().(*viper.Viper); ok && config != nil {
-		return int32(config.GetInt("sid"))
+//
+// It comes from the registry's own configuration, which is the process's
+// config. `fctx.RuntimeConfig()` looks like the same thing and is not — that
+// slot holds whatever was set last, and the config-data Mod puts its active
+// snapshot there.
+func processSid(registry *app.Registry) int32 {
+	if registry == nil {
+		return 0
 	}
-	return 0
+	config := registry.Config()
+	if config == nil {
+		return 0
+	}
+	return int32(config.GetInt("sid"))
 }
 
 // Count and IDs are what the GM commands report.

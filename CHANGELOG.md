@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **spawner 从进程自己的配置读 sid**（U-0244，C4，T-138，**修 v1.15.11 的启动失败**）。v1.15.11 从
+  `fctx.RuntimeConfig()` 取 sid，而那个槽位保存的是最后一个写入者——`configdata` 发布快照时会把它覆盖，
+  于是类型断言失败、sid 为 0、U-0242 的启动校验（正确地）拒绝，**启用 game-demo 的工程整个 game 进程起不来**。
+  改用 `registry.Config()`（`app.Registry` 一直带着进程的 viper）。
+  **v1.15.11 生成的工程必须升级**，见 T-138。随工程生成 `spawner_test.go` 两条，其中一条在
+  `fctx` 槽位被别的东西占用时仍要求读到 sid——这正是线上发生的情形。
+
 ## [v1.15.11] - 2026-09-18
 
 ### Added

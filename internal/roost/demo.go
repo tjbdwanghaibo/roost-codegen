@@ -372,6 +372,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/runtimeid/runtimeid.go", why: "ids for entities the process creates at run time: the sid goes in the id, so two processes cannot mint the same one"},
 		{write: "game/runtimeid/runtimeid_test.go", why: "two shards never collide, an unencodable sid fails at startup, exhaustion refuses instead of wrapping"},
 		{write: "internal/service/game/spawner.go", why: "the population policy turned into Entities: create, place, replicate, and only then count"},
+		{write: "internal/service/game/spawner_test.go", why: "where the sid comes from: the registry's config, not the runtime-config slot the config-data Mod overwrites"},
 		{write: "internal/service/game/gm.go", why: "GM commands on the admin registry: add item / add exp / send mail / world stats, served by ops over HTTP behind a token"},
 		{run: enableDemoAdmin, why: "the dev config enables the ops admin endpoint with a dev token, so the GM commands are reachable on a developer machine"},
 		{write: "cmd/accountctl/main.go", why: "the operator surface account keeps off the bus: register the game server so CreateRole works"},
