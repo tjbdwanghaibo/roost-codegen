@@ -167,16 +167,26 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
 - **开始**：`SendGift`（10013）→ `StartGift` Nest 事务：在 A 的锁内检查背包够不够，然后 `saga.EmitStart`——start 意图和这次事务同一条 WAL 记录，
   Data Engine outbox 把它送到协调器（saga Mod 在 game 进程里，`saga.start` 效果）。saga id = 发送方 + 会话 + 帧序号，同一帧重发不会开第二个 saga。
   这步不动背包：检查是建议性的，道具在 debit 之前被花掉，debit 会以同一个 coded 错误拒绝，saga 以 failed 结束、无事可补。
-- **步骤**（`internal/service/game/gift_saga.go`，四个 `SubscribeMongoStep` 消费者）：debit = `GiftDebit` 事务（`Bag.RemoveItem`，不够是 `item_short`）；
-  debit 的补偿 = 既有的 `AddItem`；deliver = 查 Player 集合确认收件人进过游戏，再 `mail.Send` 带附件（RequestID = 命令的 IdempotencyKey，重投不重发）；
-  deliver 的补偿 = 什么也不做（邮件不撤回）。业务拒绝返回 `Success:false, Retryable:false`，协调器随即补偿已完成的步骤；基础设施错误返回 error 让投递退避重试。
+- **步骤**（`internal/service/game/gift_saga.go`，四个消费者，**两种形状**）：
+  - debit（`GiftDebit`，`Bag.RemoveItem`，不够是 `item_short`）与它的补偿（`GiftRefund`，`AddItem`）走**原生路径**
+    `saga.SubscribeDataEngineStep`：handler 在自己的 Nest 事务里 `inbox.Bind(command, reservation)` + `saga.EmitCompletion(...)`，
+    于是背包变更、命令回执、协调器等的完成结果是**同一条 WAL 记录**。重投会撞上回执、回放已存的完成结果而不是再扣一次；
+    提交前崩溃则三样都没发生。消费者自己不发布任何东西——它等回执被投影出来再 ack。
+  - deliver（查 Player 集合确认收件人进过游戏，再 `mail.Send` 带附件）的业务是一次 bus 调用，不是 Nest 事务，没有东西可以绑，
+    所以留在 `saga.SubscribeMongoStep`：Mongo inbox 先占命令 id，第二层幂等是 mail 服务自己的（Send 按 RequestID 去重，
+    而 RequestID 就是命令的 IdempotencyKey）。deliver 的补偿什么也不做（邮件不撤回）。
+  - 这条分界是规则不是权宜：原生路径给"业务本来就经 Nest 提交"的步骤用；拿它去包一次跨服务调用，等于把回执绑在一个
+    并不包含那次副作用的事务上。
+  - 业务拒绝也**提交**：不动数据，只写回执和一个失败的完成结果——协调器听不到的拒绝会让 saga 空等到 deadline。
+    只有基础设施错误才返回 error（回滚，让投递退避重试）。
 - **状态**：`GiftStatus`（10014）经 saga Engine 读记录。刚发完轮询会得到 `unknown`——start 意图还在 outbox → 协调器的路上；非本人的 saga 也是 `unknown`。
   终态：`completed` / `compensated` / `failed` / `manual_required`（补偿自己也拒绝了，例如退回时叠加已满——运维在 `gm.saga.list` 里看到并决定）。
 - **机器人**：送给自己（背包 −1）→ 轮询到终态 → `expect_gift completed` → 领邮件（背包 +1）；再送给玩家 1（从未进游戏）→ deliver 拒绝 → debit 补偿 →
   `expect_gift compensated`。两条路都在 `loadtest -count 6` 里跑。
-- **边界**：步骤的幂等靠 Mongo inbox 先占命令 id；debit / 退回是 Nest 事务，不在那个 Mongo 事务里——进程死在 Nest 提交与 inbox 提交之间，重投会再扣一次
-  （和 claim token 那条一样的边界）。saga 包的原生路径（`SubscribeDataEngineStep` + `inbox.Bind` 进 Nest 事务）把回执和变更一起提交，能关掉这个窟窿，
-  但它的完成效果目前没有消费者（roost-core `docs/bug/WANTED.md` W-2026-09-17-04），demo 没用。
+- **边界**：原生路径要求 core ≥ v1.15.7——协调器直到那一版才有原生完成效果的消费者（U-0231）。
+  `LeaseDuration` 必须长于消费者的 `AckWait`（demo 取 2 分钟 vs 30 秒），否则租约会在消息还没 ack 时过期、让第二个进程开始同一条命令；
+  消费者会当场拒绝这种配置。载荷解不出来的命令没有事务可以承载拒绝，只能靠重投与 deadline 收场。
+  deliver 那条仍然是"两次提交"：mail 服务的去重是第二层，不是同一条记录。
 - **需要 core ≥ v1.15.6 / kit ≥ v1.14.7**：此前 Mongo 存储上任何步骤拒绝都进不了补偿（U-0225，`step result timeout` 反复出现），送给玩家 1 那一段会卡住。
 
 ## 技能目录：启动时编译，客户端可查

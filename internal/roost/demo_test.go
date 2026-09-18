@@ -312,8 +312,26 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if definition := read("saga/gift_item/definition.go"); !strings.Contains(definition, "saga.SubscribeMongoStep(") || strings.Contains(definition, "saga.SubscribeStep(") {
 		t.Errorf("generated saga definition still uses the deprecated SubscribeStep")
 	}
-	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, "giftitem.SubscribeDebitCompensation") || !strings.Contains(steps, "RequestID: \"gift:\" + command.IdempotencyKey") {
-		t.Errorf("gift saga steps do not subscribe the compensation or key the mail by the command's idempotency key")
+	// Two step shapes, one per kind of work: the Nest-transaction steps bind
+	// their receipt and emit their completion inside the transaction (the
+	// native path), the mail step keeps the Mongo inbox and the mail
+	// service's own RequestID dedupe.
+	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, "saga.SubscribeDataEngineStep(") || !strings.Contains(steps, "saga.SubscribeMongoStep(") || !strings.Contains(steps, "RequestID: \"gift:\" + command.IdempotencyKey") {
+		t.Errorf("gift saga does not run the Nest steps natively while keeping the mail step on the Mongo inbox")
+	}
+	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, "giftitem.TopicDebit") || !strings.Contains(steps, "saga.NewDataEngineStepInbox(") {
+		t.Errorf("gift saga does not address the generated topics or build the native inbox")
+	}
+	if debit := read("game/handler/gift_debit.go"); !strings.Contains(debit, "step.Complete(true, \"\")") || !strings.Contains(debit, "step.Complete(false, reason)") {
+		t.Errorf("the debit handler does not commit its receipt and outcome in the transaction")
+	}
+	if contract := read("game/gift/gift.go"); !strings.Contains(contract, "func (step NativeStep) Complete(") || !strings.Contains(contract, "saga.EmitCompletion(") {
+		t.Errorf("the gift contract has no native step carrier")
+	}
+	// A step's topics come from the generated definition, so a durable and
+	// its filter cannot drift apart.
+	if definition := read("saga/gift_item/definition.go"); !strings.Contains(definition, "TopicDebit = ") || !strings.Contains(definition, "TopicDebitCompensation = ") {
+		t.Errorf("the generated saga definition exposes no topic constants, so the native path has to repeat the strings")
 	}
 	// player_id takes either id an operator has at hand: the unique id the
 	// client sees or the full entity id Mongo stores as _id. Re-wrapping a

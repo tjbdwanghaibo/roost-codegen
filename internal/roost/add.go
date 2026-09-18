@@ -439,13 +439,23 @@ func addArtifact(root string, m Manifest, o AddOptions) ([]string, error) {
 		}
 		path = "saga/" + snake + "/definition.go"
 		var steps strings.Builder
+		var topics strings.Builder
 		var subscribers strings.Builder
 		for _, stepName := range o.Steps {
 			stepSnake, stepPascal := toSnake(stepName), toPascal(stepName)
 			if !validName(stepSnake) {
 				return nil, fmt.Errorf("invalid saga step %q", stepName)
 			}
-			fmt.Fprintf(&steps, "\t\t{Name: %q, ForwardTopic: %q, CompensateTopic: %q, Timeout: 5 * time.Second, MaxAttempts: 5, BackoffMin: 100 * time.Millisecond, BackoffMax: 5 * time.Second}, // %s\n", stepSnake, snake+"."+stepSnake, snake+"."+stepSnake+".compensate", stepPascal)
+			fmt.Fprintf(&steps, "\t\t{Name: %q, ForwardTopic: Topic%s, CompensateTopic: Topic%sCompensation, Timeout: 5 * time.Second, MaxAttempts: 5, BackoffMin: 100 * time.Millisecond, BackoffMax: 5 * time.Second},\n", stepSnake, stepPascal, stepPascal)
+			// The topics as constants, so a project can address them without
+			// repeating the strings: the Subscribe* helpers below take a
+			// Mongo inbox, and a step whose business is a Nest transaction
+			// subscribes with saga.SubscribeDataEngineStep and these topics
+			// instead (roost-core/saga's native path).
+			fmt.Fprintf(&topics, "\t// Topic%s is the forward topic of step %s.\n", stepPascal, stepSnake)
+			fmt.Fprintf(&topics, "\tTopic%s = %q\n", stepPascal, snake+"."+stepSnake)
+			fmt.Fprintf(&topics, "\t// Topic%sCompensation is its compensation topic.\n", stepPascal)
+			fmt.Fprintf(&topics, "\tTopic%sCompensation = %q\n", stepPascal, snake+"."+stepSnake+".compensate")
 			fmt.Fprintf(&subscribers, "\nfunc Subscribe%s(ctx context.Context, client fnats.IJetStream, transport *saga.JetStreamPublisher, inbox *saga.MongoCommandInbox, stream, durable string, handler saga.StepHandler) (fnats.IJetStreamSubscription, error) {\n\treturn saga.SubscribeMongoStep(ctx, client, transport, inbox, saga.StepConsumerConfig{Stream: stream, Durable: durable, Topic: %q}, handler)\n}\n\nfunc Subscribe%sCompensation(ctx context.Context, client fnats.IJetStream, transport *saga.JetStreamPublisher, inbox *saga.MongoCommandInbox, stream, durable string, handler saga.StepHandler) (fnats.IJetStreamSubscription, error) {\n\treturn saga.SubscribeMongoStep(ctx, client, transport, inbox, saga.StepConsumerConfig{Stream: stream, Durable: durable, Topic: %q}, handler)\n}\n", stepPascal, snake+"."+stepSnake, stepPascal, snake+"."+stepSnake+".compensate")
 		}
 		body = fmt.Sprintf(`package %s
@@ -462,6 +472,13 @@ const (
 	Type = %q
 	Version uint32 = 1
 )
+
+// The step topics. A step whose business is a Nest transaction subscribes
+// with saga.SubscribeDataEngineStep and binds its receipt inside that
+// transaction; one whose business is a call into another service uses the
+// Mongo inbox helpers below. Both address the same topics.
+const (
+%s)
 
 func Definition() saga.Definition {
 	return saga.Definition{Type: Type, Version: Version, Steps: []saga.Step{
@@ -493,7 +510,7 @@ func EmitStart(businessKey string, state []byte, deadline time.Time) error {
 func Start(ctx context.Context, engine *saga.Engine, businessKey string, state []byte, deadline time.Time) (saga.Record, error) {
 	return engine.StartSaga(ctx, saga.StartRequest{Type: Type, DefinitionVersion: Version, BusinessKey: businessKey, Data: state, DeadlineAt: deadline})
 }
-%s`, snake, snake, steps.String(), subscribers.String())
+%s`, snake, snake, topics.String(), steps.String(), subscribers.String())
 	default:
 		return nil, fmt.Errorf("unsupported artifact kind %q", o.Kind)
 	}

@@ -6,6 +6,8 @@
 
 ### Added
 
+- **game-demo：送礼 saga 的两个 Nest 步骤改走原生路径**（§9.1 第 2 条，需 core ≥ v1.15.7）。debit 与它的补偿（新 handler `GiftRefund`，不再借用 `AddItem`）用 `saga.SubscribeDataEngineStep`：handler 在自己的 Nest 事务里 `inbox.Bind(command, reservation)` + `saga.EmitCompletion(...)`，背包变更、命令回执、协调器等的完成结果落进**同一条 WAL 记录**——重投撞上回执回放已存结果，提交前崩溃则三样都没发生。此前这是两次提交，中间的窗口写在注释里当边界。deliver 的业务是一次 bus 调用、没有事务可绑，**刻意留在** `SubscribeMongoStep`（第二层幂等是 mail 服务的 RequestID 去重）；这条分界是规则，拿原生路径包跨服务调用等于把回执绑在不含那次副作用的事务上。业务拒绝也提交（不动数据，只写回执和失败的完成结果），只有基础设施错误回滚重投。新增 `gift.NativeStep` carrier 与 `Complete(success, reason)`。实跑：6 机器人全过、6 completed + 6 compensated，Mongo 里 `saga-step` 回执 18 条（debit + refund）、Mongo step inbox 12 条（全是 deliver）。
+- **`roost add saga` 生成步骤 topic 常量**（`TopicDebit` / `TopicDebitCompensation` …）。此前只生成绑定 Mongo inbox 的 `Subscribe*` 助手，想走原生路径就得自己重复 topic 字符串；现在 durable 与 filter 由同一份常量给出，不会漂。
 - **game-demo：邮件附件的领取做成恰好一次**（§9.1 第 1 条，与 dungeon 清关奖励同形）。`ClaimMail` 的三步里，中间那一步换成 `ClaimMailReward` 事务：邮件 id 与道具进同一条 WAL 记录（`db/def/player.go` 的 `MailClaims` 账本、`Bag.ClaimMailReward`、新 errcode `mail_claim`(100011)）。三次调用不可能合成一个事务——邮件在另一个进程——所以窗口是真的：发放成功、`CommitClaim` 丢失、预留到期、重试用同一个 token 再预留一次；邮件服务只能算作重复**尝试**（它无从知道游戏发没发），游戏这边知道，第二次发放什么也不做。账本按时间清理，保留期长于 `mail.send_ttl`（720h），论证在 `game/rewards`。随工程生成 `game/handler/claim_mail_reward_test.go`：真实 handler 跑在真实 Nest 事务里（一个只发一个实体的 Getter + 记录型 committer + 工程自己的配置数据），去掉账本判断即红（重放拿到第二叠）。机器人加 `claim_mail_replay`。仍然开着的两处写在 README。
 
 - **生成工程一条命令起全部服务：`make dev-run` / `dev-stop` / `dev-status` / `dev-smoke`**（`deploy/dev/run.sh`，codegen 受控）。按托管服务 → 业务服务的顺序 `go build` 后起每个进程、等各自 `/readyz`，有 `cmd/accountctl` 的工程（game-demo）顺手把 sid 注册进 account；pid 与日志在 `.dev/`（已入 .gitignore）。配套：**每个服务的本机配置有自己的 ops 端口**（业务服务按名从 9100 起，托管服务接在后面；生产配置仍统一 9100），此前五个进程都监听 9100、同机只能起一个。

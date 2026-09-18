@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
+	"time"
 
 	player "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/gift"
@@ -30,22 +32,27 @@ import (
 // compensation — run the business, and publish the completion the
 // coordinator waits for.
 //
-// What a step is allowed to be: idempotent per command. SubscribeMongoStep
-// wraps the handler in a Mongo transaction that first reserves the command
-// id in an inbox collection, so a redelivered command (JetStream retries
-// until the completion is published) replays the stored completion instead
-// of running the handler again. The two side effects here are not Mongo
-// writes in that transaction, so each has its own second layer:
+// What a step is allowed to be: idempotent per command. The framework offers
+// two shapes and this saga uses both, because its steps are two kinds of work:
 //
-//   - the mail service deduplicates Send by RequestID, and the RequestID is
-//     the command's IdempotencyKey (stable across attempts of one step);
-//   - the Nest transactions (debit, refund) have no such key. If this
-//     process dies after the Nest commit and before the inbox transaction
-//     commits, the redelivery runs the debit again. That is the demo's
-//     stated boundary, the same one claim_mail has; the saga package's
-//     native path (SubscribeDataEngineStep + inbox.Bind inside the Nest
-//     handler) closes it by committing the receipt with the mutation, and
-//     is the next step for a project that needs it.
+//   - **debit and its compensation are Nest transactions**, so they take the
+//     native path: `SubscribeDataEngineStep` + `inbox.Bind` + `EmitCompletion`
+//     INSIDE the handler's transaction (see gift.NativeStep). The Bag change,
+//     the command's receipt and the completion the coordinator waits for are
+//     one WAL record: a redelivery finds the receipt and replays the stored
+//     completion instead of debiting again, and a crash before the commit
+//     leaves none of the three. The consumer publishes nothing — it waits
+//     for that receipt to be projected, then acknowledges.
+//   - **deliver is a mail call**, not a Nest transaction, so there is nothing
+//     to bind it to. It stays on `SubscribeMongoStep`, whose Mongo inbox
+//     reserves the command id before the handler runs; its second layer of
+//     idempotency is the mail service's own, since Send deduplicates by
+//     RequestID and the RequestID is the command's IdempotencyKey.
+//
+// That split is the rule, not a demo convenience: the native path is for a
+// step whose business already commits through Nest. Using it for a step that
+// calls another service would bind a receipt to a transaction that does not
+// contain the side effect.
 //
 // How a step reports: a coded business refusal (the sender no longer has
 // the items, the recipient's mailbox is full) is a completion with
@@ -93,24 +100,51 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (func(), error) 
 	if err != nil {
 		return nil, fmt.Errorf("gift saga: %w", err)
 	}
-	steps := giftSteps{nest: nestClient, mailer: mailer, mongo: mongoClient, gameDatabase: gameDatabase}
+	// The native inbox lives in the Data Engine's database, not the saga's:
+	// the receipt it binds is a lease fence on that database, and it is
+	// projected by the same commit that carries the Bag change.
+	//
+	// Owner names this process — two replicas must not claim one command —
+	// and LeaseDuration has to outlast the consumer's AckWait, or a lease
+	// could expire while the message is still un-acked and let a second
+	// process start the same command. The consumer refuses a configuration
+	// where it does not.
+	nativeInbox, err := saga.NewDataEngineStepInbox(mongoClient, gameDatabase, saga.DataEngineStepInboxOptions{
+		Owner:         giftSagaDurable + "-" + processOwnerSuffix(),
+		LeaseDuration: 2 * time.Minute,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gift saga: %w", err)
+	}
+	steps := giftSteps{nest: nestClient, mailer: mailer, mongo: mongoClient, gameDatabase: gameDatabase, inbox: nativeInbox}
 	subscriptions := make([]fnats.IJetStreamSubscription, 0, 4)
 	stop := func() {
 		for _, subscription := range subscriptions {
 			subscription.Drain()
 		}
 	}
+	// One consumer per topic, each with the shape its business needs. The
+	// topic constants come from the generated definition, so the durable and
+	// the filter can never drift apart.
 	for _, consumer := range []struct {
-		name      string
-		subscribe func(context.Context, fnats.IJetStream, *saga.JetStreamPublisher, *saga.MongoCommandInbox, string, string, saga.StepHandler) (fnats.IJetStreamSubscription, error)
-		handler   saga.StepHandler
+		name    string
+		topic   string
+		handler saga.StepHandler
+		native  bool
 	}{
-		{"debit", giftitem.SubscribeDebit, steps.debit},
-		{"debit-undo", giftitem.SubscribeDebitCompensation, steps.refund},
-		{"deliver", giftitem.SubscribeDeliver, steps.deliver},
-		{"deliver-undo", giftitem.SubscribeDeliverCompensation, steps.nothingToUndo},
+		{"debit", giftitem.TopicDebit, steps.debit, true},
+		{"debit-undo", giftitem.TopicDebitCompensation, steps.refund, true},
+		{"deliver", giftitem.TopicDeliver, steps.deliver, false},
+		{"deliver-undo", giftitem.TopicDeliverCompensation, steps.nothingToUndo, false},
 	} {
-		subscription, err := consumer.subscribe(ctx, jetstream, transport, inbox, stream, giftSagaDurable+"-"+consumer.name, consumer.handler)
+		config := saga.StepConsumerConfig{Stream: stream, Durable: giftSagaDurable + "-" + consumer.name, Topic: consumer.topic}
+		var subscription fnats.IJetStreamSubscription
+		var err error
+		if consumer.native {
+			subscription, err = saga.SubscribeDataEngineStep(ctx, jetstream, transport, nativeInbox, config, consumer.handler)
+		} else {
+			subscription, err = saga.SubscribeMongoStep(ctx, jetstream, transport, inbox, config, consumer.handler)
+		}
 		if err != nil {
 			stop()
 			return nil, fmt.Errorf("gift saga: subscribe %s: %w", consumer.name, err)
@@ -120,11 +154,35 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (func(), error) 
 	return stop, nil
 }
 
+// processOwnerSuffix distinguishes this process's claims from another
+// replica's. A stable per-process value is enough: a claim is released when
+// the step finishes or its lease expires.
+func processOwnerSuffix() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "unknown"
+	}
+	return fmt.Sprintf("%s-%d", host, os.Getpid())
+}
+
 type giftSteps struct {
 	nest         corenest.Client
 	mailer       svcmail.Mail
 	mongo        fmongo.IMongo
 	gameDatabase string
+	inbox        *saga.DataEngineStepInbox
+}
+
+// nativeStep gathers what a Nest-transaction step carries into its handler.
+// The reservation comes from the consumer, on the context, and is
+// deliberately not ambient: it names this delivery's claim, and copying it
+// into a detached goroutine would let two deliveries share one claim.
+func (steps giftSteps) nativeStep(ctx context.Context, command saga.Command) (gift.NativeStep, error) {
+	reservation, ok := saga.ReservationFromContext(ctx)
+	if !ok {
+		return gift.NativeStep{}, fmt.Errorf("gift saga: no reservation on the context; this step must run under SubscribeDataEngineStep")
+	}
+	return gift.NativeStep{Inbox: steps.inbox, Command: command, Reservation: reservation}, nil
 }
 
 // debit takes the items out of the sender's Bag. The sender may have spent
@@ -133,15 +191,22 @@ type giftSteps struct {
 func (steps giftSteps) debit(ctx context.Context, command saga.Command) (saga.Completion, error) {
 	state, entityID, err := giftTarget(command, func(state gift.State) int64 { return state.From })
 	if err != nil {
-		return refuse(err.Error()), nil
-	}
-	if _, err := syncsender.NewGiftDebitSender(steps.nest).Sync_GiftDebit(ctx, entityID, state.ItemID, state.Count); err != nil {
-		if code, reason := errcode.ClientError(err); code != errcode.CodeInternal {
-			return refuse(reason), nil
-		}
+		// The payload is not a gift, so there is no transaction to carry a
+		// refusal. This delivery fails and is retried; the saga's deadline is
+		// what ends it. A payload this broken is a bug, not a business
+		// outcome.
 		return saga.Completion{}, err
 	}
-	return saga.Completion{Success: true}, nil
+	step, err := steps.nativeStep(ctx, command)
+	if err != nil {
+		return saga.Completion{}, err
+	}
+	// The completion is emitted inside the transaction, so nothing is
+	// returned for the consumer to publish: it waits for the receipt.
+	if _, err := syncsender.NewGiftDebitSender(steps.nest).Sync_GiftDebit(ctx, entityID, state.ItemID, state.Count, step); err != nil {
+		return saga.Completion{}, err
+	}
+	return saga.Completion{}, nil
 }
 
 // refund is debit's compensation: the same AddItem transaction the endpoint
@@ -151,15 +216,16 @@ func (steps giftSteps) debit(ctx context.Context, command saga.Command) (saga.Co
 func (steps giftSteps) refund(ctx context.Context, command saga.Command) (saga.Completion, error) {
 	state, entityID, err := giftTarget(command, func(state gift.State) int64 { return state.From })
 	if err != nil {
-		return refuse(err.Error()), nil
-	}
-	if _, err := syncsender.NewAddItemSender(steps.nest).Sync_AddItem(ctx, entityID, state.ItemID, state.Count); err != nil {
-		if code, reason := errcode.ClientError(err); code != errcode.CodeInternal {
-			return refuse(reason), nil
-		}
 		return saga.Completion{}, err
 	}
-	return saga.Completion{Success: true}, nil
+	step, err := steps.nativeStep(ctx, command)
+	if err != nil {
+		return saga.Completion{}, err
+	}
+	if _, err := syncsender.NewGiftRefundSender(steps.nest).Sync_GiftRefund(ctx, entityID, state.ItemID, state.Count, step); err != nil {
+		return saga.Completion{}, err
+	}
+	return saga.Completion{}, nil
 }
 
 // deliver mails the item to the recipient. A recipient who has never
