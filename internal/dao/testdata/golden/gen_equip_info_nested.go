@@ -102,6 +102,13 @@ func (s EquipInfo) gemsRawMap() map[int32]*GemInfo {
 func (s *EquipInfo) setGemsRawMap(src map[int32]*GemInfo) {
 	s.gems = fmap.NewSmallSafeMap[int32, *GemInfo](len(src))
 	for key, val := range src {
+		// A child's change has to reach this struct, or the DAO above sees
+		// nothing and the change never enters the persist patch
+		// (RR-20260917-05). Bound here as well as in the setter, because a
+		// restore is how a loaded document gets its children.
+		if val != nil {
+			val.SetNotify(s.Mark)
+		}
 		s.gems.Set(key, val)
 	}
 }
@@ -171,8 +178,22 @@ func (s *EquipInfo) SetGems(v map[int32]*GemInfo) {
 			panic(fmt.Errorf("EquipInfo: record undo: %w", err))
 		}
 	}
+	// The children being replaced stop reporting: a detached child marking
+	// a parent it no longer belongs to is a dirty flag nobody can explain
+	// (RR-20260917-05).
+	if s.gems != nil {
+		s.gems.Range(func(_ int32, old *GemInfo) bool {
+			if old != nil {
+				old.SetNotify(nil)
+			}
+			return true
+		})
+	}
 	s.gems = fmap.NewSmallSafeMap[int32, *GemInfo](len(v))
 	for key, val := range v {
+		if val != nil {
+			val.SetNotify(s.Mark)
+		}
 		s.gems.Set(key, val)
 	}
 	s.Mark()

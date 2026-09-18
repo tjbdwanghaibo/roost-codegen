@@ -62,6 +62,21 @@ func (s *{{.Nested.Name}}) setBSONDoc(doc {{lower1 .Nested.Name}}BSONDoc) {
 	s.set{{.Name}}RawMap({{fromWire . (printf "doc.%s" .Name)}})
 {{- else}}
 	s.{{fieldVar .Name}} = {{fromWire . (printf "doc.%s" .Name)}}
+{{- if and (eq .Kind 1) (isNested .SliceElem) .IsPtr}}
+	for _, val := range s.{{fieldVar .Name}} {
+		if val != nil {
+			val.SetNotify(s.Mark)
+		}
+	}
+{{- else if and (eq .Kind 3) (isNested .TypeStr)}}
+{{- if .IsPtr}}
+	if s.{{fieldVar .Name}} != nil {
+		s.{{fieldVar .Name}}.SetNotify(s.Mark)
+	}
+{{- else}}
+	s.{{fieldVar .Name}}.SetNotify(s.Mark)
+{{- end}}
+{{- end}}
 {{- end}}
 {{- end}}
 }
@@ -115,6 +130,15 @@ func (s {{$.Nested.Name}}) {{fieldVar .Name}}RawMap() {{rawMapType .}} {
 func (s *{{$.Nested.Name}}) set{{.Name}}RawMap(src {{rawMapType .}}) {
 	s.{{fieldVar .Name}} = {{mapNewExpr . "len(src)"}}
 	for key, val := range src {
+{{- if and (isNested .MapVal) .IsPtr}}
+		// A child's change has to reach this struct, or the DAO above sees
+		// nothing and the change never enters the persist patch
+		// (RR-20260917-05). Bound here as well as in the setter, because a
+		// restore is how a loaded document gets its children.
+		if val != nil {
+			val.SetNotify(s.Mark)
+		}
+{{- end}}
 		s.{{fieldVar .Name}}.Set(key, val)
 	}
 }
@@ -185,16 +209,53 @@ func (s *{{$.Nested.Name}}) Set{{.Name}}(v {{if eq .Kind 2}}{{rawMapType .}}{{el
 		s.Mark()
 	}
 {{- else if eq .Kind 2}}
+{{- if and (isNested .MapVal) .IsPtr}}
+	// The children being replaced stop reporting: a detached child marking
+	// a parent it no longer belongs to is a dirty flag nobody can explain
+	// (RR-20260917-05).
+	if s.{{fieldVar .Name}} != nil {
+		s.{{fieldVar .Name}}.Range(func(_ {{.MapKey}}, old {{mapValType .}}) bool {
+			if old != nil {
+				old.SetNotify(nil)
+			}
+			return true
+		})
+	}
+{{- end}}
 	s.{{fieldVar .Name}} = {{mapNewExpr . "len(v)"}}
 	for key, val := range v {
+{{- if and (isNested .MapVal) .IsPtr}}
+		if val != nil {
+			val.SetNotify(s.Mark)
+		}
+{{- end}}
 		s.{{fieldVar .Name}}.Set(key, val)
 	}
 	s.Mark()
 {{- else if eq .Kind 1}}
+{{- if and (isNested .SliceElem) .IsPtr}}
+	for _, old := range s.{{fieldVar .Name}} {
+		if old != nil {
+			old.SetNotify(nil)
+		}
+	}
+{{- end}}
 	s.{{fieldVar .Name}} = append({{.TypeStr}}(nil), v...)
+{{- if and (isNested .SliceElem) .IsPtr}}
+	for _, val := range s.{{fieldVar .Name}} {
+		if val != nil {
+			val.SetNotify(s.Mark)
+		}
+	}
+{{- end}}
 	s.Mark()
 {{- else}}
 	s.{{fieldVar .Name}} = v
+{{- if and (isNested .TypeStr) .IsPtr}}
+	if s.{{fieldVar .Name}} != nil {
+		s.{{fieldVar .Name}}.SetNotify(s.Mark)
+	}
+{{- end}}
 	s.Mark()
 {{- end}}
 }

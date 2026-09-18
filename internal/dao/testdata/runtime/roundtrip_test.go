@@ -105,3 +105,79 @@ func TestNilNestedPointersStayNull(t *testing.T) {
 		t.Fatalf("nil element not preserved: %s", bson.Raw(raw).String())
 	}
 }
+
+// U-0232 · C2 · RR-20260917-05（Wanted-02 转入）：嵌套结构的第二层也要往上通知。
+// 旧行为：DAO 会把自己的嵌套字段接到 markXDirty（template_dao.go），但一个嵌套结构
+// 内部的嵌套（EquipInfo 的 gems、Position 这类）从不 SetNotify，于是业务
+// GetGems(1).SetLevel(...) 改了 child、父级 EquipInfo 不脏、DAO 顶层也拿不到补丁——
+// 数据在内存里变了，落库时不在 patch 里。三个入口都要接：公开 setter、raw 恢复、BSON 恢复。
+
+// countingParent installs a counter on a nested struct's dirty hook so a test
+// can see whether a child's change reached it.
+func countingParent(equip *EquipInfo) *int {
+	marks := 0
+	equip.SetNotify(func() { marks++ })
+	return &marks
+}
+
+func TestNestedChildChangeMarksItsParentThroughEveryEntry(t *testing.T) {
+	for name, build := range map[string]func() *EquipInfo{
+		"raw restore": func() *EquipInfo {
+			equip := &EquipInfo{level: 1}
+			equip.setGemsRawMap(map[int32]*GemInfo{1: {id: 1, level: 5}})
+			return equip
+		},
+		"public setter": func() *EquipInfo {
+			equip := &EquipInfo{level: 1}
+			equip.SetGems(map[int32]*GemInfo{1: {id: 1, level: 5}})
+			return equip
+		},
+		"bson round trip": func() *EquipInfo {
+			source := &EquipInfo{level: 1}
+			source.setGemsRawMap(map[int32]*GemInfo{1: {id: 1, level: 5}})
+			raw, err := bson.Marshal(source)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var restored EquipInfo
+			if err := bson.Unmarshal(raw, &restored); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			return &restored
+		},
+	} {
+		equip := build()
+		marks := countingParent(equip)
+		gem, ok := equip.GetGems(1)
+		if !ok || gem == nil {
+			t.Fatalf("%s: the gem is not there", name)
+		}
+		gem.SetLevel(99)
+		if *marks == 0 {
+			t.Errorf("%s: changing a child gem did not mark its EquipInfo; the DAO cannot see the change", name)
+		}
+		// The control: changing the parent itself always marked it.
+		before := *marks
+		equip.SetStar(3)
+		if *marks == before {
+			t.Errorf("%s: changing the parent did not mark it either", name)
+		}
+	}
+}
+
+// A child that has been replaced must not keep marking its old parent: a
+// detached object reporting into a live one is a dirty flag nobody can
+// explain.
+func TestReplacedChildStopsMarkingTheOldParent(t *testing.T) {
+	equip := &EquipInfo{level: 1}
+	old := &GemInfo{id: 1, level: 5}
+	equip.setGemsRawMap(map[int32]*GemInfo{1: old})
+	marks := countingParent(equip)
+
+	equip.SetGems(map[int32]*GemInfo{1: {id: 1, level: 7}})
+	after := *marks
+	old.SetLevel(42)
+	if *marks != after {
+		t.Errorf("a replaced child still marks its old parent")
+	}
+}
