@@ -8,10 +8,13 @@ import (
 	"time"
 
 	monster "{{MODULE}}/game/entities/monster"
+	"{{MODULE}}/game/runtimeid"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	lifecycle "{{MODULE}}/game/lifecycle"
+	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/fctx"
 )
 
 // spawnTick is how often the spawner asks the scene what is missing. It is a
@@ -28,30 +31,31 @@ const spawnTick = time.Second
 // the entity packages hold the scene runtime. A system that created its own
 // Entities would be an import cycle.
 //
-// Monster ids come from a process-local counter offset by a base. That is
-// enough for one game process and wrong for two — a second process would mint
-// the same ids — and it is called out here rather than hidden because the
-// multi-process story (see the demo README) changes it.
+// Monster ids come from game/runtimeid: the process's sid is encoded into the
+// id, so two game processes cannot mint the same one. A local counter was the
+// first version of this and it was wrong for exactly the deployment the rest
+// of the demo is built for (RR-20260918-09).
 type spawner struct {
 	area   *sceneentity.Scene
 	bridge *Scene
 	lives  *lifecycle.MonsterLifecycle
+	ids    *runtimeid.Allocator
 
 	mu       sync.Mutex
-	nextID   int64
 	monsters map[int64]*monster.Monster
 }
-
-const monsterUniqueIDBase int64 = 900000
 
 func startSpawner(ctx context.Context, registry *app.Registry, area *sceneentity.Scene, bridge *Scene) (func(), *spawner, error) {
 	lives, err := lifecycle.MonsterFromRegistry(registry)
 	if err != nil {
 		return nil, nil, fmt.Errorf("spawner: %w", err)
 	}
+	ids, err := runtimeid.New(processSid())
+	if err != nil {
+		return nil, nil, fmt.Errorf("spawner: %w", err)
+	}
 	instance := &spawner{
-		area: area, bridge: bridge, lives: lives,
-		nextID:   monsterUniqueIDBase,
+		area: area, bridge: bridge, lives: lives, ids: ids,
 		monsters: make(map[int64]*monster.Monster),
 	}
 	loopCtx, cancel := context.WithCancel(ctx)
@@ -92,7 +96,14 @@ func (s *spawner) refill(ctx context.Context, now time.Time) {
 		return
 	}
 	for _, request := range refresh.Due(now) {
-		value, err := s.lives.Create(ctx, s.mintID())
+		uniqueID, err := s.ids.Next()
+		if err != nil {
+			// The sequence is exhausted. Refusing is the point: wrapping
+			// would re-mint ids that are still in use.
+			slog.Error("spawner: out of runtime ids", "err", err)
+			return
+		}
+		value, err := s.lives.Create(ctx, uniqueID)
 		if err != nil {
 			slog.Warn("spawner: monster not created", "group", request.Group, "err", err)
 			continue
@@ -143,11 +154,14 @@ func (s *spawner) drain(ctx context.Context) {
 	}
 }
 
-func (s *spawner) mintID() int64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.nextID++
-	return s.nextID
+// processSid is this process's server id, the same number every other part of
+// the deployment is keyed by. It is required: a process that does not know
+// which server it is cannot mint ids that are unique across servers.
+func processSid() int32 {
+	if config, ok := fctx.RuntimeConfig().(*viper.Viper); ok && config != nil {
+		return int32(config.GetInt("sid"))
+	}
+	return 0
 }
 
 // Count and IDs are what the GM commands report.

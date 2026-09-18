@@ -8,7 +8,6 @@ import (
 	generated "{{MODULE}}/configs/generated"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/rewards"
 	"github.com/tjbdwanghaibo/roost-core/configdata"
 	"github.com/tjbdwanghaibo/roost-core/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/entity"
@@ -102,7 +101,7 @@ func TestMailAttachmentIsGrantedOnce(t *testing.T) {
 	ctx := context.Background()
 	sender := syncsender.NewClaimMailRewardSender(client)
 
-	first, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), mailID, manaPotion, 1, now)
+	first, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), mailID, manaPotion, 1, now+3600, now)
 	if err != nil {
 		t.Fatalf("first claim: %v", err)
 	}
@@ -112,7 +111,7 @@ func TestMailAttachmentIsGrantedOnce(t *testing.T) {
 
 	// The replay: the same mail again, exactly what a lost CommitClaim leads
 	// to. Without the ledger this is a second stack.
-	second, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), mailID, manaPotion, 1, now)
+	second, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), mailID, manaPotion, 1, now+3600, now)
 	if err != nil {
 		t.Fatalf("replayed claim: %v", err)
 	}
@@ -127,7 +126,7 @@ func TestMailAttachmentIsGrantedOnce(t *testing.T) {
 	}
 
 	// A different mail is a different claim.
-	other, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "mail-2", manaPotion, 1, now)
+	other, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "mail-2", manaPotion, 1, now+3600, now)
 	if err != nil {
 		t.Fatalf("second mail: %v", err)
 	}
@@ -142,30 +141,62 @@ func TestMailAttachmentIsGrantedOnce(t *testing.T) {
 	}
 }
 
-// The ledger is bounded by time, and the bound outlives any mail that could
-// still be reserved. Pruning happens on the write path.
-func TestExpiredMailClaimsArePruned(t *testing.T) {
+// The ledger is bounded by the MAIL's own expiry, not by a number this game
+// picked. That is the whole of RR-20260918-05: a fixed retention has to be
+// argued against another service's configuration, and `mail.send_ttl` only
+// has to be positive — a deployment that keeps mail for forty days is legal
+// and makes a thirty-one day ledger forget while the envelope is still
+// claimable.
+func TestMailClaimsArePrunedByTheMailsOwnExpiry(t *testing.T) {
 	subject, client, _ := newClaimHarness(t)
 	const now int64 = 1_800_000_000
-	old := now - rewards.ClaimRetentionSeconds - 1
 	ctx := context.Background()
 	sender := syncsender.NewClaimMailRewardSender(client)
 
-	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "stale", 1002, 1, old); err != nil {
-		t.Fatalf("recording the old claim: %v", err)
+	// A mail whose envelope expired an hour ago: nothing can reserve it any
+	// more, so remembering that it was granted buys nothing.
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "expired", 1002, 1, now-3600, now); err != nil {
+		t.Fatalf("recording the expired mail's claim: %v", err)
 	}
-	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "fresh", 1002, 1, now); err != nil {
-		t.Fatalf("recording the fresh claim: %v", err)
+	// A mail that is still claimable for another forty days — longer than any
+	// retention this game could have invented.
+	stillLive := now + 40*24*60*60
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "live", 1002, 1, stillLive, now); err != nil {
+		t.Fatalf("recording the live mail's claim: %v", err)
 	}
-	if subject.BagComp().MailRewardClaimed("stale") {
-		t.Error("a claim older than the retention is still held")
+	if subject.BagComp().MailRewardClaimed("expired") {
+		t.Error("a claim whose mail can no longer be reserved is still held")
 	}
-	if !subject.BagComp().MailRewardClaimed("fresh") {
-		t.Error("the fresh claim was pruned")
+	if !subject.BagComp().MailRewardClaimed("live") {
+		t.Error("a claim whose mail is still claimable was pruned; a replay would be paid again")
 	}
-	// The hold must outlast the longest mail the game can send; the generated
-	// configuration keeps mail for 720h.
-	if rewards.ClaimRetentionSeconds <= 720*60*60 {
-		t.Errorf("the claim hold (%ds) does not outlast mail.send_ttl (720h)", rewards.ClaimRetentionSeconds)
+
+	// And the replay that the old bound would have allowed: the mail is still
+	// live, so the ledger still refuses.
+	replay, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "live", 1002, 1, stillLive, now+39*24*60*60)
+	if err != nil {
+		t.Fatalf("replaying the live mail: %v", err)
+	}
+	if replay.Claimed {
+		t.Error("a mail still inside its own expiry was granted a second time")
+	}
+}
+
+// A record the service could not place in time is kept rather than forgotten:
+// refusing to forget is the safe direction.
+func TestAClaimWithNoExpiryIsNeverPruned(t *testing.T) {
+	subject, client, _ := newClaimHarness(t)
+	const now int64 = 1_800_000_000
+	ctx := context.Background()
+	sender := syncsender.NewClaimMailRewardSender(client)
+
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "no-expiry", 1002, 1, 0, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.Sync_ClaimMailReward(ctx, subject.ID(), "later", 1002, 1, now+60, now+10*365*24*60*60); err != nil {
+		t.Fatal(err)
+	}
+	if !subject.BagComp().MailRewardClaimed("no-expiry") {
+		t.Error("a claim with no expiry was forgotten; it cannot be placed in time, so it must be kept")
 	}
 }

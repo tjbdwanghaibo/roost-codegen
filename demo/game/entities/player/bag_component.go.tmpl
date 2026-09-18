@@ -106,16 +106,22 @@ func (component *BagComponent) RemoveItem(itemID int64, count int32) (int32, err
 // grant exactly-once even when the mail service's commit is lost, because the
 // record lands in the same Nest transaction as the items.
 //
-// Pruning is on the write path and by time; game/rewards explains why a time
-// bound is the only bound that holds here.
-func (component *BagComponent) ClaimMailReward(mailID string, nowUnix int64) bool {
+// The value stored is the MAIL's expiry, handed over by the mail service with
+// the reservation. That is the moment after which no replay can reach this
+// path at all, so it is exactly when the record may be forgotten — and the
+// pruning below uses the same number, so "the record is gone" and "a replay
+// is impossible" are one fact rather than two that can drift
+// (game/rewards explains why the previous fixed retention could not hold).
+//
+// Pruning is on the write path, so the ledger is bounded without a sweeper.
+func (component *BagComponent) ClaimMailReward(mailID string, expiresAtUnix, nowUnix int64) bool {
 	dao := component.Owner().Dao()
 	if _, claimed := dao.GetMailClaims(mailID); claimed {
 		return false
 	}
 	var stale []string
-	dao.RangeMailClaims(func(key string, claimedAt int64) bool {
-		if rewards.ClaimExpired(claimedAt, nowUnix) {
+	dao.RangeMailClaims(func(key string, recordedExpiry int64) bool {
+		if rewards.ClaimWindowClosed(recordedExpiry, nowUnix) {
 			stale = append(stale, key)
 		}
 		return true
@@ -123,7 +129,7 @@ func (component *BagComponent) ClaimMailReward(mailID string, nowUnix int64) boo
 	for _, key := range stale {
 		dao.DelMailClaims(key)
 	}
-	dao.SetMailClaims(mailID, nowUnix)
+	dao.SetMailClaims(mailID, expiresAtUnix)
 	return true
 }
 

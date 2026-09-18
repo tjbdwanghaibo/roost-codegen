@@ -23,12 +23,12 @@ import (
 // so the answer has to be on the game's side.
 //
 //roost:nest rollback=undo durability=strict
-func handlerClaimMailReward(target player.IBagEntity, mailID string, itemID int64, count int32, nowUnix int64) (rewards.ClaimResult, error) {
+func handlerClaimMailReward(target player.IBagEntity, mailID string, itemID int64, count int32, expiresAtUnix int64, nowUnix int64) (rewards.ClaimResult, error) {
 	if mailID == "" {
 		return rewards.ClaimResult{}, errcode.Wrap(apperrors.ErrMailClaim, nil, "mail_id", mailID)
 	}
 	bag := target.BagComp()
-	if !bag.ClaimMailReward(mailID, nowUnix) {
+	if !bag.ClaimMailReward(mailID, expiresAtUnix, nowUnix) {
 		// Already paid. Not an error: report what the player holds so the
 		// client's answer is the same either way.
 		return rewards.ClaimResult{BagCount: bag.ItemCount(itemID)}, nil

@@ -233,8 +233,24 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if claim := read("game/controllers/player/claim_mail.go"); !strings.Contains(claim, ".ReserveClaim(") || !strings.Contains(claim, ".Sync_ClaimMailReward(") || !strings.Contains(claim, ".CommitClaim(") {
 		t.Errorf("claim_mail does not run the reserve → ledgered grant → commit sequence")
 	}
-	if claim := read("game/handler/claim_mail_reward.go"); !strings.Contains(claim, "ClaimMailReward(mailID, nowUnix)") || !strings.Contains(claim, "rollback=undo durability=strict") {
+	if claim := read("game/handler/claim_mail_reward.go"); !strings.Contains(claim, "ClaimMailReward(mailID, expiresAtUnix, nowUnix)") || !strings.Contains(claim, "rollback=undo durability=strict") {
 		t.Errorf("the mail claim handler does not record the mail id in the granting transaction")
+	}
+	// The ledger's memory is bounded by the MAIL's own expiry, which the mail
+	// service hands over with the reservation — not by a retention this game
+	// invented against another service's configuration (RR-20260918-05).
+	if claim := read("game/controllers/player/claim_mail.go"); !strings.Contains(claim, "claim.ExpiresAtUnix") {
+		t.Errorf("claim_mail does not pass the mail's authoritative expiry into the granting transaction")
+	}
+	// Runtime entity ids carry the process's sid, so two game processes
+	// cannot mint the same one (RR-20260918-09).
+	if spawn := read("internal/service/game/spawner.go"); !strings.Contains(spawn, "runtimeid.New(") {
+		t.Errorf("the spawner mints monster ids without the process's sid; two instances would collide")
+	}
+	// A connection that closes says so, instead of being noticed by a push
+	// that fails (RR-20260918-06).
+	if scene := read("internal/service/game/scene.go"); !strings.Contains(scene, "OnSessionClosed(") {
+		t.Errorf("the scene does not subscribe to session closes, so an idle world keeps offline members")
 	}
 	if dao := read("db/def/player.go"); !strings.Contains(dao, "MailClaims map[string]int64") {
 		t.Errorf("the Player DAO has no ledger for mail attachment claims")

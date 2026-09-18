@@ -71,7 +71,7 @@ func (controller *Controller) HandleClaimMail(context *player_agent.Context, req
 	if err != nil {
 		return nil, fmt.Errorf("claim_mail endpoint: %w", err)
 	}
-	result, err := syncsender.NewClaimMailRewardSender(controller.NestClient()).Sync_ClaimMailReward(ctx, entityID, request.MailID, reward.ItemID, reward.Count, time.Now().Unix())
+	result, err := syncsender.NewClaimMailRewardSender(controller.NestClient()).Sync_ClaimMailReward(ctx, entityID, request.MailID, reward.ItemID, reward.Count, claim.ExpiresAtUnix, time.Now().Unix())
 	if err != nil {
 		// The grant did not happen (the transaction rolled back, ledger entry
 		// included), so the reservation can be released; a full bag is a

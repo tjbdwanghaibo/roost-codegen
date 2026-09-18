@@ -8,6 +8,7 @@ import (
 	"time"
 
 	player "{{MODULE}}/game/entities/player"
+	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	world "{{MODULE}}/game/entities/world"
 	"{{MODULE}}/game/handler"
@@ -35,8 +36,10 @@ import (
 // sceneRecorder stands in for the player TCP Runtime, keeping what each
 // player would have received.
 type sceneRecorder struct {
-	mu     sync.Mutex
-	pushes map[int64][]*pb.EntitySyncPush
+	mu      sync.Mutex
+	pushes  map[int64][]*pb.EntitySyncPush
+	offline map[int64]bool
+	closed  []func(accessplayertcp.SessionClosed)
 }
 
 func newSceneRecorder() *sceneRecorder {
@@ -57,9 +60,37 @@ func (recorder *sceneRecorder) PushPlayer(_ context.Context, playerID int64, mes
 	return nil
 }
 
-// Every recorded player counts as connected; the sweep is exercised by the
-// leave test instead.
-func (recorder *sceneRecorder) ActiveSessions(int64) int { return 1 }
+// Every recorded player counts as connected unless a test says otherwise.
+func (recorder *sceneRecorder) ActiveSessions(playerID int64) int {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if recorder.offline[playerID] {
+		return 0
+	}
+	return 1
+}
+
+// OnSessionClosed is the access layer's session lifecycle source, stood in
+// for: the test closes a session by calling the subscriber directly.
+func (recorder *sceneRecorder) OnSessionClosed(fn func(accessplayertcp.SessionClosed)) func() {
+	recorder.mu.Lock()
+	recorder.closed = append(recorder.closed, fn)
+	recorder.mu.Unlock()
+	return func() {}
+}
+
+func (recorder *sceneRecorder) close(playerID int64) {
+	recorder.mu.Lock()
+	if recorder.offline == nil {
+		recorder.offline = make(map[int64]bool)
+	}
+	recorder.offline[playerID] = true
+	subscribers := append([]func(accessplayertcp.SessionClosed){}, recorder.closed...)
+	recorder.mu.Unlock()
+	for _, fn := range subscribers {
+		fn(accessplayertcp.SessionClosed{PlayerID: playerID, SessionID: "gone"})
+	}
+}
 
 func (recorder *sceneRecorder) take(playerID int64) []*pb.EntitySyncPush {
 	recorder.mu.Lock()
@@ -324,5 +355,49 @@ func TestSceneRetiresASubjectOnLeave(t *testing.T) {
 	}
 	if len(recorder.take(9101)) == 0 {
 		t.Error("the watcher was not told the leaver's object is gone")
+	}
+}
+
+// A player who disconnects while nothing else is happening must leave the
+// scene anyway. Before the access layer published session closes, the only
+// thing that noticed was a failed push — which never happens if nobody is
+// pushing, so an idle world kept its ghosts (RR-20260918-06).
+func TestAClosedSessionLeavesTheSceneWithoutAnyTraffic(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil)
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	scene.SetArea(newSceneArea(t))
+	scene.watchSessions(recorder)
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	const goneID = int64(9301)
+	subject := newScenePlayer(t, goneID)
+	if err := scene.Join(ctx, subject, spatial.Point{X: 500, Y: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if scene.Members() != 1 {
+		t.Fatalf("the scene holds %d members after a join, want 1", scene.Members())
+	}
+
+	recorder.close(goneID)
+
+	// The removal runs on its own goroutine so the lifecycle source is never
+	// held by a subscriber.
+	deadline := time.Now().Add(2 * time.Second)
+	for scene.Members() != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if members := scene.Members(); members != 0 {
+		t.Fatalf("the scene still holds %d members two seconds after the session closed, with no traffic to notice it", members)
 	}
 }

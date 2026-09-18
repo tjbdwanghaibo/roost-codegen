@@ -86,6 +86,26 @@
 
 ### Fixed
 
+- **生成的接入层现在发布会话关闭事件**（U-0243，C3，RR-20260918-06，T-137）。`Runtime.OnSessionClosed` 是一个
+  异步、多订阅者的源：关闭路径只把 `{PlayerID, SessionID}` 投进有界队列（256），独立 goroutine 派发，
+  满了丢弃并计 `player_tcp_session_closed_dropped_total`，Mod 停机时先停 server 再排空。
+  此前连接退出不通知任何人，所以每个"在线集合"都只能靠推送失败懒清理——**而空闲时永远不会失败**，
+  断线成员就一直留着。demo 的 scene 已订阅（在自己的 goroutine 上离场，不占派发线程）。
+  丢弃是有意的：每个消费者都必须能承受漏一条，"谁在线"是被对账的状态而不是被重放的日志。
+  测试：随工程生成的 `TestAClosedSessionLeavesTheSceneWithoutAnyTraffic`（不产生任何其他流量）。
+  记录：`roost-core/docs/bugfix/RR-20260918-06.md`。
+- **game-demo：运行期实体的 id 带上进程 sid**（U-0242，C4，RR-20260918-09，T-136，**P1**）。怪物 id 此前由进程本地
+  计数器发号，两个 game 进程首次都得到 900001，而 room subject / spatial subject / Nest 寻址都把完整 entity id
+  当全局身份。新 `game/runtimeid` 用框架自己的位布局——`unique id (52) = [静态半区 1][shard 16][序列 34]`，
+  静态半区正是框架保留给显式指定 id 的那一半，因此与块分配器发出的任何玩家 id 都不可能撞。
+  sid 不可编码在**启动时**拒绝，序列耗尽报错而不是回绕。**每个进程仍须配唯一的 sid**。
+  记录：`roost-core/docs/bugfix/RR-20260918-09.md`。
+- **game-demo：邮件账本改按信封自己的过期时刻记与清**（U-0241，C4，RR-20260918-05，T-135，**P1**，需 core ≥ 下一版）。
+  固定 31 天的保留期论证的是"长于 `mail.send_ttl`"，而那只要求为正数——配 40 天就让账本先忘、信封还可领，
+  同一封邮件再发一次奖。现在账本存 `Claim.ExpiresAtUnix`，清理与准入是同一个数：
+  "记录被清掉 ⟺ 该邮件已不可预留 ⟺ 任何重放都到不了发放路径"，不再引用任何配置。无法在时间上定位的记录**保留**
+  而不是遗忘。**旧记录存的是领取时刻**，升级后会被当作过期时刻解读（数值偏小，会被提前清掉）——见 T-135。
+  记录：`roost-core/docs/bugfix/RR-20260918-05.md`。
 - **顶层 DAO 容器换掉成员后，游离的旧值不再能以原来的 key 写回**（U-0238，C4，RR-20260918-10，T-132，**P1**）。
   `SetEquips(key, new)` 给 new 装回调却不解绑同 key 的 old，回滚的 undo 靠 `d.Init()` 兜底——而 `Init()` 只绑不解。
   map 的回调**捕获 key**，所以一个已经离开容器的值后续任何修改都会以**它已不占有的那个 key** 的名义进入持久化补丁，

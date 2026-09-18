@@ -64,6 +64,8 @@ type Scene struct {
 	room    *room.RoomBroadcaster
 
 	sessions scenePusher
+	// unsubscribe releases this bridge's session-close subscription.
+	unsubscribe func()
 
 	// area is the Scene Entity whose interest system decides the
 	// subscriptions. Set once, after the entity exists.
@@ -92,6 +94,14 @@ type sceneLane struct {
 type scenePusher interface {
 	PushPlayer(ctx context.Context, playerID int64, messageID uint32, value any) error
 	ActiveSessions(playerID int64) int
+}
+
+// sessionSource is the access layer's session lifecycle source. It is an
+// interface so a test can close a session without a socket, and it is
+// separate from scenePusher because a deployment could plausibly have one
+// without the other.
+type sessionSource interface {
+	OnSessionClosed(func(accessplayertcp.SessionClosed)) func()
 }
 
 func (lane sceneLane) AdmitBatch(ctx context.Context, frames []nettransport.OutboundFrame) error {
@@ -134,7 +144,41 @@ func NewScene(registry *app.Registry) (*Scene, error) {
 	} else {
 		slog.Warn("scene: no data engine watermark; replication will not wait for durability")
 	}
-	return newScene(transport, watermark)
+	scene, err := newScene(transport, watermark)
+	if err != nil {
+		return nil, err
+	}
+	// The connection telling us it is gone beats waiting to fail a push to
+	// it: a player who logs off while nothing is happening used to stay in
+	// the scene until somebody else's frame tried to reach them
+	// (RR-20260918-06).
+	scene.watchSessions(transport)
+	return scene, nil
+}
+
+// watchSessions subscribes to connection closes. The handler does the least
+// possible on that goroutine — it is shared with every other subscriber — so
+// the actual removal runs on its own.
+func (bridge *Scene) watchSessions(source sessionSource) {
+	if bridge == nil || source == nil {
+		return
+	}
+	bridge.unsubscribe = source.OnSessionClosed(func(event accessplayertcp.SessionClosed) {
+		if bridge.sessions.ActiveSessions(event.PlayerID) > 0 {
+			// Another connection of the same player is still up; the player
+			// is still here.
+			return
+		}
+		subjectID, err := coreentity.BuildEntityID(event.PlayerID, player.EntityKindPlayer)
+		if err != nil {
+			return
+		}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			bridge.Leave(ctx, subjectID)
+		}()
+	})
 }
 
 func newScene(transport scenePusher, watermark func() uint64) (*Scene, error) {
@@ -202,6 +246,10 @@ func (bridge *Scene) Start(ctx context.Context) error {
 func (bridge *Scene) Close(ctx context.Context) error {
 	if bridge == nil {
 		return nil
+	}
+	if bridge.unsubscribe != nil {
+		bridge.unsubscribe()
+		bridge.unsubscribe = nil
 	}
 	managerErr := bridge.manager.Close(ctx)
 	sinkErr := bridge.sink.Close(ctx)

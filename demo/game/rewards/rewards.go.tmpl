@@ -10,31 +10,31 @@ import (
 	"fmt"
 )
 
-// ClaimRetentionSeconds is how long the Player remembers that it has been
-// paid for a mail.
+// ClaimWindowClosed reports whether a mail recorded as granted, whose
+// envelope expires at expiresAtUnix, may be forgotten at nowUnix.
 //
-// The rule is the same one the dungeon ledger follows (game/dungeon): the
-// record must outlive every replay that could still reach the grant. A replay
-// reaches it only through ReserveClaim, which needs the mail to still exist
-// and be unclaimed — so the hold has to outlast the longest-lived mail the
-// game can send. The generated configuration keeps mail for `mail.send_ttl`
-// (720h), and this demo's mails expire in 7 days; 31 days covers both with
-// room for a raised TTL.
+// The ledger's memory is bounded by the MAIL's own expiry, which the mail
+// service hands over with the reservation (`Claim.ExpiresAtUnix`). After that
+// moment the mail cannot be reserved at all, so no replay can reach the grant
+// path and the record is dead weight — and not one moment sooner.
 //
-// A game that sends thousands of mails per player should not carry a month of
-// ids on the Player: either drop the record once CommitClaim has succeeded
-// (after that no replay can reserve the mail again) or keep the ledger on the
-// mail side. The demo takes the simple bound because it is the one that is
-// provably safe without a second transaction.
-const ClaimRetentionSeconds int64 = 31 * 24 * 60 * 60
-
-// ClaimExpired reports whether a claim recorded at claimedAt may be forgotten
-// at nowUnix.
-func ClaimExpired(claimedAt, nowUnix int64) bool {
-	if claimedAt <= 0 {
-		return true
+// The first version of this bounded the ledger by a fixed 31 days and argued
+// that it outlived `mail.send_ttl` (720h in the generated configuration).
+// That was wrong and review caught it (RR-20260918-05): `send_ttl` only has
+// to be positive, so a deployment that keeps mail for 40 days is legal and
+// the ledger forgets while the envelope is still claimable. **Asset
+// correctness cannot be bound to another service's configuration** — it has
+// to be bound to that service's authoritative moment, which is exactly what
+// the envelope's expiry is.
+//
+// A record with no expiry cannot be placed in time, so it is kept rather than
+// forgotten: refusing to forget is the safe direction, and an operator can
+// see a ledger that stops shrinking.
+func ClaimWindowClosed(expiresAtUnix, nowUnix int64) bool {
+	if expiresAtUnix <= 0 {
+		return false
 	}
-	return nowUnix-claimedAt > ClaimRetentionSeconds
+	return nowUnix > expiresAtUnix
 }
 
 // ClaimResult is what the granting transaction reports back. Claimed is false

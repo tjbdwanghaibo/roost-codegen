@@ -299,6 +299,10 @@ func (mod *Mod) Start() error {
 	}
 	server, err := NewServer(mod.config, mod.runtime, mod.authenticator)
 	if err != nil { return err }
+	// Before Start: a close cannot happen until the server accepts, and the
+	// link has to be in place by then.
+	server.transport = mod.transportRuntime
+	if mod.transportRuntime != nil { mod.transportRuntime.startLifecycle() }
 	if err := server.Start(); err != nil { return err }
 	mod.server = server
 	mod.transportRuntime.server.Store(server)
@@ -313,9 +317,15 @@ func (mod *Mod) Stop() {
 
 func (mod *Mod) StopWithContext(ctx context.Context) error {
 	if mod.transportRuntime != nil { mod.transportRuntime.server.Store(nil) }
-	if mod.server == nil { return nil }
+	if mod.server == nil {
+		if mod.transportRuntime != nil { mod.transportRuntime.stopLifecycle() }
+		return nil
+	}
 	err := mod.server.Stop(ctx)
 	mod.server = nil
+	// After the server: the closes it produced on the way down are still
+	// worth delivering.
+	if mod.transportRuntime != nil { mod.transportRuntime.stopLifecycle() }
 	return err
 }
 
@@ -325,6 +335,116 @@ func (mod *Mod) StopWithContext(ctx context.Context) error {
 type Runtime struct {
 	protocols *player_agent.ProtocolRegistry
 	server atomic.Pointer[Server]
+
+	lifecycleMu sync.Mutex
+	subscribers map[uint64]func(SessionClosed)
+	nextSubscriber uint64
+	closedEvents chan SessionClosed
+	lifecycleOnce sync.Once
+	lifecycleStop chan struct{}
+	lifecycleDone chan struct{}
+}
+
+// SessionClosed says a connection is gone. It carries identity only: a
+// subscriber that needs more looks it up, and a lifecycle event that carried
+// state would be a second copy of it.
+type SessionClosed struct {
+	PlayerID int64
+	SessionID string
+}
+
+// sessionClosedQueue is how many closes may be in flight before the oldest are
+// dropped. Bounded on purpose: a subscriber that blocks must not be able to
+// hold the socket cleanup path, and a mass disconnect must not be able to grow
+// memory without limit. A dropped event is counted, and every consumer of this
+// source has to be able to survive missing one — "who is online" is state that
+// is reconciled, not a log that is replayed.
+const sessionClosedQueue = 256
+
+// OnSessionClosed subscribes to connection closes and returns the
+// unsubscribe. It exists because everything that maintains an "online" set —
+// the replicated scene, chat presence — otherwise has to notice by failing to
+// push to somebody, which never happens if nothing tries (RR-20260918-06).
+//
+// Subscribers run on this source's own goroutine, not on the socket's: a slow
+// one delays other subscribers and nothing else. Do not block in one.
+func (runtime *Runtime) OnSessionClosed(fn func(SessionClosed)) func() {
+	if runtime == nil || fn == nil { return func() {} }
+	runtime.startLifecycle()
+	runtime.lifecycleMu.Lock()
+	runtime.nextSubscriber++
+	id := runtime.nextSubscriber
+	if runtime.subscribers == nil { runtime.subscribers = make(map[uint64]func(SessionClosed)) }
+	runtime.subscribers[id] = fn
+	runtime.lifecycleMu.Unlock()
+	return func() {
+		runtime.lifecycleMu.Lock()
+		delete(runtime.subscribers, id)
+		runtime.lifecycleMu.Unlock()
+	}
+}
+
+func (runtime *Runtime) startLifecycle() {
+	runtime.lifecycleOnce.Do(func() {
+		runtime.closedEvents = make(chan SessionClosed, sessionClosedQueue)
+		runtime.lifecycleStop = make(chan struct{})
+		runtime.lifecycleDone = make(chan struct{})
+		go runtime.dispatchClosed()
+	})
+}
+
+func (runtime *Runtime) dispatchClosed() {
+	defer close(runtime.lifecycleDone)
+	for {
+		select {
+		case <-runtime.lifecycleStop:
+			// Drain what is already queued: a close that happened before
+			// shutdown is still a close, and a subscriber that cleans up
+			// external state wants it.
+			for {
+				select {
+				case event := <-runtime.closedEvents:
+					runtime.deliverClosed(event)
+				default:
+					return
+				}
+			}
+		case event := <-runtime.closedEvents:
+			runtime.deliverClosed(event)
+		}
+	}
+}
+
+func (runtime *Runtime) deliverClosed(event SessionClosed) {
+	runtime.lifecycleMu.Lock()
+	subscribers := make([]func(SessionClosed), 0, len(runtime.subscribers))
+	for _, fn := range runtime.subscribers { subscribers = append(subscribers, fn) }
+	runtime.lifecycleMu.Unlock()
+	for _, fn := range subscribers {
+		fn(event)
+	}
+}
+
+// publishClosed is called from the socket cleanup path, so it never blocks:
+// a full queue drops the event and counts it rather than holding a connection
+// teardown behind a subscriber.
+func (runtime *Runtime) publishClosed(event SessionClosed) {
+	if runtime == nil || runtime.closedEvents == nil { return }
+	select {
+	case runtime.closedEvents <- event:
+	default:
+		metrics.IncCounter("player_tcp_session_closed_dropped_total", nil, 1)
+	}
+}
+
+func (runtime *Runtime) stopLifecycle() {
+	if runtime == nil || runtime.lifecycleStop == nil { return }
+	select {
+	case <-runtime.lifecycleStop:
+	default:
+		close(runtime.lifecycleStop)
+	}
+	if runtime.lifecycleDone != nil { <-runtime.lifecycleDone }
 }
 
 func (runtime *Runtime) PushPlayer(ctx context.Context, playerID int64, messageID uint32, value any) error {
@@ -355,6 +475,10 @@ func (runtime *Runtime) ActiveSessions(playerID int64) int {
 type Server struct {
 	config Config
 	runtime *accessplayer.Runtime
+	// transport is the application-facing Runtime this server feeds session
+	// lifecycle events into. It is set by the Mod before the server starts
+	// accepting, and nil in a test that builds a Server directly.
+	transport *Runtime
 	authenticator Authenticator
 
 	mu sync.RWMutex
@@ -597,6 +721,12 @@ func (server *Server) unregisterSession(current *session) {
 		if len(byPlayer) == 0 { delete(server.playerSessions, current.principal.PlayerID) }
 	}
 	server.mu.Unlock()
+	// The connection is gone; say so once, asynchronously. Everything that
+	// maintains an "online" set needs this, and the alternative — noticing by
+	// failing to push — never fires if nothing tries (RR-20260918-06).
+	if server.transport != nil {
+		server.transport.publishClosed(SessionClosed{PlayerID: current.principal.PlayerID, SessionID: current.principal.SessionID})
+	}
 }
 
 func (server *Server) pushPlayer(ctx context.Context, playerID int64, messageID uint32, payload []byte) error {
