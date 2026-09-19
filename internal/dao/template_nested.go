@@ -21,9 +21,34 @@ import (
 // written as an empty "dirtyhook" sub-document (U-0224).
 type {{.Nested.Name}} struct {
 	dataengine.DirtyHook ` + "`" + `bson:"-" json:"-"` + "`" + `
+	// dirtyOwner is the one place this value belongs to. Unexported, so no
+	// codec sees it, and it is runtime wiring for the same reason the hook is.
+	dirtyOwner daoDirtyOwner
 {{- range .Nested.Fields}}
 	{{fieldVar .Name}} {{fieldType .}}
 {{- end}}
+}
+
+// bindDirty / unbindDirty are how a parent takes and releases this value.
+//
+// The parent is identified, not just remembered: a value that already belongs
+// somewhere else is refused rather than silently re-pointed, because the
+// notification is a single slot and re-pointing it leaves the first place
+// stale on disk while memory shows both equal (RR-20260919-02). unbindDirty
+// releases only its own binding, so a stale release from a place this value
+// has already left cannot silence the place it is in now.
+func (s *{{.Nested.Name}}) bindDirty(owner daoDirtyOwner, notify func()) {
+	if s == nil {
+		return
+	}
+	daoBindDirty(&s.DirtyHook, &s.dirtyOwner, owner, "{{.Nested.Name}}", notify)
+}
+
+func (s *{{.Nested.Name}}) unbindDirty(owner daoDirtyOwner) {
+	if s == nil {
+		return
+	}
+	daoUnbindDirty(&s.DirtyHook, &s.dirtyOwner, owner)
 }
 
 // --- wire form (persistence, rollback capture, sync) ---
@@ -143,24 +168,24 @@ func (s *{{$.Nested.Name}}) bind{{.Name}}() {
 	if s.{{fieldVar .Name}} == nil {
 		return
 	}
-	s.{{fieldVar .Name}}.Range(func(_ {{.MapKey}}, val {{mapValType .}}) bool {
+	s.{{fieldVar .Name}}.Range(func(key {{.MapKey}}, val {{mapValType .}}) bool {
 		if val != nil {
-			val.SetNotify(s.Mark)
+			val.bindDirty(daoDirtyOwner{holder: s, field: {{nestedFieldOrdinal $.Nested .Name}}, key: key}, s.Mark)
 		}
 		return true
 	})
 {{- else if eq .Kind 1}}
-	for _, val := range s.{{fieldVar .Name}} {
+	for index, val := range s.{{fieldVar .Name}} {
 		if val != nil {
-			val.SetNotify(s.Mark)
+			val.bindDirty(daoDirtyOwner{holder: s, field: {{nestedFieldOrdinal $.Nested .Name}}, key: index}, s.Mark)
 		}
 	}
 {{- else if .IsPtr}}
 	if s.{{fieldVar .Name}} != nil {
-		s.{{fieldVar .Name}}.SetNotify(s.Mark)
+		s.{{fieldVar .Name}}.bindDirty(daoDirtyOwner{holder: s, field: {{nestedFieldOrdinal $.Nested .Name}}}, s.Mark)
 	}
 {{- else}}
-	s.{{fieldVar .Name}}.SetNotify(s.Mark)
+	s.{{fieldVar .Name}}.bindDirty(daoDirtyOwner{holder: s, field: {{nestedFieldOrdinal $.Nested .Name}}}, s.Mark)
 {{- end}}
 }
 {{- if hasDetach .}}
@@ -170,21 +195,21 @@ func (s *{{$.Nested.Name}}) unbind{{.Name}}() {
 	if s.{{fieldVar .Name}} == nil {
 		return
 	}
-	s.{{fieldVar .Name}}.Range(func(_ {{.MapKey}}, val {{mapValType .}}) bool {
+	s.{{fieldVar .Name}}.Range(func(key {{.MapKey}}, val {{mapValType .}}) bool {
 		if val != nil {
-			val.SetNotify(nil)
+			val.unbindDirty(daoDirtyOwner{holder: s, field: {{nestedFieldOrdinal $.Nested .Name}}, key: key})
 		}
 		return true
 	})
 {{- else if eq .Kind 1}}
-	for _, val := range s.{{fieldVar .Name}} {
+	for index, val := range s.{{fieldVar .Name}} {
 		if val != nil {
-			val.SetNotify(nil)
+			val.unbindDirty(daoDirtyOwner{holder: s, field: {{nestedFieldOrdinal $.Nested .Name}}, key: index})
 		}
 	}
 {{- else}}
 	if s.{{fieldVar .Name}} != nil {
-		s.{{fieldVar .Name}}.SetNotify(nil)
+		s.{{fieldVar .Name}}.unbindDirty(daoDirtyOwner{holder: s, field: {{nestedFieldOrdinal $.Nested .Name}}})
 	}
 {{- end}}
 }

@@ -83,12 +83,6 @@ func Products() []Product {
 	return out
 }
 
-// PendingKey is the sorted set of paid-but-undelivered order ids, scored by
-// when each is next worth an attempt. It lives beside the order records, in
-// the platform service's own key prefix, because it is an index OF those
-// records: a prefix of its own would let one be dropped without the other.
-func PendingKey(prefix string) string { return prefix + ":pending" }
-
 // GrantsKey is one player's unclaimed grants: order id → Grant. A hash per
 // player rather than one global hash, so the game process reads exactly the
 // grants of the player it has in hand and never pages a global structure.

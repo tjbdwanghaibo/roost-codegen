@@ -69,21 +69,22 @@ func generateBSONHelpers(pkg string, outFile string, force bool) (bool, error) {
 // template with it to pin the generated shape.
 func nestedFuncMap(defs *Definitions) template.FuncMap {
 	return template.FuncMap{
-		"snakeCase":  toSnake,
-		"lower1":     lower1,
-		"bsonKey":    func(name string) string { return toSnake(name) },
-		"fieldType":  fieldType,
-		"fieldVar":   safeFieldVarName,
-		"mapValType": mapValType,
-		"mapNewExpr": mapNewExpr,
-		"rawMapType": rawMapType,
-		"hasMaps":    hasMapFields,
-		"isNested":   func(typeName string) bool { return isNestedType(defs, typeName) },
-		"hasHook":    func(f FieldDef) bool { return fieldCarriesChildHook(defs, f) },
-		"hasDetach":  func(f FieldDef) bool { return fieldDetachesOldChildren(defs, f) },
-		"wireType":   func(f FieldDef) string { return wireType(defs, f) },
-		"toWire":     func(f FieldDef, expr string) string { return toWire(defs, f, expr) },
-		"fromWire":   func(f FieldDef, expr string) string { return fromWire(defs, f, expr) },
+		"snakeCase":          toSnake,
+		"lower1":             lower1,
+		"bsonKey":            func(name string) string { return toSnake(name) },
+		"fieldType":          fieldType,
+		"fieldVar":           safeFieldVarName,
+		"mapValType":         mapValType,
+		"mapNewExpr":         mapNewExpr,
+		"rawMapType":         rawMapType,
+		"hasMaps":            hasMapFields,
+		"isNested":           func(typeName string) bool { return isNestedType(defs, typeName) },
+		"hasHook":            func(f FieldDef) bool { return fieldCarriesChildHook(defs, f) },
+		"hasDetach":          func(f FieldDef) bool { return fieldDetachesOldChildren(defs, f) },
+		"nestedFieldOrdinal": nestedFieldOrdinal,
+		"wireType":           func(f FieldDef) string { return wireType(defs, f) },
+		"toWire":             func(f FieldDef, expr string) string { return toWire(defs, f, expr) },
+		"fromWire":           func(f FieldDef, expr string) string { return fromWire(defs, f, expr) },
 	}
 }
 
@@ -485,6 +486,20 @@ func isNestedType(defs *Definitions, typeName string) bool {
 		}
 	}
 	return false
+}
+
+// nestedFieldOrdinal numbers a nested struct's fields from 1. It identifies
+// which FIELD of a parent holds a child, which is half of the child's owner
+// token; a nested struct has no dirty-mask constants of its own, so the
+// position in the definition is the stable name. It is stable because
+// generation is a function of the definition file.
+func nestedFieldOrdinal(nested NestedDef, fieldName string) uint64 {
+	for i, field := range nested.Fields {
+		if field.Name == fieldName {
+			return uint64(i + 1)
+		}
+	}
+	return 0
 }
 
 func lower1(s string) string {

@@ -16,8 +16,33 @@ import (
 // written as an empty "dirtyhook" sub-document (U-0224).
 type Position struct {
 	dataengine.DirtyHook `bson:"-" json:"-"`
-	x                    int32
-	y                    int32
+	// dirtyOwner is the one place this value belongs to. Unexported, so no
+	// codec sees it, and it is runtime wiring for the same reason the hook is.
+	dirtyOwner daoDirtyOwner
+	x          int32
+	y          int32
+}
+
+// bindDirty / unbindDirty are how a parent takes and releases this value.
+//
+// The parent is identified, not just remembered: a value that already belongs
+// somewhere else is refused rather than silently re-pointed, because the
+// notification is a single slot and re-pointing it leaves the first place
+// stale on disk while memory shows both equal (RR-20260919-02). unbindDirty
+// releases only its own binding, so a stale release from a place this value
+// has already left cannot silence the place it is in now.
+func (s *Position) bindDirty(owner daoDirtyOwner, notify func()) {
+	if s == nil {
+		return
+	}
+	daoBindDirty(&s.DirtyHook, &s.dirtyOwner, owner, "Position", notify)
+}
+
+func (s *Position) unbindDirty(owner daoDirtyOwner) {
+	if s == nil {
+		return
+	}
+	daoUnbindDirty(&s.DirtyHook, &s.dirtyOwner, owner)
 }
 
 // --- wire form (persistence, rollback capture, sync) ---

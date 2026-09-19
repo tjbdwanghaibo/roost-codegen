@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"{{MODULE}}/game/purchase"
 	"github.com/tjbdwanghaibo/roost-core/app"
@@ -23,10 +22,6 @@ import (
 // demo verifier, and it is the same non-verification: anyone can present
 // anyone's open id.
 const demoCredentialPrefix = "demo:"
-
-// nowUnix is this package's clock. It is one function so the index and the
-// deliverer cannot disagree about what "now" is.
-func nowUnix() int64 { return time.Now().Unix() }
 
 // Verify checks a channel credential.
 //
@@ -67,12 +62,9 @@ func Players() platform.PlayerResolver {
 	})
 }
 
-// index and grants are one pair: the deliverer records what it is about to do
-// in the index the retry loop reads.
-var (
-	index  = &pendingIndex{}
-	grants = &grantDeliverer{index: index}
-)
+// grants is the one collaborator with state: where the deliverer writes what
+// it owes.
+var grants = &grantDeliverer{}
 
 // Deliver grants what was paid for.
 //
@@ -93,7 +85,6 @@ var (
 // retried delivery writes the same field again.
 type grantDeliverer struct {
 	mu     sync.Mutex
-	index  *pendingIndex
 	client grantStore
 	prefix string
 }
@@ -114,8 +105,8 @@ func (deliverer *grantDeliverer) BindRegistry(registry *app.Registry) error {
 	return nil
 }
 
-// grantStore is the one Redis call the deliverer makes, narrowed for the same
-// reason indexStore is.
+// grantStore is the one Redis call the deliverer makes, narrowed so a test can
+// stand in for it with a map.
 type grantStore interface {
 	HSet(ctx context.Context, key string, values ...any) error
 }
@@ -140,23 +131,6 @@ func (deliverer *grantDeliverer) Deliver(ctx context.Context, order platform.Ord
 		// hand. Succeeding would close a paid order having granted nothing.
 		return fmt.Errorf("purchase delivery: order %s bought unknown product %q", order.OrderID, order.ProductID)
 	}
-	// Index first, grant second. An order recorded as waiting and then
-	// delivered costs one wasted read; a grant written by a process that died
-	// before indexing costs a retry that never happens.
-	// The order handed to a deliverer is the CLAIMED one: the service already
-	// advanced NextAttemptAtUnix to the end of this attempt's backoff, so it
-	// is exactly when this order is next worth reading — which is what the
-	// index scores on.
-	due := order.NextAttemptAtUnix
-	if due <= 0 {
-		due = order.PaidAtUnix
-	}
-	if due <= 0 {
-		due = nowUnix()
-	}
-	if err := deliverer.index.track(ctx, order.OrderID, due); err != nil {
-		return err
-	}
 	grant, err := purchase.Encode(purchase.Grant{
 		OrderID: order.OrderID, PlayerID: order.PlayerID, ProductID: product.ID,
 		ItemID: product.ItemID, Count: product.Count, PaidAtUnix: order.PaidAtUnix,
@@ -173,10 +147,19 @@ func (deliverer *grantDeliverer) Deliver(ctx context.Context, order platform.Ord
 // Deliver is the collaborator the Mod takes.
 func Deliver() platform.Deliverer { return grants }
 
-// Pending is this deployment's index of paid-but-undelivered orders: what the
-// background retry loop reads every tick. See pending_index.go for what it
-// promises and why retirement asks the service rather than watching writes.
-func Pending() platform.PendingOrders { return index }
+// Pending is where the background retry loop gets its candidates.
+//
+// nil, and that is now the right answer: the order store keeps the pending
+// index itself, in the SAME Redis write as the order (kit's NewRedisOrders,
+// RR-20260919-04), so the service has one by default and it is atomic with
+// the record. A deployment-side index cannot be — it can only write after the
+// order is stored, and a process that dies in between leaves a paid order no
+// loop can enumerate.
+//
+// What a deployment supplies one FOR, still: orders that live somewhere other
+// than this Redis, or a deliberate "no background retry" (which the Server
+// then says at start rather than miming).
+func Pending() platform.PendingOrders { return nil }
 
 // Metrics receives the service's counters. nil means no reporting and never
 // fails an operation; wire the project's servicemetrics.Reporter here.

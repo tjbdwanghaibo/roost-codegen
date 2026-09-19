@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/nest"
@@ -427,5 +428,149 @@ func TestAFreshlyConstructedDaoPropagatesNestedChanges(t *testing.T) {
 	}
 	if len(committer.records) != 1 {
 		t.Fatalf("changing a nested value of a freshly constructed DAO produced %d commit records, want 1 — the change would be lost", len(committer.records))
+	}
+}
+
+// A mutable nested value has ONE parent at a time.
+//
+// The notification is a single slot, so a value bound twice reports to
+// whichever parent bound it last — and the first parent's key stops being
+// persisted (RR-20260919-02). Neither "last binding wins" nor "first binding
+// wins" is a correct answer: both leave one of the two places silently stale
+// on disk while memory shows them equal. So the contract is unique parent
+// ownership, and putting a value somewhere it cannot go is refused loudly, at
+// the call, before anything is written.
+func TestANestedValueHasOneParentAtATime(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		put  func(hero *HeroDao, shared *EquipInfo)
+	}{
+		{"same map, another key", func(hero *HeroDao, shared *EquipInfo) { hero.SetEquips(2, shared) }},
+		{"another field of the same dao", func(hero *HeroDao, shared *EquipInfo) { hero.SetMount(shared) }},
+		{"a slice in the same dao", func(hero *HeroDao, shared *EquipInfo) { hero.SetSquadAll([]*EquipInfo{shared}) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hero := NewHeroDao()
+			hero.SetId(42)
+			shared := &EquipInfo{}
+			hero.setEquipsRawMap(map[int64]*EquipInfo{1: shared})
+			hero.Init()
+
+			committer := &ownershipCommitter{}
+			outcome, err := nest.RunIsolatedTransaction(context.Background(), committer, "alias",
+				func() (result any, err error) {
+					defer func() {
+						if recovered := recover(); recovered != nil {
+							result = fmt.Sprint(recovered)
+						}
+					}()
+					test.put(hero, shared)
+					return "", nil
+				})
+			if err != nil {
+				t.Fatalf("transaction: %v", err)
+			}
+			// The refusal has to say what to do, not just that something is
+			// wrong: the caller is holding one object and thinks it is in two
+			// places.
+			refusal, _ := outcome.(string)
+			if refusal == "" {
+				t.Fatal("putting one nested value in two places was accepted; on disk only the last one would move")
+			}
+			for _, want := range []string{"one parent", "EquipInfo"} {
+				if !strings.Contains(refusal, want) {
+					t.Errorf("the refusal does not mention %q: %s", want, refusal)
+				}
+			}
+		})
+	}
+}
+
+// Moving it is allowed, and the way to move it is to take it out first.
+func TestANestedValueCanBeMovedBetweenKeys(t *testing.T) {
+	hero := NewHeroDao()
+	hero.SetId(42)
+	moved := &EquipInfo{}
+	hero.setEquipsRawMap(map[int64]*EquipInfo{1: moved})
+	hero.Init()
+
+	committer := &ownershipCommitter{}
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "move", func() (any, error) {
+		hero.DelEquips(1)
+		hero.SetEquips(2, moved)
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	committer.records = nil
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "touch", func() (any, error) {
+		moved.SetLevel(4)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(committer.records) != 1 {
+		t.Fatalf("the moved value produced %d commit records, want 1", len(committer.records))
+	}
+	// And it writes under the key it is in now.
+	paths := writtenPaths(t, committer.records[0])
+	found := false
+	for _, path := range paths {
+		if strings.Contains(path, "2") {
+			found = true
+		}
+		if strings.HasSuffix(path, ".1") {
+			t.Errorf("the moved value still writes under its old key: %v", paths)
+		}
+	}
+	if !found {
+		t.Errorf("the moved value did not write under its new key: %v", paths)
+	}
+}
+
+// Binding the same value to the same place again is not an alias: Init runs on
+// every load, and a setter that re-puts what is already there is ordinary.
+func TestRebindingTheSameSlotIsAccepted(t *testing.T) {
+	hero := NewHeroDao()
+	hero.SetId(42)
+	worn := &EquipInfo{}
+	hero.setEquipsRawMap(map[int64]*EquipInfo{1: worn})
+	hero.Init()
+	hero.Init()
+
+	committer := &ownershipCommitter{}
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "re-put", func() (any, error) {
+		hero.SetEquips(1, worn)
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("putting the same value back into its own key was refused: %v", err)
+	}
+}
+
+// Two DAOs is the case a per-DAO check would miss.
+func TestANestedValueCannotBeSharedBetweenDaos(t *testing.T) {
+	first, second := NewHeroDao(), NewHeroDao()
+	first.SetId(42)
+	second.SetId(43)
+	shared := &EquipInfo{}
+	first.setEquipsRawMap(map[int64]*EquipInfo{1: shared})
+	first.Init()
+	second.Init()
+
+	committer := &ownershipCommitter{}
+	outcome, err := nest.RunIsolatedTransaction(context.Background(), committer, "share", func() (result any, err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				result = fmt.Sprint(recovered)
+			}
+		}()
+		second.SetEquips(1, shared)
+		return "", nil
+	})
+	if err != nil {
+		t.Fatalf("transaction: %v", err)
+	}
+	if refusal, _ := outcome.(string); refusal == "" {
+		t.Fatal("one nested value was accepted into two DAOs; only one of them would persist its changes")
 	}
 }

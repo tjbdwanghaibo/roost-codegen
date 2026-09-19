@@ -17,12 +17,37 @@ import (
 // written as an empty "dirtyhook" sub-document (U-0224).
 type EquipInfo struct {
 	dataengine.DirtyHook `bson:"-" json:"-"`
-	level                int32
-	star                 int32
-	gems                 *fmap.SmallSafeMap[int32, *GemInfo]
-	runes                []*GemInfo
-	core                 *GemInfo
-	shape                Position
+	// dirtyOwner is the one place this value belongs to. Unexported, so no
+	// codec sees it, and it is runtime wiring for the same reason the hook is.
+	dirtyOwner daoDirtyOwner
+	level      int32
+	star       int32
+	gems       *fmap.SmallSafeMap[int32, *GemInfo]
+	runes      []*GemInfo
+	core       *GemInfo
+	shape      Position
+}
+
+// bindDirty / unbindDirty are how a parent takes and releases this value.
+//
+// The parent is identified, not just remembered: a value that already belongs
+// somewhere else is refused rather than silently re-pointed, because the
+// notification is a single slot and re-pointing it leaves the first place
+// stale on disk while memory shows both equal (RR-20260919-02). unbindDirty
+// releases only its own binding, so a stale release from a place this value
+// has already left cannot silence the place it is in now.
+func (s *EquipInfo) bindDirty(owner daoDirtyOwner, notify func()) {
+	if s == nil {
+		return
+	}
+	daoBindDirty(&s.DirtyHook, &s.dirtyOwner, owner, "EquipInfo", notify)
+}
+
+func (s *EquipInfo) unbindDirty(owner daoDirtyOwner) {
+	if s == nil {
+		return
+	}
+	daoUnbindDirty(&s.DirtyHook, &s.dirtyOwner, owner)
 }
 
 // --- wire form (persistence, rollback capture, sync) ---
@@ -136,9 +161,9 @@ func (s *EquipInfo) bindGems() {
 	if s.gems == nil {
 		return
 	}
-	s.gems.Range(func(_ int32, val *GemInfo) bool {
+	s.gems.Range(func(key int32, val *GemInfo) bool {
 		if val != nil {
-			val.SetNotify(s.Mark)
+			val.bindDirty(daoDirtyOwner{holder: s, field: 3, key: key}, s.Mark)
 		}
 		return true
 	})
@@ -148,9 +173,9 @@ func (s *EquipInfo) unbindGems() {
 	if s.gems == nil {
 		return
 	}
-	s.gems.Range(func(_ int32, val *GemInfo) bool {
+	s.gems.Range(func(key int32, val *GemInfo) bool {
 		if val != nil {
-			val.SetNotify(nil)
+			val.unbindDirty(daoDirtyOwner{holder: s, field: 3, key: key})
 		}
 		return true
 	})
@@ -165,17 +190,17 @@ func (s *EquipInfo) unbindGems() {
 // what it ends up with, so "which children notify this struct" always equals
 // "which children the field holds".
 func (s *EquipInfo) bindRunes() {
-	for _, val := range s.runes {
+	for index, val := range s.runes {
 		if val != nil {
-			val.SetNotify(s.Mark)
+			val.bindDirty(daoDirtyOwner{holder: s, field: 4, key: index}, s.Mark)
 		}
 	}
 }
 
 func (s *EquipInfo) unbindRunes() {
-	for _, val := range s.runes {
+	for index, val := range s.runes {
 		if val != nil {
-			val.SetNotify(nil)
+			val.unbindDirty(daoDirtyOwner{holder: s, field: 4, key: index})
 		}
 	}
 }
@@ -190,13 +215,13 @@ func (s *EquipInfo) unbindRunes() {
 // "which children the field holds".
 func (s *EquipInfo) bindCore() {
 	if s.core != nil {
-		s.core.SetNotify(s.Mark)
+		s.core.bindDirty(daoDirtyOwner{holder: s, field: 5}, s.Mark)
 	}
 }
 
 func (s *EquipInfo) unbindCore() {
 	if s.core != nil {
-		s.core.SetNotify(nil)
+		s.core.unbindDirty(daoDirtyOwner{holder: s, field: 5})
 	}
 }
 
@@ -209,7 +234,7 @@ func (s *EquipInfo) unbindCore() {
 // what it ends up with, so "which children notify this struct" always equals
 // "which children the field holds".
 func (s *EquipInfo) bindShape() {
-	s.shape.SetNotify(s.Mark)
+	s.shape.bindDirty(daoDirtyOwner{holder: s, field: 6}, s.Mark)
 }
 
 func (s *EquipInfo) GetLevel() int32 { return s.level }

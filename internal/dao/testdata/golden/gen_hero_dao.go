@@ -204,7 +204,7 @@ func (d *HeroDao) markEquipsKeyDeleted(key int64) {
 
 // Init wires dirty callbacks for nested structs and map values.
 func (d *HeroDao) Init() {
-	d.pos.SetNotify(d.markPosDirty)
+	d.pos.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldPos}, d.markPosDirty)
 	if d.equips != nil {
 		d.equips.Range(func(key int64, v *EquipInfo) bool {
 			d.bindEquipsValue(key, v)
@@ -409,12 +409,12 @@ func (d *HeroDao) SetPos(v Position) {
 		old := d.pos
 		d.recordUndo(tx, heroDaoFieldPos, func() error {
 			d.pos = old
-			d.pos.SetNotify(d.markPosDirty)
+			d.pos.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldPos}, d.markPosDirty)
 			return nil
 		})
 	}
 	d.pos = v
-	d.pos.SetNotify(d.markPosDirty)
+	d.pos.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldPos}, d.markPosDirty)
 	d.markPosDirty()
 }
 
@@ -437,7 +437,8 @@ func (d *HeroDao) GetEquips(key int64) (*EquipInfo, bool) {
 // the key it no longer occupies (RR-20260918-10).
 func (d *HeroDao) bindEquipsValue(key int64, val *EquipInfo) {
 	if val != nil {
-		val.SetNotify(func() { d.markEquipsKeyDirty(key, val) })
+		val.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldEquips, key: key},
+			func() { d.markEquipsKeyDirty(key, val) })
 	}
 }
 
@@ -446,7 +447,7 @@ func (d *HeroDao) unbindEquipsValue(key int64) {
 		return
 	}
 	if previous, ok := d.equips.Get(key); ok && previous != nil {
-		previous.SetNotify(nil)
+		previous.unbindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldEquips, key: key})
 	}
 }
 
@@ -516,17 +517,17 @@ func (d *HeroDao) EquipsLen() int {
 // this slice's elements, and nothing else — no dirty mark, no undo record, so
 // they are callable from a rollback undo (RR-20260918-10).
 func (d *HeroDao) bindSquadItems() {
-	for _, item := range d.squad {
+	for index, item := range d.squad {
 		if item != nil {
-			item.SetNotify(d.markSquadDirty)
+			item.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldSquad, key: index}, d.markSquadDirty)
 		}
 	}
 }
 
 func (d *HeroDao) unbindSquadItems() {
-	for _, item := range d.squad {
+	for index, item := range d.squad {
 		if item != nil {
-			item.SetNotify(nil)
+			item.unbindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldSquad, key: index})
 		}
 	}
 }
@@ -589,13 +590,13 @@ func (d *HeroDao) SquadLen() int {
 // (RR-20260919-01).
 func (d *HeroDao) bindMount() {
 	if d.mount != nil {
-		d.mount.SetNotify(d.markMountDirty)
+		d.mount.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldMount}, d.markMountDirty)
 	}
 }
 
 func (d *HeroDao) unbindMount() {
 	if d.mount != nil {
-		d.mount.SetNotify(nil)
+		d.mount.unbindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldMount})
 	}
 }
 

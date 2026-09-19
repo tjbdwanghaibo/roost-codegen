@@ -506,8 +506,6 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/activity.go", why: "this server's lease, the World tick, the window loop, the phase effect consumer and the settlement: mail → record → ack"},
 		{write: "internal/service/game/purchase_drain.go", why: "the game side of the platform handover: grant under the Player's lock, then delete the record — never the other order"},
 		{write: "internal/service/platform/collaborators.go", why: "a platform service that verifies a demo channel, resolves the player and records a durable grant instead of pretending it can reach an Entity"},
-		{write: "internal/service/platform/pending_index.go", why: "the paid-but-undelivered index U-0234 left to the deployment: persistent, paged, fair, and retired by asking the service"},
-		{write: "internal/service/platform/pending_index_test.go", why: "the index's four promises against a map, so the retry loop's only input is not the untested part"},
 		{run: demoActivityKeys, why: "the game keeps its contributor board beside the coordinator's keys, and the candidate sid set is the deployment's"},
 		{run: demoPaymentSecrets, why: "the platform service refuses to start without its two secrets; the game process signs its simulated callbacks with the same payment secret"},
 		{write: "internal/service/account/collaborators.go", why: "an account service that can log a demo user in and mint ids from Redis"},

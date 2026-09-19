@@ -131,7 +131,7 @@ func (d *{{.Dao.Name}}) Init() {
 	{{- if .IsPtr}}
 	d.bind{{.Name}}()
 	{{- else}}
-	d.{{fieldVar .Name}}.SetNotify(d.mark{{.Name}}Dirty)
+	d.{{fieldVar .Name}}.bindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}}, d.mark{{.Name}}Dirty)
 	{{- end}}
 {{- end}}
 {{- end}}
@@ -223,13 +223,13 @@ func (d *{{$.Dao.Name}}) Set{{.Name}}(v {{.TypeStr}}) {
 // (RR-20260919-01).
 func (d *{{$.Dao.Name}}) bind{{.Name}}() {
 	if d.{{fieldVar .Name}} != nil {
-		d.{{fieldVar .Name}}.SetNotify(d.mark{{.Name}}Dirty)
+		d.{{fieldVar .Name}}.bindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}}, d.mark{{.Name}}Dirty)
 	}
 }
 
 func (d *{{$.Dao.Name}}) unbind{{.Name}}() {
 	if d.{{fieldVar .Name}} != nil {
-		d.{{fieldVar .Name}}.SetNotify(nil)
+		d.{{fieldVar .Name}}.unbindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}})
 	}
 }
 {{- end}}
@@ -247,7 +247,7 @@ func (d *{{$.Dao.Name}}) Set{{.Name}}(v {{.TypeStr}}) {
 {{- else}}
 			d.{{fieldVar .Name}} = old
 {{- if isNested .TypeStr}}
-			d.{{fieldVar .Name}}.SetNotify(d.mark{{.Name}}Dirty)
+			d.{{fieldVar .Name}}.bindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}}, d.mark{{.Name}}Dirty)
 {{- end}}
 {{- end}}
 			return nil
@@ -260,7 +260,7 @@ func (d *{{$.Dao.Name}}) Set{{.Name}}(v {{.TypeStr}}) {
 {{- else}}
 	d.{{fieldVar .Name}} = v
 {{- if isNested .TypeStr}}
-	d.{{fieldVar .Name}}.SetNotify(d.mark{{.Name}}Dirty)
+	d.{{fieldVar .Name}}.bindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}}, d.mark{{.Name}}Dirty)
 {{- end}}
 {{- end}}
 	d.mark{{.Name}}Dirty()
@@ -287,7 +287,8 @@ func (d *{{$.Dao.Name}}) Get{{.Name}}(key {{.MapKey}}) ({{if .IsPtr}}*{{.MapVal}
 // the key it no longer occupies (RR-20260918-10).
 func (d *{{$.Dao.Name}}) bind{{.Name}}Value(key {{.MapKey}}, val {{mapValType .}}) {
 	if val != nil {
-		val.SetNotify(func() { d.mark{{.Name}}KeyDirty(key, val) })
+		val.bindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}, key: key},
+			func() { d.mark{{.Name}}KeyDirty(key, val) })
 	}
 }
 
@@ -296,7 +297,7 @@ func (d *{{$.Dao.Name}}) unbind{{.Name}}Value(key {{.MapKey}}) {
 		return
 	}
 	if previous, ok := d.{{fieldVar .Name}}.Get(key); ok && previous != nil {
-		previous.SetNotify(nil)
+		previous.unbindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}, key: key})
 	}
 }
 {{- end}}
@@ -377,17 +378,17 @@ func (d *{{$.Dao.Name}}) {{.Name}}Len() int {
 // this slice's elements, and nothing else — no dirty mark, no undo record, so
 // they are callable from a rollback undo (RR-20260918-10).
 func (d *{{$.Dao.Name}}) bind{{.Name}}Items() {
-	for _, item := range d.{{fieldVar .Name}} {
+	for index, item := range d.{{fieldVar .Name}} {
 		if item != nil {
-			item.SetNotify(d.mark{{.Name}}Dirty)
+			item.bindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}, key: index}, d.mark{{.Name}}Dirty)
 		}
 	}
 }
 
 func (d *{{$.Dao.Name}}) unbind{{.Name}}Items() {
-	for _, item := range d.{{fieldVar .Name}} {
+	for index, item := range d.{{fieldVar .Name}} {
 		if item != nil {
-			item.SetNotify(nil)
+			item.unbindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}, key: index})
 		}
 	}
 }
