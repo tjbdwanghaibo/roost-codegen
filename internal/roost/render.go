@@ -55,6 +55,9 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 	add(".github/actionlint.yaml", renderActionlintConfig(), true)
 	add("deploy/dev/docker-compose.yaml", renderCompose(m), true)
 	add("deploy/dev/run.sh", renderDevRun(m), true)
+	if game := firstBusinessService(m); game != "" {
+		add("deploy/dev/second-game.sh", renderSecondGame(m, game), true)
+	}
 	add("Dockerfile", renderDockerfile(m), true)
 	for path, body := range renderProductionDeployment(m) {
 		owned := !strings.HasPrefix(path, "deploy/k8s/base/secret.")

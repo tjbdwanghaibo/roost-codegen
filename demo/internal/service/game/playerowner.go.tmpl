@@ -199,6 +199,15 @@ func (owners *PlayerOwners) OwnerSID(ctx context.Context, playerID int64) (int32
 	return route.SID, err
 }
 
+// SID is this process's server id, which is what the router compares a route
+// against to decide local or remote.
+func (owners *PlayerOwners) SID() int32 {
+	if owners == nil {
+		return 0
+	}
+	return owners.store.SID()
+}
+
 // Routes is the resolver the core router uses.
 func (owners *PlayerOwners) Routes() *playerroute.Store { return owners.store }
 

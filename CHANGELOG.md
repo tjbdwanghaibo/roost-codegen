@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+### Added
+
+- **game-demo：不归自己的 saga 步骤从"拒绝"变成"拒绝 + 转交"**（§9.12）。上一批靠 durable 重投让步骤
+  最终落到持有者身上；现在非持有者用 `ownerroute.Router` 把步骤直接送到持有者的进程
+  （`<prefix>.svc.<game>.<sid>`），持有者用自己的 `inbox.Reserve` 跑同一个 Nest 事务。
+  转交是 fire-and-forget、**可以丢**：丢了就退回重投路径。它也不能代替拒绝——转交成功就 ack
+  等于把"已送出"当成"已完成"。正确性仍然只依赖"没有收据就不 ack"。
+  这同时给了 core 的 `ownerroute` 第一个真实使用方（此前零覆盖）。
+- **`deploy/dev/second-game.sh`**：生成第二个业务进程的启动脚本，从 `config.<game>.yaml` 派生
+  `config.<game>2.yaml` 并覆盖 sid / ops 端口 / 客户端端口 / WAL 目录四项（每一项都是第二个进程
+  起不来的硬条件）。启动前探一次 ops 端口，有人应答就拒绝启动——否则残留进程会替新进程回答就绪探测，
+  脚本报成功而真正启动的那个已经因端口占用死了。
+- 生成工程新增 `internal/service/<game>/gift_handoff_test.go`：转交与准入的七条判定。
+
+### Fixed
+
+- **准入不再因为"实体 kind 没注册"而放行外来玩家的步骤**。`admitPhase` 原来调 `giftTarget`，
+  它除了解码还要 `BuildEntityID`，失败分支是放行；准入只需要 player id，现在只解码。
+  解不开的载荷仍然放行（没有进程能读的消息不该永远弹），但会打警告。
+- **转交里未知的 phase 在认领之前被拒绝**：为一件做不了的事拿走认领，会把命令锁到租约到期。
+
 ## [v1.15.20] - 2026-09-19
 
 ### Added

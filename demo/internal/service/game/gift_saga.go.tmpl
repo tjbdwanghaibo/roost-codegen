@@ -10,13 +10,16 @@ import (
 	"time"
 
 	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/playerroute"
 	"{{MODULE}}/game/gift"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/rewards"
 	giftitem "{{MODULE}}/saga/gift_item"
 	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/bus"
 	"github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-core/errcode"
+	"github.com/tjbdwanghaibo/roost-core/ownerroute"
 	fmongo "github.com/tjbdwanghaibo/roost-core/mongo"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
@@ -124,6 +127,34 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (func(), error) 
 		return nil, fmt.Errorf("gift saga: player ownership (%s) is not published yet; it must be registered before the step consumers subscribe", PlayerOwnerCapability)
 	}
 	steps := giftSteps{nest: nestClient, mailer: mailer, mongo: mongoClient, gameDatabase: gameDatabase, inbox: nativeInbox, owners: owners}
+	// The handoff path: a step that lands on the wrong process is sent to the
+	// one that owns the player instead of only being refused.
+	//
+	// Router is core's ownerroute: it resolves the owner from the same table
+	// the admission predicate reads, runs the step here when the owner turns
+	// out to be us, and otherwise addresses the owner's process directly
+	// (`<prefix>.svc.{{GAME_SERVICE}}.<sid>`). A player nobody owns resolves
+	// to ErrRouteNotFound and is left alone — claiming an idle player just to
+	// have somewhere to send a message is how every process ends up owning
+	// every player.
+	busClient, ok := app.Lookup[bus.IBus](registry, mods.ModBus)
+	if !ok || busClient == nil {
+		return nil, fmt.Errorf("gift saga: capability %q not found", mods.ModBus)
+	}
+	steps.handoff = &ownerroute.Router[giftStepHandoff, int64, playerroute.Route]{
+		LocalSid:  owners.SID(),
+		Routes:    owners.Routes(),
+		Transport: ownerroute.NewBusTransport[giftStepHandoff](busClient, "{{GAME_SERVICE}}", giftHandoffModule),
+		Executor:  steps.runHandoff,
+		KeyOf:     func(cmd *giftStepHandoff) int64 { return cmd.PlayerID },
+		ValidKey:  func(playerID int64) bool { return playerID > 0 },
+	}
+	// The receiving half. It is registered before the consumers subscribe, so
+	// a process cannot forward to a peer that is not listening yet — the peer
+	// registered this handler in its own Init for the same reason.
+	if err := ownerroute.RegisterBusHandler(busClient, giftHandoffModule, giftHandoffMsgName, steps.runHandoff); err != nil {
+		return nil, fmt.Errorf("gift saga: register handoff handler: %w", err)
+	}
 	subscriptions := make([]fnats.IJetStreamSubscription, 0, 4)
 	stop := func() {
 		for _, subscription := range subscriptions {
@@ -144,8 +175,8 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (func(), error) 
 		native  bool
 		admit   func(context.Context, saga.Command) error
 	}{
-		{"debit", giftitem.TopicDebit, steps.debit, true, steps.admitOwned},
-		{"debit-undo", giftitem.TopicDebitCompensation, steps.refund, true, steps.admitOwned},
+		{"debit", giftitem.TopicDebit, steps.debit, true, steps.admitOwned(giftHandoffPhaseDebit)},
+		{"debit-undo", giftitem.TopicDebitCompensation, steps.refund, true, steps.admitOwned(giftHandoffPhaseRefund)},
 		{"deliver", giftitem.TopicDeliver, steps.deliver, false, nil},
 		{"deliver-undo", giftitem.TopicDeliverCompensation, steps.nothingToUndo, false, nil},
 	} {
@@ -177,6 +208,43 @@ func processOwnerSuffix() string {
 	return fmt.Sprintf("%s-%d", host, os.Getpid())
 }
 
+// playerOwnership is the part of PlayerOwners these steps ask about: three
+// questions, no claiming. Declared here rather than taking *PlayerOwners so
+// the admission and handoff decisions can be tested without a Redis.
+type playerOwnership interface {
+	// Owns may claim a player nobody owns; it is the question a consumer
+	// asks about work that has to happen somewhere.
+	Owns(ctx context.Context, playerID int64) (bool, error)
+	// OwnedHere never claims; it is the question asked about work that
+	// belongs to whoever already has the player.
+	OwnedHere(ctx context.Context, playerID int64) (bool, error)
+	OwnerSID(ctx context.Context, playerID int64) (int32, error)
+}
+
+// giftStepHandoff is a step that arrived at the wrong process, on its way to
+// the right one. It carries the whole command, because the owner re-derives
+// everything from it and trusts none of the sender's conclusions except the
+// address it was sent to — which it checks again anyway.
+type giftStepHandoff struct {
+	PlayerID int64        `json:"player_id"`
+	Phase    string       `json:"phase"`
+	Command  saga.Command `json:"command"`
+}
+
+// MsgName pins the wire name. Without it the bus would use "%T", which puts
+// this package's name in the protocol: renaming the Go package would then
+// silently stop two processes from understanding each other.
+func (giftStepHandoff) MsgName() string { return giftHandoffMsgName }
+
+const (
+	// giftHandoffModule is the bus module both halves of the handoff agree
+	// on; it is a routing address, not a capability name.
+	giftHandoffModule  = "{{GAME_SERVICE}}.gift.handoff"
+	giftHandoffMsgName = "gift.step.handoff"
+	giftHandoffPhaseDebit  = "debit"
+	giftHandoffPhaseRefund = "refund"
+)
+
 type giftSteps struct {
 	nest         corenest.Client
 	mailer       svcmail.Mail
@@ -185,7 +253,82 @@ type giftSteps struct {
 	inbox        *saga.DataEngineStepInbox
 	// owners is who may touch which player. nil means a single-process
 	// deployment, where every player is this process's.
-	owners *PlayerOwners
+	owners playerOwnership
+	// handoff sends a step to the process that owns its player. nil disables
+	// forwarding, which leaves plain back-pressure: correct, just slower.
+	handoff *ownerroute.Router[giftStepHandoff, int64, playerroute.Route]
+}
+
+// runHandoff executes a step this process was handed by another one.
+//
+// The difference from the consumer path is where the claim comes from: there
+// is no JetStream delivery here, so this takes its own reservation from the
+// inbox. That is the same claim the consumer would have taken, on the same
+// command id, so the two paths exclude each other — whichever gets there
+// first runs the business and the other finds a receipt.
+//
+// Nothing is acknowledged here. The process that forwarded the step still
+// holds the message and still naks it; it is released only when the receipt
+// this transaction writes becomes visible. A lost handoff therefore costs
+// latency, never the step: the ordinary redelivery is the safety net.
+func (steps giftSteps) runHandoff(ctx context.Context, cmd *giftStepHandoff) error {
+	if cmd == nil {
+		return fmt.Errorf("gift saga: empty handoff")
+	}
+	// Check ownership again rather than trusting the address. The sender's
+	// view of the route is a moment old, and running a step for a player who
+	// has since moved is the corruption all of this exists to prevent.
+	if steps.owners != nil {
+		owned, err := steps.owners.OwnedHere(ctx, cmd.PlayerID)
+		if err != nil {
+			return fmt.Errorf("gift saga: handoff ownership of player %d: %w", cmd.PlayerID, err)
+		}
+		if !owned {
+			// Not ours either. Do nothing: the holder of the message keeps
+			// redelivering, and the next route lookup will be fresher.
+			return nil
+		}
+	}
+	// The phase decides which transaction runs, so a phase this process does
+	// not know is refused BEFORE the claim — the same rule as admission. A
+	// claim taken for work that cannot be done is a command nobody can run
+	// until the lease expires.
+	if cmd.Phase != giftHandoffPhaseDebit && cmd.Phase != giftHandoffPhaseRefund {
+		return fmt.Errorf("gift saga: handoff phase %q is not a step this process runs", cmd.Phase)
+	}
+	command := cmd.Command
+	if err := command.Validate(); err != nil {
+		return fmt.Errorf("gift saga: handoff command: %w", err)
+	}
+	if !time.Now().Before(command.DeadlineAt) {
+		// Past its deadline the coordinator owns the outcome; starting the
+		// business now would race its timeout.
+		return nil
+	}
+	reservation, err := steps.inbox.Reserve(ctx, command)
+	if err != nil {
+		return fmt.Errorf("gift saga: handoff reserve: %w", err)
+	}
+	if reservation.Duplicate {
+		// Somebody is already running it, or it is already done. Either way
+		// this process has nothing to add.
+		return nil
+	}
+	step := gift.NativeStep{Inbox: steps.inbox, Command: command, Reservation: reservation}
+	state, entityID, err := giftTarget(command, func(state gift.State) int64 { return state.From })
+	if err != nil {
+		return fmt.Errorf("gift saga: handoff payload: %w", err)
+	}
+	if cmd.Phase == giftHandoffPhaseDebit {
+		_, err = syncsender.NewGiftDebitSender(steps.nest).Sync_GiftDebit(ctx, entityID, state.ItemID, state.Count, step)
+	} else {
+		_, err = syncsender.NewGiftRefundSender(steps.nest).Sync_GiftRefund(ctx, entityID, state.ItemID, state.Count, step)
+	}
+	if err != nil {
+		return fmt.Errorf("gift saga: handoff %s: %w", cmd.Phase, err)
+	}
+	slog.Info("gift saga: ran a step handed over by another process", "player_id", cmd.PlayerID, "phase", cmd.Phase, "command", command.ID)
+	return nil
 }
 
 // nativeStep gathers what a Nest-transaction step carries into its handler.
@@ -225,14 +368,26 @@ func (steps giftSteps) nativeStep(ctx context.Context, command saga.Command) (gi
 // rather than directly. Routing a step would mean shipping its reservation to
 // another process, which cannot be done; a per-owner consumer is the shape
 // that removes the bounce, and it is the next slice.
-func (steps giftSteps) admitOwned(ctx context.Context, command saga.Command) error {
+func (steps giftSteps) admitOwned(phase string) func(context.Context, saga.Command) error {
+	return func(ctx context.Context, command saga.Command) error {
+		return steps.admitPhase(ctx, phase, command)
+	}
+}
+
+func (steps giftSteps) admitPhase(ctx context.Context, phase string, command saga.Command) error {
 	if steps.owners == nil {
 		return nil
 	}
-	state, _, err := giftTarget(command, func(state gift.State) int64 { return state.From })
+	// Decode only. Admission needs the player id and nothing else: resolving
+	// the entity id here would make "is the Player kind registered yet" part
+	// of a question that is purely about ownership, and its failure mode is
+	// the worst one available — an unreadable payload would be ADMITTED.
+	state, err := gift.Decode(command.Payload)
 	if err != nil {
-		// Not a gift payload: admit it and let the handler produce the real
-		// refusal. Admission answers "whose work is this", not "is it valid".
+		// Not a gift payload. Admit it and let the handler produce the real
+		// refusal: admission answers "whose work is this", not "is it valid",
+		// and a payload no process can read must not bounce forever.
+		slog.Warn("gift saga: admitting a step whose payload is not a gift", "command", command.ID, "err", err)
 		return nil
 	}
 	owned, err := steps.owners.Owns(ctx, state.From)
@@ -241,14 +396,32 @@ func (steps giftSteps) admitOwned(ctx context.Context, command saga.Command) err
 	}
 	if !owned {
 		sid, _ := steps.owners.OwnerSID(ctx, state.From)
+		// Hand it over, then refuse. The two halves do different jobs: the
+		// handoff gets the work started on the owner NOW, and the refusal
+		// keeps this message — unacknowledged — until a receipt exists. If
+		// the handoff never arrives, the redelivery still converges on the
+		// owner the slow way, which is why this is safe to be fire and
+		// forget.
+		steps.handOver(ctx, phase, state.From, command)
 		// Logged, because otherwise this is invisible: the refusal travels
-		// back as a nak and nothing in the process says the work moved. A
-		// steady stream of these is the signal that the durable is spreading
-		// one owner's work across the cluster and wants partitioning.
+		// back as a nak and nothing in the process says the work moved.
 		slog.Info("gift saga: step left to the player's owner", "player_id", state.From, "owner_sid", sid, "command", command.ID)
 		return fmt.Errorf("gift saga: player %d is owned by sid %d, not by this process; leaving the step for them", state.From, sid)
 	}
 	return nil
+}
+
+// handOver routes one step to the player's owner. Failures are logged and
+// dropped on purpose: this is an optimisation over redelivery, and treating a
+// bus hiccup as a step failure would make the slow path less reliable than no
+// handoff at all.
+func (steps giftSteps) handOver(ctx context.Context, phase string, playerID int64, command saga.Command) {
+	if steps.handoff == nil {
+		return
+	}
+	if err := steps.handoff.Route(ctx, &giftStepHandoff{PlayerID: playerID, Phase: phase, Command: command}); err != nil {
+		slog.Warn("gift saga: step not handed over; redelivery will find the owner", "player_id", playerID, "phase", phase, "err", err)
+	}
 }
 
 // debit takes the items out of the sender's Bag. The sender may have spent
