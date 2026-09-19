@@ -43,3 +43,37 @@ func TestDefaultCollaboratorsDefineEveryWiredName(t *testing.T) {
 		}
 	}
 }
+
+// A kit service whose Go package is not at the top of service/ — activity
+// lives at service/global/activity — must still be hostable. The catalog's
+// Package is both an identifier (svcactivity) and an import suffix, and those
+// are not the same string here; a catalog that conflates them generates
+// `svcglobal/activity`, which is not an identifier.
+func TestAServiceNestedUnderAnotherIsHostable(t *testing.T) {
+	m := gameTemplateManifest(t)
+	for _, name := range []string{"global", "activity"} {
+		if m.Services[name].Framework != name {
+			t.Fatalf("the game template does not host %s: %+v", name, m.Services[name])
+		}
+	}
+	generated := renderBootstrap(m)
+	for _, want := range []string{
+		`svcactivity "github.com/tjbdwanghaibo/roost-kit/service/global/activity"`,
+		"svcactivity.NewMod(serviceActivity.Metrics())",
+		"svcglobal.NewMod(serviceGlobal.Metrics())",
+	} {
+		if !strings.Contains(generated, want) {
+			t.Errorf("bootstrap is missing %q:\n%s", want, generated)
+		}
+	}
+}
+
+// The activity Mod refuses an unset reservation_ttl at Init (it must exceed
+// the caller's retry horizon, which the service cannot pick), so a starter
+// config that omits it is a process that cannot start.
+func TestActivityConfigCarriesTheTTLItsModRequires(t *testing.T) {
+	block := frameworkCatalog["activity"].ConfigFunc("demo")
+	if !strings.Contains(block, "reservation_ttl:") {
+		t.Errorf("activity config block omits reservation_ttl:\n%s", block)
+	}
+}

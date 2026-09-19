@@ -322,11 +322,11 @@ func renderBootstrap(m Manifest) string {
 	for _, name := range services {
 		imports[m.Project.Module+"/internal/service/"+name] = "service" + safeIdent(name)
 		if spec, ok := frameworkCatalog[m.Services[name].Framework]; ok {
-			imports[frameworkServiceModule+"/"+spec.Package] = "svc" + spec.Package
+			imports[frameworkServiceModule+"/"+spec.ImportPath()] = "svc" + spec.Package
 		}
 		for _, used := range m.Services[name].Uses {
 			if spec, ok := frameworkCatalog[m.Services[used].Framework]; ok {
-				imports[frameworkServiceModule+"/"+spec.Package] = "svc" + spec.Package
+				imports[frameworkServiceModule+"/"+spec.ImportPath()] = "svc" + spec.Package
 			}
 		}
 	}

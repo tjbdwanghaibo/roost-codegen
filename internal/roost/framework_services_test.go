@@ -26,12 +26,12 @@ func gameTemplateManifest(t *testing.T) Manifest {
 // and wires the business service to all of them.
 func TestGameTemplateHostsEveryFrameworkServiceAndWiresTheGame(t *testing.T) {
 	m := gameTemplateManifest(t)
-	for _, name := range []string{"account", "mail", "match", "chat", "platform", "rank", "session"} {
+	for _, name := range []string{"account", "activity", "mail", "match", "chat", "global", "platform", "rank", "session"} {
 		if m.Services[name].Framework != name {
 			t.Errorf("service %s is not hosted: %+v", name, m.Services[name])
 		}
 	}
-	if got := strings.Join(m.Services["game"].Uses, ","); got != "account,chat,mail,match,platform,rank,session" {
+	if got := strings.Join(m.Services["game"].Uses, ","); got != "account,activity,chat,global,mail,match,platform,rank,session" {
 		t.Fatalf("game uses %q", got)
 	}
 	if !m.usesFrameworkServices() {

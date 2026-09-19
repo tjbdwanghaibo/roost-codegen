@@ -73,7 +73,7 @@ func nestedFuncMap(defs *Definitions) template.FuncMap {
 		"lower1":     lower1,
 		"bsonKey":    func(name string) string { return toSnake(name) },
 		"fieldType":  fieldType,
-		"fieldVar":   fieldVarName,
+		"fieldVar":   safeFieldVarName,
 		"mapValType": mapValType,
 		"mapNewExpr": mapNewExpr,
 		"rawMapType": rawMapType,
@@ -295,7 +295,7 @@ func funcMap(defs *Definitions) template.FuncMap {
 		"bsonKey":       func(name string) string { return toSnake(name) },
 		"fieldMaskName": fieldMaskName,
 		"fieldType":     fieldType,
-		"fieldVar":      fieldVarName,
+		"fieldVar":      safeFieldVarName,
 		"mapValType":    mapValType,
 		"mapNewExpr":    mapNewExpr,
 		"rawMapType":    rawMapType,
@@ -492,6 +492,31 @@ func lower1(s string) string {
 		return s
 	}
 	return strings.ToLower(s[:1]) + s[1:]
+}
+
+// goKeywords are the words a private field name must not be. They are the
+// only names that BREAK — a struct field called `string` or `len` is legal Go
+// and merely shadows a predeclared identifier inside its own scope, while
+// `type` or `range` does not parse (U-0246). The failure was invisible until
+// a definition used one, and then it surfaced as `expected '}', found 'type'`
+// pointing at a generated temporary file.
+var goKeywords = map[string]bool{
+	"break": true, "case": true, "chan": true, "const": true, "continue": true,
+	"default": true, "defer": true, "else": true, "fallthrough": true, "for": true,
+	"func": true, "go": true, "goto": true, "if": true, "import": true,
+	"interface": true, "map": true, "package": true, "range": true, "return": true,
+	"select": true, "struct": true, "switch": true, "type": true, "var": true,
+}
+
+// safeFieldVarName is fieldVarName with the keyword collision resolved. The
+// suffix goes on the PRIVATE name only: accessors, BSON keys and dirty-mask
+// constants keep the field's own spelling, so nothing a caller writes changes.
+func safeFieldVarName(name string) string {
+	varName := fieldVarName(name)
+	if goKeywords[varName] {
+		return varName + "Value"
+	}
+	return varName
 }
 
 func fieldVarName(name string) string {

@@ -87,7 +87,7 @@ func TestDemoTemplateKeepsTheGameTemplateAndItsFeatures(t *testing.T) {
 	if err := applyDemoTemplate(&m, "game"); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"account", "mail", "match", "chat", "platform", "rank", "session"} {
+	for _, name := range []string{"account", "activity", "mail", "match", "chat", "global", "platform", "rank", "session"} {
 		if m.Services[name].Framework != name {
 			t.Errorf("demo dropped hosted service %s: %+v", name, m.Services[name])
 		}
@@ -196,7 +196,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// the stub marker, so the demo's own texts must not contain it either
 	// (account's verifier once said "channel %q is not configured" and read as
 	// a stub).
-	for _, service := range []string{"account", "chat", "mail", "match", "platform", "rank", "session"} {
+	for _, service := range []string{"account", "activity", "chat", "global", "mail", "match", "platform", "rank", "session"} {
 		if collaborators := read("internal/service/" + service + "/collaborators.go"); strings.Contains(collaborators, collaboratorUnconfiguredMarker) {
 			t.Errorf("%s collaborators still read as unconfigured to doctor:\n%s", service, collaborators)
 		}
@@ -258,9 +258,9 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if conn := read("loadtest/playertcp/conn.go"); !strings.Contains(conn, "header[3]&flagServerPush == 0 && wire != 0") {
 		t.Errorf("the robot transport does not classify frames by the server-push flag; a push carrying a pending wire sequence would be taken for the response")
 	}
-	// Eight processes on one machine: each config has its own ops port, in
+	// Ten processes on one machine: each config has its own ops port, in
 	// the order run.sh and prometheus.yml assume.
-	for service, port := range map[string]string{"game": "9100", "account": "9101", "chat": "9102", "mail": "9103", "match": "9104", "platform": "9105", "rank": "9106", "session": "9107"} {
+	for service, port := range map[string]string{"game": "9100", "account": "9101", "activity": "9102", "chat": "9103", "global": "9104", "mail": "9105", "match": "9106", "platform": "9107", "rank": "9108", "session": "9109"} {
 		if cfg := read("configs/service/config." + service + ".yaml"); !strings.Contains(cfg, "addr: 127.0.0.1:"+port) {
 			t.Errorf("config.%s.yaml does not listen ops on %s", service, port)
 		}

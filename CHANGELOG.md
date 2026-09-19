@@ -4,6 +4,39 @@
 
 ## [Unreleased]
 
+### Added
+
+- **game-demo：限时活动——World 的持久计时器与跨服阶段聚合**（§9.8）。一条链子串起两个零覆盖的东西：
+  core 的 `timer`（实体自己的定时器，此前没有任何生成工程用过）与 kit 的 `global` / `global/activity`
+  （路由与租约、跨服阶段聚合，kit 最后两个零使用服务，本版加入托管目录）。
+  `WorldDao.Timers` + `TimerComponent` 把计时器堆存进 World：`OnInitFinish` 重建 scheduler，
+  scheduler 的 change hook 写回 DAO，于是"加一个 / 烧掉一个 / 删一个"都落在当时那个事务里——
+  19:58 部署不会丢掉 20:00 的截止时刻。计时器 handler **不做 I/O**：它记一条 effect 就返回，
+  跨进程调用由 outbox 消费者在锁外做；handler 的返回值就是重试（Emit 失败返回 30s，窗口晚关而不是不关）。
+  活动这一侧：窗口 id 由时钟算出（`race-<起点>`，中途重启的服务器自动回到同一个活动）、预期集合取自
+  `LiveGames`（没起来的服务器不被等）、贡献的幂等锚是 dungeon run id（与清关奖励同一个）、
+  结算顺序是**邮件 → 记录 → ack**（每步可重复，ack 最后），榜是游戏自己的 Redis sorted set
+  （coordinator 没有枚举接口，结算只读前 10 名，成本不随人数增长）。新端点 `ActivityStanding`(10020)、
+  GM 命令 `gm.activity.close`、机器人动作 `activity_standing`（断言精确的 1/1：清关一次 + 重放一次）。
+  10 进程实跑：开窗 → 贡献 → 计时器触发 → NotifyPhase → complete → 下一窗口自动开 → 结算发出两封邮件，
+  `settled` 只出现一次。
+- **托管目录新增 `global` 与 `activity`**。`frameworkServiceSpec` 加 `Path`：一个包的 Go 包名与它在
+  `roost-kit/service/` 下的路径不是同一个字符串（activity 在 `global/activity`），
+  而 `Package` 同时被当成生成 import 的标识符（`svcactivity`）——两者混用会生成 `svcglobal/activity`。
+
+### Fixed
+
+- **DAO 字段名小写之后是 Go 关键字时，生成物编译不过**（U-0246，C2，T-140）。`Type`、`Range`、`Map`
+  都是很自然的字段名（计时器节点的 Type、技能的 Range），而生成的私有字段是 `type int32` —— 不是合法 Go；
+  失败发生在 `format.Source`，错误（`expected '}', found 'type'`）指向一个临时生成文件，
+  跟"你的定义里有个字段叫 Type"之间没有任何提示。只有**关键字**会坏：`String` / `Len` 这类预声明标识符
+  在自己的作用域里遮蔽外层名字，是合法的。修法只改私有名（加 `Value` 后缀），访问器、BSON 键、
+  脏位常量保持字段自己的拼写，调用方无感；dao 与 nested 两张模板函数表都换（nested 有自己的模板和同一份问题）。
+  `internal/dao/keyword_field_promises_test.go` 两条修前红；记录 `roost-core/docs/bugfix/U-0246-dao-keyword-field-names.md`。
+- **活动 / 路由的远端错误按 code 判定，而不是 `errors.Is`**。`Bind` 的"已绑定"经总线回来是
+  `remote.570110` 而不是 `global.ErrConflict`，sentinel 比较永远不匹配——写成 `errors.Is` 的后果是
+  **第一次能起、第二次起不来**（实跑第二次启动时当场看到）。`OpenActivity` 的"已开窗"同理。
+
 ## [v1.15.14] - 2026-09-19
 
 ### Added

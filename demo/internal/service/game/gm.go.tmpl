@@ -3,7 +3,9 @@ package {{GAME_SERVICE_PKG}}
 import (
 	"context"
 	"fmt"
+	"time"
 
+	gameactivity "{{MODULE}}/game/activity"
 	player "{{MODULE}}/game/entities/player"
 	world "{{MODULE}}/game/entities/world"
 	syncsender "{{MODULE}}/game/handler/syncsender"
@@ -43,6 +45,7 @@ const (
 	gmSagaList  = "gm.saga.list"
 	gmScenePop  = "gm.scene.population"
 	gmSceneKill = "gm.scene.kill"
+	gmActClose  = "gm.activity.close"
 )
 
 type gmSceneKillPayload struct {
@@ -97,7 +100,7 @@ type gmMailSendPayload struct {
 }
 
 // registerGMCommands is called from Init, after every Mod has started.
-func registerGMCommands(registry *app.Registry, spawn *spawner) error {
+func registerGMCommands(registry *app.Registry, spawn *spawner, activity *ActivityRunner) error {
 	commands, ok := app.Lookup[*admin.Registry](registry, mods.ModAdmin)
 	if !ok || commands == nil {
 		return fmt.Errorf("gm: admin registry %q is unavailable", mods.ModAdmin)
@@ -301,6 +304,27 @@ func registerGMCommands(registry *app.Registry, spawn *spawner) error {
 					return admin.Result{}, err
 				}
 				return admin.Result{Data: map[string]any{"killed": payload.MonsterID, "alive": spawn.Count()}}, nil
+			},
+		},
+		{
+			Name: gmActClose,
+			Description: "close the current activity window now: reports this server's phase to the coordinator, " +
+				"which settles once every expected server has reported or the grace window expires. " +
+				"The window's id is still current by the clock afterwards, so clears until the next window starts " +
+				"contribute to nothing — closing early ends the event early, for everyone. No payload.",
+			Handler: func(ctx context.Context, _ admin.Command) (admin.Result, error) {
+				if activity == nil {
+					return admin.Result{}, fmt.Errorf("gm: the activity runner is not running")
+				}
+				// The same call the World's timer effect makes, which is the
+				// point of exposing it: an operator closing a window early
+				// takes the path the deadline takes, rather than a second one
+				// that could behave differently.
+				activityID := gameactivity.ID(time.Now().Unix())
+				if err := activity.NotifyPhaseDue(ctx, activityID); err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: map[string]any{"activity_id": activityID}}, nil
 			},
 		},
 	}

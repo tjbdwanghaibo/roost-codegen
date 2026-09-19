@@ -24,7 +24,12 @@ import (
 // identity verifier — are business decisions, so they live in a file the
 // generator creates once and never overwrites, with fail-closed defaults.
 type frameworkServiceSpec struct {
-	Package   string
+	Package string
+	// Path is where the package lives under roost-kit/service/, when that is
+	// not the package name — activity is service/global/activity. Package
+	// stays the Go package name because it is also the identifier the
+	// generated bootstrap imports it as, and `svcglobal/activity` is not one.
+	Path      string
 	Interface string
 	Depends   []string
 	ModArgs   []string
@@ -37,6 +42,14 @@ type frameworkServiceSpec struct {
 	ModChain   []string
 	Collabs    string
 	ConfigFunc func(project string) string
+}
+
+// ImportPath is the package's path under roost-kit/service/.
+func (spec frameworkServiceSpec) ImportPath() string {
+	if strings.TrimSpace(spec.Path) != "" {
+		return spec.Path
+	}
+	return spec.Package
 }
 
 // frameworkServiceModule is the import root of the hosted services; since the
@@ -157,6 +170,39 @@ func Pending() platform.PendingOrders { return nil }
 			// rather than omitted: a starter config whose process cannot start
 			// reads as a broken generator.
 			return "platform:\n  key_prefix: roost:" + project + ":platform\n  session_secret: CHANGE_ME\n  payment_secret: CHANGE_ME\n  session_ttl: 30m\n  delivery_attempts: 8\n"
+		},
+	},
+	"global": {
+		Package: "global", Interface: "Routing", Depends: []string{"redis", "nats"},
+		ModArgs: []string{"Metrics()"},
+		Collabs: `// The global service takes no collaborators: a route is a binding between a
+// game server and a coordination group, and a lease is that server saying it
+// is still alive. Both are state this service owns outright, so there is no
+// policy for a project to supply — what a project decides is who calls Bind
+// and who drives a migration, and those are callers, not collaborators.
+`,
+		ConfigFunc: func(project string) string {
+			return "global:\n  key_prefix: roost:" + project + ":global\n  lease_ttl: 30s\n"
+		},
+	},
+	"activity": {
+		Package: "activity", Path: "global/activity", Interface: "Coordinator",
+		Depends: []string{"redis", "nats"},
+		ModArgs: []string{"Metrics()"},
+		Collabs: `// The activity service takes no collaborators: it aggregates what game
+// servers report and says when a phase is collected. What the phase MEANS —
+// which activity, what a point is worth, what the settlement pays — is the
+// game's, and it stays in the game process, on the two sides of this service:
+// the progress it applies and the dispatch it acks.
+`,
+		ConfigFunc: func(project string) string {
+			// reservation_ttl is required with no default: it must exceed the
+			// caller's longest retry horizon, past which a replayed progress
+			// request is indistinguishable from a new one and is applied
+			// twice. Only the caller's transport knows that number, so the
+			// service refuses to pick one — and a starter config that omits
+			// it is a process that cannot start.
+			return "activity:\n  key_prefix: roost:" + project + ":activity\n  reservation_ttl: 30m\n  grace_window: 60s\n  dispatch_attempts: 5\n  dispatch_backoff: 5s\n  sweep_groups: []\n"
 		},
 	},
 	"rank": {
@@ -329,7 +375,7 @@ func renderFrameworkCollaborators(m Manifest, name string) string {
 	// and the generated project would not compile (U-0218). Comments that
 	// mention `match.Grouping` do not count: the check is on the AST.
 	if bodyUsesPackage(body, spec.Package) {
-		imports = append(imports, fmt.Sprintf("%q", frameworkServiceModule+"/"+spec.Package))
+		imports = append(imports, fmt.Sprintf("%q", frameworkServiceModule+"/"+spec.ImportPath()))
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "// Package %s supplies the collaborators the %s service needs from this\n// project. roost-codegen created this file once and will not overwrite it.\n", safeIdent(name), spec.Package)
@@ -383,7 +429,7 @@ func renderFrameworkClients(m Manifest, name string) string {
 	fmt.Fprintf(&b, "package %s\n\nimport (\n\t\"fmt\"\n\n\t\"github.com/tjbdwanghaibo/roost-core/app\"\n", safeIdent(name))
 	for _, target := range used {
 		spec := frameworkCatalog[m.Services[target].Framework]
-		fmt.Fprintf(&b, "\tsvc%s %q\n", spec.Package, frameworkServiceModule+"/"+spec.Package)
+		fmt.Fprintf(&b, "\tsvc%s %q\n", spec.Package, frameworkServiceModule+"/"+spec.ImportPath())
 	}
 	b.WriteString(")\n")
 	for _, target := range used {

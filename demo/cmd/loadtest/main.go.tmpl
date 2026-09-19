@@ -431,6 +431,30 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			rb.Blackboard.Set("equipped_slot", int64(resp.Slot))
 			return nil
 		}))
+	// activity_standing: the server-wide window this robot is contributing
+	// to. The clear above counted exactly one point — and the REPLAY of that
+	// clear counted none, because the coordinator deduplicates on the run id
+	// — so the assertion is an exact 1, not "at least 1". An off-by-one here
+	// is a contribution being counted twice across a service boundary, which
+	// is precisely what the reservation is for.
+	action.MustRegisterCall[pb.ActivityStandingRequest, pb.ActivityStandingResponse](actions, protocols, "activity_standing", msgid.MsgActivityStanding,
+		action.OnResp(func(rb *robot.Context, resp *pb.ActivityStandingResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.ActivityID == "" {
+				return fmt.Errorf("no activity window is open")
+			}
+			if resp.ClosesAtUnix <= 0 {
+				return fmt.Errorf("window %s has no close deadline", resp.ActivityID)
+			}
+			if resp.Score != 1 || resp.Progress != 1 {
+				return fmt.Errorf("window %s counted score=%d progress=%d for one dungeon clear (and its replay), want 1/1",
+					resp.ActivityID, resp.Score, resp.Progress)
+			}
+			rb.Blackboard.Set("activity_id", resp.ActivityID)
+			return nil
+		}))
 	// purchase: a paid order end to end, across two processes. The endpoint
 	// signs a callback (the demo plays the payment provider), the platform
 	// service records and delivers the order, the grant lands in Redis and
@@ -702,6 +726,8 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalEquipRequest(message)
 	case *pb.PurchaseRequest:
 		return pb.MarshalPurchaseRequest(message)
+	case *pb.ActivityStandingRequest:
+		return pb.MarshalActivityStandingRequest(message)
 	default:
 		return nil, fmt.Errorf("pb codec: no marshal for %T", value)
 	}
@@ -825,6 +851,12 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 		*message = *decoded
 	case *pb.PurchaseResponse:
 		decoded, err := pb.UnmarshalPurchaseResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.ActivityStandingResponse:
+		decoded, err := pb.UnmarshalActivityStandingResponse(data)
 		if err != nil {
 			return err
 		}

@@ -153,6 +153,11 @@ scenarios:
         - action: equip
           param:
             item_id: 2001
+        # The server-wide window: the clear above contributed one point to it,
+        # and the replayed clear contributed none. Both halves are asserted in
+        # the action, because "the replay was free" is only visible as an
+        # exact count.
+        - action: activity_standing
         # A paid order, across the platform process: the endpoint signs a
         # callback, the platform service records and delivers it, the grant
         # lands in Redis and the game drains it into the bag. Then a second

@@ -50,6 +50,33 @@ type Stats struct {
 	ExpGranted     int64
 }
 
+// RecordActivitySettled records that this server has paid out one activity's
+// settlement, and reports whether this call is the one that recorded it.
+//
+// It is on the World because settlement is server-wide: the coordinator says
+// "the phase is collected", and what that PAYS is this game's, decided once
+// per activity however many times the result dispatch is redelivered. The
+// mails themselves are idempotent per (activity, player) too — this record is
+// what stops the whole board being read and mailed again, not what makes the
+// payout exactly-once.
+func (component *StatsComponent) RecordActivitySettled(activityID string, nowUnix int64) bool {
+	if activityID == "" {
+		return false
+	}
+	dao := component.Owner().Dao()
+	if _, settled := dao.GetSettledActivities(activityID); settled {
+		return false
+	}
+	dao.SetSettledActivities(activityID, nowUnix)
+	return true
+}
+
+// ActivitySettled reports whether an activity's settlement has been paid.
+func (component *StatsComponent) ActivitySettled(activityID string) bool {
+	_, settled := component.Owner().Dao().GetSettledActivities(activityID)
+	return settled
+}
+
 // RecordEnter counts one login.
 func (component *StatsComponent) RecordEnter() {
 	dao := component.Owner().Dao()

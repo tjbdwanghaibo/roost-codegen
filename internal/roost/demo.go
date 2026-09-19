@@ -214,19 +214,51 @@ func demoPaymentSecrets(root, gameService string) error {
 	if strings.Contains(string(gameRaw), "\nplatform:\n") {
 		return nil
 	}
-	block := "platform:\n  key_prefix: " + platformKeyPrefix(string(raw)) + "\n  payment_secret: dev-platform-payment-secret\n"
+	block := "platform:\n  key_prefix: " + blockKeyPrefix(string(raw), "platform") + "\n  payment_secret: dev-platform-payment-secret\n"
 	return writeAtomic(gamePath, append(append([]byte(nil), gameRaw...), []byte(block)...), 0o644)
 }
 
-// platformKeyPrefix reads the prefix out of the platform service's own config,
-// so the two processes cannot be given different ones by an edit to one file.
-func platformKeyPrefix(platformConfig string) string {
-	for _, line := range strings.Split(platformConfig, "\n") {
+// blockKeyPrefix reads a service's key prefix out of that service's own
+// config, so two processes cannot be given different ones by an edit to one
+// file.
+func blockKeyPrefix(serviceConfig, service string) string {
+	for _, line := range strings.Split(serviceConfig, "\n") {
 		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "key_prefix:"); ok {
 			return strings.TrimSpace(rest)
 		}
 	}
-	return "roost:platform"
+	return "roost:" + service
+}
+
+// demoActivityKeys tells the game process where the activity coordinator's
+// keyspace is and which game servers this deployment may run.
+//
+// The prefix is read from the coordinator's own config rather than written
+// twice: the game keeps its contributor board BESIDE the coordinator's keys,
+// and two files that can disagree about where that is means a settlement
+// reading an empty board. The sid list is what the candidate set for
+// LiveGames is drawn from — a deployment with three game processes lists all
+// three here, and the ones that are actually up are the ones an activity
+// waits for.
+func demoActivityKeys(root, gameService string) error {
+	activityPath := filepath.Join(root, "configs", "service", "config.activity.yaml")
+	activityRaw, err := os.ReadFile(activityPath)
+	if err != nil {
+		return err
+	}
+	gamePath := filepath.Join(root, "configs", "service", "config."+gameService+".yaml")
+	gameRaw, err := os.ReadFile(gamePath)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(string(gameRaw), "\nactivity:\n") {
+		return nil
+	}
+	block := "activity:\n  key_prefix: " + blockKeyPrefix(string(activityRaw), "activity") +
+		"\n  # Every game server this deployment may run. LiveGames narrows it to\n" +
+		"  # the ones holding a lease, and those are what an activity waits for.\n" +
+		"  game_sids:\n    - 1000\n"
+	return writeAtomic(gamePath, append(append([]byte(nil), gameRaw...), []byte(block)...), 0o644)
 }
 
 func demoScaffoldSteps(gameService string) []demoScaffoldStep {
@@ -404,6 +436,21 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "protocol", Name: "Equip", Group: "game", Handler: "player"}, why: "wearing an item: the slot is the item's property, not the client's choice"},
 		{write: "protocol/def/equip.go", why: "ask with an item id, get back the slot it went in and what came off"},
 		{write: "game/controllers/player/equip.go", why: "the endpoint only addresses the transaction; every decision is under the Player's lock"},
+		{write: "game/activity/activity.go", why: "what this game means by a timed server-wide event: window ids derived from the clock, what a point is worth, what settlement pays, and the board the game keeps because the coordinator has no enumeration"},
+		{write: "game/effects/activity_phase.go", why: "the timer's effect: a bus call recorded inside the World's lock and made outside it"},
+		{write: "game/entities/world/timer_component.go", why: "the World's timer heap: persisted, rebuilt on load, fired inside the transaction that removes the node"},
+		{write: "game/entities/world/timer_component_test.go", why: "the part only a test can show: a deadline armed before a restart still fires after one"},
+		{add: &AddOptions{Kind: "handler", Name: "TickWorldTimers", Entity: "World", Component: "Timer"}, why: "the tick comes from a ticker; the firing happens under the World's lock"},
+		{write: "game/handler/tick_world_timers.go", why: "one call, and what it returns is how many deadlines are still armed"},
+		{add: &AddOptions{Kind: "handler", Name: "ArmActivity", Entity: "World", Component: "Timer"}, why: "every process arms the same window, so arming is idempotent per activity"},
+		{write: "game/handler/arm_activity.go", why: "a second node for one window is a heap that grows by one per restart"},
+		{add: &AddOptions{Kind: "handler", Name: "SettleActivity", Entity: "World", Component: "Stats"}, why: "what the coordinator's result PAYS is the game's, recorded once per activity"},
+		{write: "game/handler/settle_activity.go", why: "mail first, record second, ack last — each step safe to repeat"},
+		{add: &AddOptions{Kind: "handler", Name: "ActivitySettled", Entity: "World", Component: "Stats"}, why: "the standing endpoint reads it through the lock rather than from process memory"},
+		{write: "game/handler/activity_settled.go", why: "an in-process flag starts empty after a deploy and tells a paid player they were not paid"},
+		{add: &AddOptions{Kind: "protocol", Name: "ActivityStanding", Group: "game", Handler: "player"}, why: "where this player stands in the current window"},
+		{write: "protocol/def/activity_standing.go", why: "the coordinator's aggregation and this server's own settlement flag, kept apart"},
+		{write: "game/controllers/player/activity_standing.go", why: "two sources, deliberately not merged: complete is not paid"},
 		{write: "game/purchase/purchase.go", why: "what the game process and the platform process both have to agree on about a paid order: catalogue, key layout, grant record, claim window"},
 		{add: &AddOptions{Kind: "handler", Name: "GrantPurchase", Entity: "Player", Component: "Bag"}, why: "a paid order becomes items: the order id lands in the same WAL record as the grant"},
 		{write: "game/handler/grant_purchase.go", why: "the third instance of one shape: authoritative moment in, identity recorded in the same transaction, admission and pruning the same predicate"},
@@ -456,10 +503,12 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/gm.go", why: "GM commands on the admin registry: add item / add exp / send mail / world stats, served by ops over HTTP behind a token"},
 		{run: enableDemoAdmin, why: "the dev config enables the ops admin endpoint with a dev token, so the GM commands are reachable on a developer machine"},
 		{write: "cmd/accountctl/main.go", why: "the operator surface account keeps off the bus: register the game server so CreateRole works"},
+		{write: "internal/service/game/activity.go", why: "this server's lease, the World tick, the window loop, the phase effect consumer and the settlement: mail → record → ack"},
 		{write: "internal/service/game/purchase_drain.go", why: "the game side of the platform handover: grant under the Player's lock, then delete the record — never the other order"},
 		{write: "internal/service/platform/collaborators.go", why: "a platform service that verifies a demo channel, resolves the player and records a durable grant instead of pretending it can reach an Entity"},
 		{write: "internal/service/platform/pending_index.go", why: "the paid-but-undelivered index U-0234 left to the deployment: persistent, paged, fair, and retired by asking the service"},
 		{write: "internal/service/platform/pending_index_test.go", why: "the index's four promises against a map, so the retry loop's only input is not the untested part"},
+		{run: demoActivityKeys, why: "the game keeps its contributor board beside the coordinator's keys, and the candidate sid set is the deployment's"},
 		{run: demoPaymentSecrets, why: "the platform service refuses to start without its two secrets; the game process signs its simulated callbacks with the same payment secret"},
 		{write: "internal/service/account/collaborators.go", why: "an account service that can log a demo user in and mint ids from Redis"},
 		{write: "internal/service/chat/collaborators.go", why: "a chat service with a written-down policy, one text type and a granted system path"},

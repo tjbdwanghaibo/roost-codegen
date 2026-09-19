@@ -22,6 +22,7 @@ import (
 	svcmail "github.com/tjbdwanghaibo/roost-kit/service/mail"
 	svcmatch "github.com/tjbdwanghaibo/roost-kit/service/match"
 	svcplatform "github.com/tjbdwanghaibo/roost-kit/service/platform"
+	svcactivity "github.com/tjbdwanghaibo/roost-kit/service/global/activity"
 	svcrank "github.com/tjbdwanghaibo/roost-kit/service/rank"
 	svcsession "github.com/tjbdwanghaibo/roost-kit/service/session"
 )
@@ -43,6 +44,7 @@ type Controller struct {
 	ranking    svcrank.Rank
 	payments   svcplatform.Platform
 	purchases  atomic.Pointer[purchaseDrainer]
+	activities atomic.Pointer[activityRunner]
 	presence   *chatroom.Presence
 	transport  atomic.Pointer[pushTransport]
 	battles    atomic.Pointer[battleRouter]
@@ -74,6 +76,15 @@ type sceneJoiner interface {
 	Join(ctx context.Context, subject *player.Player, at spatial.Point) error
 	Moved(ctx context.Context, subjectID int64, to spatial.Point)
 	Leave(ctx context.Context, subjectID int64)
+}
+
+// activityRunner is the slice of the game service's activity runner the
+// endpoints use: where a player stands, and one contribution. Looked up by
+// capability name for the same reason the scene is.
+type activityRunner interface {
+	Standing(ctx context.Context, playerID int64) (string, svcactivity.Activity, svcactivity.Participant, error)
+	Contribute(ctx context.Context, playerID int64, runID string) (svcactivity.Participant, error)
+	Settled(ctx context.Context, activityID string) (bool, error)
 }
 
 // purchaseDrainer is the slice of the game service's paid-order drain an
@@ -109,6 +120,10 @@ const sceneCapability app.ModName = "{{GAME_SERVICE}}.scene"
 // purchaseCapability is what internal/service/<game> publishes its paid-order
 // drain under (PurchaseCapability there).
 const purchaseCapability app.ModName = "{{GAME_SERVICE}}.purchases"
+
+// activityCapability is what internal/service/<game> publishes its activity
+// runner under (ActivityCapability there).
+const activityCapability app.ModName = "{{GAME_SERVICE}}.activity"
 
 // FromRegistry is what the generated protocol binding calls once per
 // process; keep its signature.
@@ -320,6 +335,22 @@ func (controller *Controller) Purchases() (purchaseDrainer, error) {
 	}
 	controller.purchases.Store(&drain)
 	return drain, nil
+}
+
+// Activities is the timed server-wide event, looked up lazily like the scene.
+func (controller *Controller) Activities() (activityRunner, error) {
+	if controller == nil {
+		return nil, errors.New("player controller: nil")
+	}
+	if runner := controller.activities.Load(); runner != nil {
+		return *runner, nil
+	}
+	runner, ok := app.Lookup[activityRunner](controller.registry, activityCapability)
+	if !ok || runner == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; the activity runner is not running", activityCapability)
+	}
+	controller.activities.Store(&runner)
+	return runner, nil
 }
 
 // WorldSceneID is the full entity id of the one map this process runs.

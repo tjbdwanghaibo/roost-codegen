@@ -27,6 +27,9 @@ type Service struct {
 	scene          *Scene
 	stopSpawner    func()
 	spawner        *spawner
+	activity       *ActivityRunner
+	stopActivity   func()
+	activityPhase  fnats.IJetStreamSubscription
 }
 
 func New() *Service                    { return &Service{} }
@@ -129,9 +132,26 @@ func (s *Service) Init(registry *app.Registry) error {
 	if err := registry.Register(PurchaseCapability, drain); err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: publish purchase drain: %w", err)
 	}
+	// The timed server-wide event: this server's lease, the World's timer
+	// heap and the coordinator loop (activity.go). After the scene, because
+	// the settlement mails players who are already in the world, and before
+	// the GM commands, which can close a window by hand.
+	runner, stopActivity, err := startActivity(context.Background(), registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.activity, s.stopActivity = runner, stopActivity
+	if err := registry.Register(ActivityCapability, runner); err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: publish activity runner: %w", err)
+	}
+	phase, err := startActivityPhaseConsumer(context.Background(), registry, runner)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.activityPhase = phase
 	// The operator surface: GM commands on the admin registry the ops Mod
 	// serves (gm.go). Registered last, when everything they call is up.
-	if err := registerGMCommands(registry, s.spawner); err != nil {
+	if err := registerGMCommands(registry, s.spawner, s.activity); err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	return nil
@@ -161,6 +181,16 @@ func (s *Service) Shutdown(context.Context) error {
 	if s.levelUpMail != nil {
 		s.levelUpMail.Drain()
 		s.levelUpMail = nil
+	}
+	// The activity loops before the consumer that feeds them, so nothing is
+	// still opening a window while the phase subscription drains.
+	if s.stopActivity != nil {
+		s.stopActivity()
+		s.stopActivity = nil
+	}
+	if s.activityPhase != nil {
+		s.activityPhase.Drain()
+		s.activityPhase = nil
 	}
 	// The spawner before the scene: it takes its population down, and the
 	// room has to still be there to hear about it.

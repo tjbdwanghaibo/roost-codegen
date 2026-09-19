@@ -20,5 +20,6 @@ type World struct {
 	entity.ComponentManager
 	entity.DaoManager
 	stats *StatsComponent `comp:"CompTypeStats"`
+	timer *TimerComponent `comp:"CompTypeTimer"`
 	dao   *db.WorldDao    `dao:"world"`
 }
