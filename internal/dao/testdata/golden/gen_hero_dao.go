@@ -25,6 +25,7 @@ type HeroDao struct {
 	pos     Position
 	equips  *fmap.SmallSafeMap[int64, *EquipInfo]
 	squad   []*EquipInfo
+	mount   *EquipInfo
 }
 
 // Ensure interface compliance.
@@ -77,6 +78,7 @@ const (
 	heroDaoFieldPos     uint64 = 1 << iota
 	heroDaoFieldEquips  uint64 = 1 << iota
 	heroDaoFieldSquad   uint64 = 1 << iota
+	heroDaoFieldMount   uint64 = 1 << iota
 )
 
 func (d *HeroDao) markNameDirty() {
@@ -141,6 +143,13 @@ func (d *HeroDao) markSquadDirty() {
 	d.tracker.MarkSync(heroDaoFieldSquad)
 }
 
+func (d *HeroDao) markMountDirty() {
+	if err := nest.MarkPersist(d, heroDaoFieldMount); err != nil {
+		panic(fmt.Errorf("HeroDao: mark Mount persistence: %w", err))
+	}
+	d.tracker.MarkSync(heroDaoFieldMount)
+}
+
 func (d *HeroDao) markItemsKeyDirty(key int64, val int32) {
 	if path, ok := dataengine.MapPatchPath("items", key); ok {
 		if err := nest.MarkPersistSet(d, heroDaoFieldItems, path, val); err != nil {
@@ -203,6 +212,7 @@ func (d *HeroDao) Init() {
 		})
 	}
 	d.bindSquadItems()
+	d.bindMount()
 }
 
 // --- Accessors ---
@@ -232,6 +242,8 @@ func (d *HeroDao) GetSquad(idx int) (*EquipInfo, bool) {
 	}
 	return d.squad[idx], true
 }
+
+func (d *HeroDao) GetMount() *EquipInfo { return d.mount }
 
 // --- Mutators ---
 
@@ -565,6 +577,46 @@ func (d *HeroDao) SquadLen() int {
 	return len(d.squad)
 }
 
+// bindMount / unbindMount move the notification ownership of this
+// field's value, and nothing else: no dirty mark, no undo record. That is what
+// makes them callable from inside a rollback undo, where the transaction is
+// already rolledBack and a mutator would register another undo.
+//
+// A value that leaves this field must stop reporting, or it keeps writing its
+// own content into a field it no longer occupies — the same ownership
+// invariant U-0236 and U-0238 established for nested containers and for
+// top-level maps and slices, on the branch they did not touch
+// (RR-20260919-01).
+func (d *HeroDao) bindMount() {
+	if d.mount != nil {
+		d.mount.SetNotify(d.markMountDirty)
+	}
+}
+
+func (d *HeroDao) unbindMount() {
+	if d.mount != nil {
+		d.mount.SetNotify(nil)
+	}
+}
+
+func (d *HeroDao) SetMount(v *EquipInfo) {
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old := d.mount
+		d.recordUndo(tx, heroDaoFieldMount, func() error {
+			// Whatever occupies the field now is being discarded; it must stop
+			// reporting before the old value takes the field back.
+			d.unbindMount()
+			d.mount = old
+			d.bindMount()
+			return nil
+		})
+	}
+	d.unbindMount()
+	d.mount = v
+	d.bindMount()
+	d.markMountDirty()
+}
+
 func (d *HeroDao) heroDaoItemsRawMap() map[int64]int32 {
 	if d.items == nil {
 		return nil
@@ -620,6 +672,7 @@ func (d *HeroDao) CaptureRollbackState() ([]byte, error) {
 		Pos     positionBSONDoc             `bson:"pos"`
 		Equips  map[int64]*equipInfoBSONDoc `bson:"equips"`
 		Squad   []*equipInfoBSONDoc         `bson:"squad"`
+		Mount   *equipInfoBSONDoc           `bson:"mount"`
 	}
 	doc := rollbackDoc{
 		Id:      d.id,
@@ -632,6 +685,7 @@ func (d *HeroDao) CaptureRollbackState() ([]byte, error) {
 		Pos:     d.pos.bsonDoc(),
 		Equips:  daoMapDocs(d.heroDaoEquipsRawMap(), equipInfoPtrBSONDoc),
 		Squad:   daoSliceDocs(d.squad, equipInfoPtrBSONDoc),
+		Mount:   equipInfoPtrBSONDoc(d.mount),
 	}
 	return bson.Marshal(doc)
 }
@@ -648,6 +702,7 @@ func (d *HeroDao) RestoreRollbackState(raw []byte) error {
 		Pos     positionBSONDoc             `bson:"pos"`
 		Equips  map[int64]*equipInfoBSONDoc `bson:"equips"`
 		Squad   []*equipInfoBSONDoc         `bson:"squad"`
+		Mount   *equipInfoBSONDoc           `bson:"mount"`
 	}
 	var doc rollbackDoc
 	if err := bson.Unmarshal(raw, &doc); err != nil {
@@ -663,6 +718,7 @@ func (d *HeroDao) RestoreRollbackState(raw []byte) error {
 	d.pos = positionFromBSONDoc(doc.Pos)
 	d.setEquipsRawMap(daoMapDocs(doc.Equips, equipInfoPtrFromBSONDoc))
 	d.squad = daoSliceDocs(doc.Squad, equipInfoPtrFromBSONDoc)
+	d.mount = equipInfoPtrFromBSONDoc(doc.Mount)
 	d.Init()
 	return nil
 }
@@ -680,6 +736,7 @@ func (d *HeroDao) marshalCommitState() ([]byte, error) {
 		"pos":      d.pos.bsonDoc(),
 		"equips":   daoMapDocs(d.heroDaoEquipsRawMap(), equipInfoPtrBSONDoc),
 		"squad":    daoSliceDocs(d.squad, equipInfoPtrBSONDoc),
+		"mount":    equipInfoPtrBSONDoc(d.mount),
 	}
 	return bson.Marshal(doc)
 }
@@ -741,6 +798,7 @@ func (d *HeroDao) marshalPersistData(mask uint64) []byte {
 		"pos":      d.pos.bsonDoc(),
 		"equips":   daoMapDocs(d.heroDaoEquipsRawMap(), equipInfoPtrBSONDoc),
 		"squad":    daoSliceDocs(d.squad, equipInfoPtrBSONDoc),
+		"mount":    equipInfoPtrBSONDoc(d.mount),
 	}
 	data, err := bson.Marshal(doc)
 	if err != nil {
@@ -813,6 +871,9 @@ func (d *HeroDao) marshalPersistPatchBSON(change nest.PersistChange) (dataengine
 	if change.Mask&heroDaoFieldSquad != 0 {
 		set["squad"] = daoSliceDocs(d.squad, equipInfoPtrBSONDoc)
 	}
+	if change.Mask&heroDaoFieldMount != 0 {
+		set["mount"] = equipInfoPtrBSONDoc(d.mount)
+	}
 	for path, value := range change.Set {
 		if !d.persistChangePathCovered(change, path) {
 			set[path] = value
@@ -859,6 +920,7 @@ func HeroDaoSyncFields() []dataengine.SyncFieldMeta {
 		{Name: "Pos", WireName: "pos", Bit: heroDaoFieldPos},
 		{Name: "Equips", WireName: "equips", Bit: heroDaoFieldEquips},
 		{Name: "Squad", WireName: "squad", Bit: heroDaoFieldSquad},
+		{Name: "Mount", WireName: "mount", Bit: heroDaoFieldMount},
 	}
 }
 
@@ -893,6 +955,9 @@ func (d *HeroDao) MarshalSync(mask uint64) []byte {
 	}
 	if mask&heroDaoFieldSquad != 0 {
 		doc["squad"] = daoSliceDocs(d.squad, equipInfoPtrBSONDoc)
+	}
+	if mask&heroDaoFieldMount != 0 {
+		doc["mount"] = equipInfoPtrBSONDoc(d.mount)
 	}
 	if len(doc) == 1 {
 		return nil
@@ -1015,6 +1080,19 @@ func (d *HeroDao) ApplySync(raw []byte) error {
 		}
 		d.squad = daoSliceDocs(wrap.V, equipInfoPtrFromBSONDoc)
 	}
+	if v, ok := doc["mount"]; ok {
+		data, err := bson.Marshal(bson.M{"v": v})
+		if err != nil {
+			return err
+		}
+		var wrap struct {
+			V *equipInfoBSONDoc `bson:"v"`
+		}
+		if err := bson.Unmarshal(data, &wrap); err != nil {
+			return err
+		}
+		d.mount = equipInfoPtrFromBSONDoc(wrap.V)
+	}
 	d.Init()
 	return nil
 }
@@ -1033,6 +1111,7 @@ func (d *HeroDao) Unmarshal(raw []byte) error {
 		Pos     positionBSONDoc             `bson:"pos"`
 		Equips  map[int64]*equipInfoBSONDoc `bson:"equips"`
 		Squad   []*equipInfoBSONDoc         `bson:"squad"`
+		Mount   *equipInfoBSONDoc           `bson:"mount"`
 	}
 	var dd rawDoc
 	if err := bson.Unmarshal(raw, &dd); err != nil {
@@ -1048,6 +1127,7 @@ func (d *HeroDao) Unmarshal(raw []byte) error {
 	d.pos = positionFromBSONDoc(dd.Pos)
 	d.setEquipsRawMap(daoMapDocs(dd.Equips, equipInfoPtrFromBSONDoc))
 	d.squad = daoSliceDocs(dd.Squad, equipInfoPtrFromBSONDoc)
+	d.mount = equipInfoPtrFromBSONDoc(dd.Mount)
 	d.Init()
 	return nil
 }

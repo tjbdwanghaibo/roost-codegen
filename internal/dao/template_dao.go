@@ -129,9 +129,7 @@ func (d *{{.Dao.Name}}) Init() {
 {{- if eq .Kind 3}}
 {{- if isNested .TypeStr}}
 	{{- if .IsPtr}}
-	if d.{{fieldVar .Name}} != nil {
-		d.{{fieldVar .Name}}.SetNotify(d.mark{{.Name}}Dirty)
-	}
+	d.bind{{.Name}}()
 	{{- else}}
 	d.{{fieldVar .Name}}.SetNotify(d.mark{{.Name}}Dirty)
 	{{- end}}
@@ -212,32 +210,58 @@ func (d *{{$.Dao.Name}}) Set{{.Name}}(v {{.TypeStr}}) {
 }
 {{end}}
 {{- if eq .Kind 3}}
+{{- if and .IsPtr (isNested .TypeStr)}}
+// bind{{.Name}} / unbind{{.Name}} move the notification ownership of this
+// field's value, and nothing else: no dirty mark, no undo record. That is what
+// makes them callable from inside a rollback undo, where the transaction is
+// already rolledBack and a mutator would register another undo.
+//
+// A value that leaves this field must stop reporting, or it keeps writing its
+// own content into a field it no longer occupies — the same ownership
+// invariant U-0236 and U-0238 established for nested containers and for
+// top-level maps and slices, on the branch they did not touch
+// (RR-20260919-01).
+func (d *{{$.Dao.Name}}) bind{{.Name}}() {
+	if d.{{fieldVar .Name}} != nil {
+		d.{{fieldVar .Name}}.SetNotify(d.mark{{.Name}}Dirty)
+	}
+}
+
+func (d *{{$.Dao.Name}}) unbind{{.Name}}() {
+	if d.{{fieldVar .Name}} != nil {
+		d.{{fieldVar .Name}}.SetNotify(nil)
+	}
+}
+{{- end}}
+
 func (d *{{$.Dao.Name}}) Set{{.Name}}(v {{.TypeStr}}) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := d.{{fieldVar .Name}}
 		d.recordUndo(tx, {{fieldMaskName $.Dao.Name .Name}}, func() error {
+{{- if and .IsPtr (isNested .TypeStr)}}
+			// Whatever occupies the field now is being discarded; it must stop
+			// reporting before the old value takes the field back.
+			d.unbind{{.Name}}()
+			d.{{fieldVar .Name}} = old
+			d.bind{{.Name}}()
+{{- else}}
 			d.{{fieldVar .Name}} = old
 {{- if isNested .TypeStr}}
-			{{- if .IsPtr}}
-			if d.{{fieldVar .Name}} != nil {
-				d.{{fieldVar .Name}}.SetNotify(d.mark{{.Name}}Dirty)
-			}
-			{{- else}}
 			d.{{fieldVar .Name}}.SetNotify(d.mark{{.Name}}Dirty)
-			{{- end}}
+{{- end}}
 {{- end}}
 			return nil
 		})
 	}
+{{- if and .IsPtr (isNested .TypeStr)}}
+	d.unbind{{.Name}}()
+	d.{{fieldVar .Name}} = v
+	d.bind{{.Name}}()
+{{- else}}
 	d.{{fieldVar .Name}} = v
 {{- if isNested .TypeStr}}
-	{{- if .IsPtr}}
-	if d.{{fieldVar .Name}} != nil {
-		d.{{fieldVar .Name}}.SetNotify(d.mark{{.Name}}Dirty)
-	}
-	{{- else}}
 	d.{{fieldVar .Name}}.SetNotify(d.mark{{.Name}}Dirty)
-	{{- end}}
+{{- end}}
 {{- end}}
 	d.mark{{.Name}}Dirty()
 }

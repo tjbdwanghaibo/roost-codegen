@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"{{MODULE}}/game/chatroom"
 	player "{{MODULE}}/game/entities/player"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	sceneentity "{{MODULE}}/game/entities/scene"
@@ -453,4 +454,51 @@ func TestTheBridgeKeepsEveryIdInTheEntityIdSpace(t *testing.T) {
 	if got := entity.GetUniqueIDFromEntityID(subject.ID()); got != uniqueID {
 		t.Fatalf("the resolver's translation gives %d, want the player id %d", got, uniqueID)
 	}
+}
+
+// The other half of the same source: chat presence.
+//
+// The first round of RR-20260918-06 wired the scene and left presence to the
+// lazy path — the chat push removes a player when a push to them fails and
+// they have no sessions left. In a quiet world nothing pushes, so an offline
+// player stayed in the world channel's recipient set indefinitely. The 09-19
+// review called that a partial fix, correctly.
+func TestAClosedSessionLeavesTheWorldChannel(t *testing.T) {
+	recorder := &sceneRecorder{}
+	presence := chatroom.DefaultPresence()
+	const playerID = int64(4242)
+	presence.Add(playerID)
+	t.Cleanup(func() { presence.Remove(playerID) })
+
+	unsubscribe := subscribePresence(recorder, recorder)
+	defer unsubscribe()
+
+	recorder.close(playerID)
+	if presenceHolds(presence, playerID) {
+		t.Fatal("the player is still in the world channel's recipient set after their last session closed")
+	}
+
+	// A player with another connection still up stays: one closed session is
+	// not one offline player.
+	const stillOnline = int64(4243)
+	presence.Add(stillOnline)
+	t.Cleanup(func() { presence.Remove(stillOnline) })
+	recorder.mu.Lock()
+	subscribers := append([]func(accessplayertcp.SessionClosed){}, recorder.closed...)
+	recorder.mu.Unlock()
+	for _, fn := range subscribers {
+		fn(accessplayertcp.SessionClosed{PlayerID: stillOnline, SessionID: "one-of-two"})
+	}
+	if !presenceHolds(presence, stillOnline) {
+		t.Fatal("a player with another live connection was removed from the world channel")
+	}
+}
+
+func presenceHolds(presence *chatroom.Presence, playerID int64) bool {
+	for _, id := range presence.Snapshot() {
+		if id == playerID {
+			return true
+		}
+	}
+	return false
 }

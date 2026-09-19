@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"{{MODULE}}/game/purchase"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	apperrors "{{MODULE}}/internal/errors"
 )
@@ -60,30 +59,41 @@ func TestAPaidOrderIsGrantedOnce(t *testing.T) {
 	}
 }
 
-// Admission and pruning are the same predicate on the same number. A grant
-// past its window is refused — not granted quietly — because the ledger has
-// already forgotten it and a silent grant would be the second one.
-func TestAGrantPastItsWindowIsRefusedRatherThanRepeated(t *testing.T) {
+// A paid grant does not expire, and its ledger entry is never pruned
+// (RR-20260919-06).
+//
+// The first version of this gave a grant thirty days and pruned on the same
+// number. The reasoning was right for mail — admission and pruning must be one
+// predicate — and wrong here, because a paid order has no moment after which a
+// replay is impossible: the platform service marked it delivered when the
+// grant became durable. A player who did not log in for a month would have
+// found a paid order settled on one side and refused on the other, with the
+// grant deleted afterwards.
+func TestAnOldPaidGrantIsStillHonoured(t *testing.T) {
 	subject, client, _ := newClaimHarness(t)
 	const now int64 = 1_800_000_000
 	const potion = int64(1001)
 	ctx := context.Background()
 	sender := syncsender.NewGrantPurchaseSender(client)
 
-	paidAt := now - purchase.ClaimRetentionSeconds - 1
-	if _, err := sender.Sync_GrantPurchase(ctx, subject.ID(), "stale", potion, 10, paidAt, now); !errors.Is(err, apperrors.ErrPurchaseExpired) {
-		t.Fatalf("a grant past its claim window returned %v, want the coded refusal", err)
+	// A year later. There is no retention that makes this refusable.
+	paidAt := now - 365*24*60*60
+	result, err := sender.Sync_GrantPurchase(ctx, subject.ID(), "ancient", potion, 10, paidAt, now)
+	if err != nil || !result.Granted {
+		t.Fatalf("a year-old paid grant was refused: %+v %v", result, err)
 	}
-	if held := subject.BagComp().ItemCount(potion); held != 0 {
-		t.Errorf("the refused grant still moved the bag to %d", held)
+	if held := subject.BagComp().ItemCount(potion); held != 10 {
+		t.Fatalf("the bag holds %d, want the goods that were paid for", held)
 	}
 
-	// And one that is still inside its window, at the last moment it is: the
-	// boundary belongs to the claimable side, which is the same direction the
-	// ledger prunes on.
-	live := now - purchase.ClaimRetentionSeconds
-	if result, err := sender.Sync_GrantPurchase(ctx, subject.ID(), "edge", potion, 10, live, now); err != nil || !result.Granted {
-		t.Fatalf("a grant at the edge of its window was refused: %+v %v", result, err)
+	// And the ledger still refuses its replay, however old: an entry that was
+	// pruned would let the next drain pay a second time.
+	replay, err := sender.Sync_GrantPurchase(ctx, subject.ID(), "ancient", potion, 10, paidAt, now+10*365*24*60*60)
+	if err != nil {
+		t.Fatalf("replaying an ancient grant: %v", err)
+	}
+	if replay.Granted || subject.BagComp().ItemCount(potion) != 10 {
+		t.Errorf("an old ledger entry was forgotten; the replay paid again: %+v", replay)
 	}
 }
 

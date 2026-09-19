@@ -137,6 +137,7 @@ import (
 	"log/slog"
 	"maps"
 	"net"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -416,13 +417,36 @@ func (runtime *Runtime) dispatchClosed() {
 }
 
 func (runtime *Runtime) deliverClosed(event SessionClosed) {
-	runtime.lifecycleMu.Lock()
-	subscribers := make([]func(SessionClosed), 0, len(runtime.subscribers))
-	for _, fn := range runtime.subscribers { subscribers = append(subscribers, fn) }
-	runtime.lifecycleMu.Unlock()
-	for _, fn := range subscribers {
-		fn(event)
+	type subscriber struct {
+		id uint64
+		fn func(SessionClosed)
 	}
+	runtime.lifecycleMu.Lock()
+	subscribers := make([]subscriber, 0, len(runtime.subscribers))
+	for id, fn := range runtime.subscribers { subscribers = append(subscribers, subscriber{id: id, fn: fn}) }
+	runtime.lifecycleMu.Unlock()
+	for _, current := range subscribers {
+		runtime.callClosedSubscriber(current.id, current.fn, event)
+	}
+}
+
+// callClosedSubscriber isolates one subscriber. This dispatcher owns a
+// goroutine of its own, so a panic nobody recovers here does not fail one
+// subscriber — it ends the PROCESS, turning a nil map in a presence bridge
+// into an outage for every connected player (RR-20260919-03). Every other
+// callback boundary in this framework recovers per callback; so does this one,
+// and the subscribers after the failing one still run, because the state they
+// maintain — who is online — is exactly what has to converge.
+func (runtime *Runtime) callClosedSubscriber(id uint64, fn func(SessionClosed), event SessionClosed) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			metrics.IncCounter("player_tcp_session_closed_callback_panics_total", nil, 1)
+			slog.Error("player tcp: session-close subscriber panicked",
+				"subscriber", id, "player_id", event.PlayerID, "session_id", event.SessionID,
+				"panic", recovered, "stack", string(debug.Stack()))
+		}
+	}()
+	fn(event)
 }
 
 // publishClosed is called from the socket cleanup path, so it never blocks:
@@ -979,6 +1003,54 @@ func TestRuntimePushPlayerEncodesOnceAndMarksServerPush(t *testing.T) {
 		t.Fatalf("unexpected push frame: %%+v", got)
 	}
 	if err := <-pushResult; err != nil { t.Fatal(err) }
+}
+
+// One subscriber's panic must not take the process with it.
+//
+// The dispatcher runs on its own goroutine, and a panic nobody recovers there
+// ends the whole process — so a scene bridge with a nil map would turn every
+// disconnect into an outage for every player (RR-20260919-03). Every other
+// callback boundary in this framework isolates per callback; this one has to
+// as well, and the subscribers after the panicking one still have to run,
+// because "who is online" is exactly the state that must converge.
+func TestASubscriberPanicIsIsolated(t *testing.T) {
+	runtime := &Runtime{}
+	var before, after int
+	runtime.OnSessionClosed(func(SessionClosed) { before++ })
+	runtime.OnSessionClosed(func(SessionClosed) { panic("subscriber blew up") })
+	runtime.OnSessionClosed(func(SessionClosed) { after++ })
+	runtime.deliverClosed(SessionClosed{PlayerID: 1, SessionID: "session"})
+	if before != 1 || after != 1 {
+		t.Fatalf("healthy subscribers ran before=%%d after=%%d, want 1 each: a panic ate the rest of the batch", before, after)
+	}
+	// And the source keeps working: the next event reaches everyone again.
+	runtime.deliverClosed(SessionClosed{PlayerID: 2, SessionID: "session-2"})
+	if before != 2 || after != 2 {
+		t.Fatalf("after a panic the source stopped delivering: before=%%d after=%%d", before, after)
+	}
+}
+
+// The same through the real path: published from the socket cleanup,
+// dispatched on the lifecycle goroutine, and the drain at Stop still finishes.
+func TestAPanickingSubscriberDoesNotStopTheDispatcher(t *testing.T) {
+	runtime := &Runtime{}
+	delivered := make(chan int64, 4)
+	runtime.OnSessionClosed(func(SessionClosed) { panic("subscriber blew up") })
+	runtime.OnSessionClosed(func(event SessionClosed) { delivered <- event.PlayerID })
+	runtime.startLifecycle()
+	runtime.publishClosed(SessionClosed{PlayerID: 7, SessionID: "a"})
+	runtime.publishClosed(SessionClosed{PlayerID: 8, SessionID: "b"})
+	for _, want := range []int64{7, 8} {
+		select {
+		case got := <-delivered:
+			if got != want {
+				t.Fatalf("delivered player %%d, want %%d", got, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("player %%d was never delivered; the dispatcher died with the panic", want)
+		}
+	}
+	runtime.stopLifecycle()
 }
 
 func TestServerRejectsInvalidConstruction(t *testing.T) {

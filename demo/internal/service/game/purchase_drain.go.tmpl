@@ -2,7 +2,6 @@ package {{GAME_SERVICE_PKG}}
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -10,7 +9,6 @@ import (
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/purchase"
-	apperrors "{{MODULE}}/internal/errors"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
@@ -105,13 +103,12 @@ func (drain *PurchaseDrain) DrainPlayer(ctx context.Context, playerID int64) ([]
 		}
 		result, err := sender.Sync_GrantPurchase(ctx, entityID, grant.OrderID, grant.ItemID, grant.Count, grant.PaidAtUnix, time.Now().Unix())
 		switch {
-		case errors.Is(err, apperrors.ErrPurchaseExpired):
-			// The claim window closed, so no retry can ever succeed and the
-			// ledger has already forgotten the order. Keeping the grant would
-			// mean reading it on every login forever.
-			slog.Error("purchase drain: grant expired unclaimed; a paid order will not be delivered",
-				"player_id", playerID, "order_id", grant.OrderID, "paid_at_unix", grant.PaidAtUnix)
 		case err != nil:
+			// The grant STAYS. There is no failure here that makes a paid
+			// order undeliverable — a full bag, a Mongo blip, a process going
+			// down mid-transaction are all things that pass — so nothing in
+			// this loop may drop one (RR-20260919-06). It is read again on the
+			// player's next login.
 			slog.Error("purchase drain: grant failed; it stays for the next drain",
 				"player_id", playerID, "order_id", grant.OrderID, "err", err)
 			continue

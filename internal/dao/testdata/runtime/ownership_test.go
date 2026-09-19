@@ -258,6 +258,92 @@ func TestTopLevelMapValueOwnership(t *testing.T) {
 	}
 }
 
+// The third top-level shape: ONE nested pointer in a field of its own.
+//
+// U-0238 fixed the map and the slice and left this branch of the template
+// untouched, and it has the same defect (RR-20260919-01): the setter binds the
+// new value but never releases the old one, and the undo restores the old one
+// without releasing the new. A detached object that still reports its changes
+// writes content into a field it no longer occupies.
+func TestTopLevelPointerFieldOwnership(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		abort       bool
+		mutateOld   bool
+		wantRecords int
+	}{
+		{"committed_old_is_detached", false, true, 0},
+		{"committed_new_is_owned", false, false, 1},
+		{"rolled_back_old_is_restored", true, true, 1},
+		{"rolled_back_new_is_detached", true, false, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hero := NewHeroDao()
+			hero.SetId(42)
+			oldValue := &EquipInfo{}
+			hero.mount = oldValue
+			hero.Init()
+			newValue := &EquipInfo{}
+
+			committer := &ownershipCommitter{}
+			sentinel := errors.New("abort")
+			_, err := nest.RunIsolatedTransaction(context.Background(), committer, "replace",
+				func() (any, error) {
+					hero.SetMount(newValue)
+					if test.abort {
+						return nil, sentinel
+					}
+					return nil, nil
+				})
+			if test.abort && !errors.Is(err, sentinel) {
+				t.Fatalf("transaction error = %v, want the sentinel", err)
+			}
+			if !test.abort && err != nil {
+				t.Fatalf("commit: %v", err)
+			}
+			committer.records = nil
+
+			target := newValue
+			if test.mutateOld {
+				target = oldValue
+			}
+			if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "touch",
+				func() (any, error) { target.SetLevel(9); return nil, nil }); err != nil {
+				t.Fatal(err)
+			}
+			if len(committer.records) != test.wantRecords {
+				t.Fatalf("mutating the %s value produced %d commit records, want %d",
+					map[bool]string{true: "old", false: "new"}[test.mutateOld],
+					len(committer.records), test.wantRecords)
+			}
+		})
+	}
+}
+
+// Setting the field to nil detaches what was there: a value nobody holds must
+// not keep writing into the field it left.
+func TestClearingAPointerFieldDetachesTheValue(t *testing.T) {
+	hero := NewHeroDao()
+	hero.SetId(42)
+	worn := &EquipInfo{}
+	hero.mount = worn
+	hero.Init()
+
+	committer := &ownershipCommitter{}
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "clear",
+		func() (any, error) { hero.SetMount(nil); return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	committer.records = nil
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "touch",
+		func() (any, error) { worn.SetLevel(3); return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(committer.records) != 0 {
+		t.Fatalf("a value cleared out of its field still produced %d commit records", len(committer.records))
+	}
+}
+
 // The slice shape of the same question. The callback here does not capture an
 // index, so a detached element can only mark the DAO dirty rather than write
 // under somebody else's key — a milder symptom of the same missing ownership

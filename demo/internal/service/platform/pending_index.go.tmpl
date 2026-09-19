@@ -3,6 +3,7 @@ package Platform
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"{{MODULE}}/game/purchase"
@@ -134,42 +135,43 @@ func (index *pendingIndex) PendingOrders(ctx context.Context, limit int) ([]stri
 	if err != nil {
 		return nil, fmt.Errorf("pending index: read: %w", err)
 	}
+	// The service is resolved once for the page. A failure here is not about
+	// any one order — nothing on this page can be judged — so it is reported;
+	// a failure about ONE order is not, see below.
+	orders, err := index.platformService()
+	if err != nil {
+		return nil, err
+	}
 	now := index.clock()
 	due := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if int64(entry.Score) > now {
 			break
 		}
-		finished, err := index.finished(ctx, entry.Member)
+		order, found, err := orders.Order(ctx, entry.Member)
 		if err != nil {
-			// The order could not be read, so this entry's fate is unknown.
-			// Keeping it is the safe answer: an attempt on an order that is
-			// already delivered is a no-op, while retiring one that is not is
-			// a paid order nobody looks at again.
-			return nil, err
+			// One order could not be read. Its fate is unknown, so it stays —
+			// retiring it would drop a paid order nobody looks at again.
+			//
+			// What must NOT happen is failing the whole page. The page is
+			// oldest-first, so one unreadable order sits at the front of every
+			// batch; returning an error here means the healthy orders behind
+			// it are never handed to the retry loop, and the next tick starts
+			// from the same member (RR-20260919-05). One bad record would
+			// starve every order queued behind it forever.
+			slog.Error("pending index: order unreadable; skipped, kept in the index",
+				"order_id", entry.Member, "err", err)
+			continue
 		}
-		if finished {
+		// An order id with no record behind it can never be delivered; it
+		// would be read every tick forever.
+		if !found || order.Terminal() {
 			index.retire(ctx, entry.Member)
 			continue
 		}
 		due = append(due, entry.Member)
 	}
 	return due, nil
-}
-
-// finished asks the service whether this order still needs delivery work.
-func (index *pendingIndex) finished(ctx context.Context, orderID string) (bool, error) {
-	orders, err := index.platformService()
-	if err != nil {
-		return false, err
-	}
-	order, found, err := orders.Order(ctx, orderID)
-	if err != nil {
-		return false, fmt.Errorf("pending index: read order %s: %w", orderID, err)
-	}
-	// An order id in the index with no record behind it can never be
-	// delivered; it would be read every tick forever.
-	return !found || order.Terminal(), nil
 }
 
 func (index *pendingIndex) platformService() (platform.Platform, error) {

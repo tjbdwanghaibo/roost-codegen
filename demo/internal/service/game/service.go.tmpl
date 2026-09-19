@@ -27,6 +27,7 @@ type Service struct {
 	scene          *Scene
 	stopSpawner    func()
 	spawner        *spawner
+	stopPresence   func()
 	activity       *ActivityRunner
 	stopActivity   func()
 	activityPhase  fnats.IJetStreamSubscription
@@ -132,6 +133,14 @@ func (s *Service) Init(registry *app.Registry) error {
 	if err := registry.Register(PurchaseCapability, drain); err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: publish purchase drain: %w", err)
 	}
+	// Chat presence follows the same session-close source the scene does:
+	// without it an offline player stays in the world channel's recipient set
+	// until some later push to them happens to fail (presence.go).
+	stopPresence, err := watchPresence(registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.stopPresence = stopPresence
 	// The timed server-wide event: this server's lease, the World's timer
 	// heap and the coordinator loop (activity.go). After the scene, because
 	// the settlement mails players who are already in the world, and before
@@ -181,6 +190,10 @@ func (s *Service) Shutdown(context.Context) error {
 	if s.levelUpMail != nil {
 		s.levelUpMail.Drain()
 		s.levelUpMail = nil
+	}
+	if s.stopPresence != nil {
+		s.stopPresence()
+		s.stopPresence = nil
 	}
 	// The activity loops before the consumer that feeds them, so nothing is
 	// still opening a window while the phase subscription drains.

@@ -131,32 +131,27 @@ func (component *BagComponent) ClaimMailReward(mailID string, expiresAtUnix, now
 // whether this call is the one that recorded it. A second call for the same
 // order returns false and changes nothing.
 //
-// It is the mail ledger's shape with a different anchor. The platform service
-// leaves a grant in Redis and the game deletes it after granting; between
-// those two writes a process can die, so the drain retries — and the retry
-// has to find the order already recorded, in the same transaction that added
-// the items, or the player is paid twice.
+// It is the mail ledger's shape, and it is the one ledger here that is NEVER
+// pruned (RR-20260919-06). The mail ledger may forget an entry the moment the
+// envelope expires, because after that no replay can reach the grant path. A
+// paid order has no such moment: the platform service marked it delivered when
+// the grant became durable, so forgetting the order id does not close the
+// path — it reopens it, and the next drain of a grant that outlived the ledger
+// pays a second time. Dropping the entry instead of the grant is the same
+// mistake from the other side: a player who has not logged in for a month
+// would find a paid order settled on one side and refused on the other.
 //
-// The value stored is when the claim window closes: the payment time plus
-// purchase.ClaimRetentionSeconds. The drain refuses a grant past that moment
-// and this prunes at the same moment, so "the record is gone" and "a replay
-// cannot reach this path" stay one fact.
-func (component *BagComponent) ClaimPurchase(orderID string, windowClosesAtUnix, nowUnix int64) bool {
+// The value stored is the payment moment, kept for audit rather than for
+// pruning. What would bound this map is an idempotent "fulfilled" reported
+// back to the platform service, after which an entry could be compacted
+// because nothing can produce that grant again; game/purchase says so at
+// length.
+func (component *BagComponent) ClaimPurchase(orderID string, paidAtUnix int64) bool {
 	dao := component.Owner().Dao()
 	if _, claimed := dao.GetPurchaseClaims(orderID); claimed {
 		return false
 	}
-	var stale []string
-	dao.RangePurchaseClaims(func(key string, recordedClose int64) bool {
-		if rewards.ClaimWindowClosed(recordedClose, nowUnix) {
-			stale = append(stale, key)
-		}
-		return true
-	})
-	for _, key := range stale {
-		dao.DelPurchaseClaims(key)
-	}
-	dao.SetPurchaseClaims(orderID, windowClosesAtUnix)
+	dao.SetPurchaseClaims(orderID, paidAtUnix)
 	return true
 }
 

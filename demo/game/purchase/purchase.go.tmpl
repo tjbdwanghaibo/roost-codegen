@@ -22,16 +22,28 @@ import (
 // one per store, each with its own signature scheme and its own verifier.
 const Channel = "demo"
 
-// ClaimRetentionSeconds is how long after payment a grant may still be
-// claimed, and therefore how long the Player's claim ledger has to remember
-// the order id.
+// A paid grant does not expire, and the ledger that deduplicates it is not
+// pruned. Both were wrong in the first version of this file and are worth
+// stating as a rule (RR-20260919-06):
 //
-// The two numbers are the same number on purpose. A ledger entry may be
-// forgotten exactly when a replay can no longer reach the grant path, so the
-// pruning predicate and the admission predicate are one fact rather than two
-// that drift — which is the defect RR-20260918-05 registered against the mail
-// ledger, where a 31-day retention sat under a configurable envelope life.
-const ClaimRetentionSeconds int64 = 30 * 24 * 60 * 60
+//	A dedup record for a PAID asset may not be dropped before the asset is
+//	confirmed delivered.
+//
+// The first version gave a grant thirty days and pruned the ledger on the same
+// number, reasoning — correctly, for mail — that admission and pruning must be
+// one predicate. What it missed is that a mail envelope has an authoritative
+// expiry after which no replay can reach the grant path at all, and a paid
+// order has no such moment: the platform service marked it delivered when the
+// grant became durable, so a player who does not log in for a month had a paid
+// order that was settled on one side and refused on the other. Permanently.
+//
+// So the window is gone. The cost is a ledger that only grows, and the way to
+// bound it is NOT a timer: it is a second authoritative fact — an idempotent
+// "this order was fulfilled" the game reports back to the platform service
+// after the items are in the bag. Once an order is fulfilled and its grant is
+// gone, its ledger entry can be compacted, because nothing can produce that
+// grant again. That handshake does not exist yet; until it does, remembering
+// is the only safe direction.
 
 // Product is one thing that can be bought. AmountMinor is the price in the
 // currency's minor unit, as an integer: money is never a float here.
@@ -98,10 +110,6 @@ type Grant struct {
 	Count      int32  `json:"count"`
 	PaidAtUnix int64  `json:"paid_at_unix"`
 }
-
-// ClaimWindowClosesAt is the moment after which this grant can no longer be
-// claimed, anchored on the payment rather than on when anything was read.
-func (g Grant) ClaimWindowClosesAt() int64 { return g.PaidAtUnix + ClaimRetentionSeconds }
 
 // Encode renders a grant for storage.
 func Encode(grant Grant) (string, error) {

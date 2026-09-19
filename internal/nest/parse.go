@@ -599,7 +599,7 @@ func parseFuncDecl(fnDecl *ast.FuncDecl, markerOptions map[string]string) (*Func
 				fi.Params = append(fi.Params, NonEntityParam{
 					Index: len(fi.Params),
 					Type:  typeName,
-					Name:  name.Name,
+					Name:  usableParamName(name.Name, len(fi.Params)),
 				})
 			} else {
 				baseType := strings.TrimPrefix(typeName, "[]")
@@ -700,4 +700,19 @@ func isEntityGroupType(typeName string) bool {
 		return isEntityCategory(strings.TrimPrefix(typeName, "[]"))
 	}
 	return false
+}
+
+// usableParamName is the name the generated code uses for one parameter.
+//
+// `_` is a legal Go parameter name and a natural one for an argument a handler
+// no longer reads — but the generated sender copies parameter names into its
+// own signature and then PASSES them, so a blank name becomes
+// `nest.NewParams(..., _)`: `cannot use _ as value or type`, in a generated
+// file, with nothing pointing back at the handler (U-0250). The wire contract
+// is positional, so substituting a name changes nothing a caller can observe.
+func usableParamName(name string, index int) string {
+	if name == "_" || strings.TrimSpace(name) == "" {
+		return fmt.Sprintf("arg%d", index)
+	}
+	return name
 }

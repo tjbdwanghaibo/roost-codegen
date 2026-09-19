@@ -65,8 +65,8 @@ func (z *fakeZSet) ZRangeWithScores(_ context.Context, _ string, start, stop int
 
 // fakeOrders is the platform service as far as the index is concerned.
 type fakeOrders struct {
-	orders map[string]platform.Order
-	err    error
+	orders  map[string]platform.Order
+	failFor map[string]bool
 }
 
 func (f *fakeOrders) AuthSession(context.Context, platform.Credential) (platform.Session, error) {
@@ -78,8 +78,8 @@ func (f *fakeOrders) HandleCallback(context.Context, []byte, string) (platform.R
 }
 
 func (f *fakeOrders) Order(_ context.Context, orderID string) (platform.Order, bool, error) {
-	if f.err != nil {
-		return platform.Order{}, false, f.err
+	if f.failFor[orderID] {
+		return platform.Order{}, false, errors.New("order read failed")
 	}
 	order, found := f.orders[orderID]
 	return order, found, nil
@@ -196,12 +196,56 @@ func TestTerminalAndVanishedOrdersRetire(t *testing.T) {
 func TestAnUnreadableOrderIsKept(t *testing.T) {
 	index, store, service := newTestIndex(t, 1000, map[string]platform.Order{})
 	store.entries["o"] = 100
-	service.err = errors.New("redis down")
-	if _, err := index.PendingOrders(context.Background(), 8); err == nil {
-		t.Fatal("a failed order read was reported as an empty batch")
+	service.failFor = map[string]bool{"o": true}
+	if _, err := index.PendingOrders(context.Background(), 8); err != nil {
+		t.Fatalf("one unreadable order failed the whole read: %v", err)
 	}
 	if len(store.entries) != 1 {
 		t.Error("an order whose state is unknown was retired")
+	}
+}
+
+// ...and it must not take the rest of the page with it.
+//
+// The page is read oldest-first, so one order that cannot be read sits at the
+// front of every batch. Failing the whole read there means the healthy orders
+// behind it are never handed to the retry loop — not "later", but never, since
+// the next tick starts from the same member (RR-20260919-05). One bad order
+// starves everything queued behind it, which is the exact opposite of the
+// fairness this index claims.
+func TestOneUnreadableOrderDoesNotStarveThePage(t *testing.T) {
+	orders := map[string]platform.Order{
+		"healthy": {OrderID: "healthy", State: platform.DeliveryReserved},
+		"later":   {OrderID: "later", State: platform.DeliveryReserved},
+	}
+	index, store, service := newTestIndex(t, 1000, orders)
+	store.entries["broken"] = 100
+	store.entries["healthy"] = 200
+	store.entries["later"] = 300
+	service.failFor = map[string]bool{"broken": true}
+
+	due, err := index.PendingOrders(context.Background(), 8)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(due) != 2 || due[0] != "healthy" || due[1] != "later" {
+		t.Fatalf("due = %v, want the two healthy orders behind the broken one", due)
+	}
+	if _, kept := store.entries["broken"]; !kept {
+		t.Error("the unreadable order was retired; its state is unknown, so it must stay")
+	}
+}
+
+// A failure that is not about one order — the service itself is unreachable,
+// so nothing on this page can be judged — is still reported, because retrying
+// every entry against a capability that is not there is not progress.
+func TestAFailureThatIsNotAboutOneOrderIsReported(t *testing.T) {
+	index, store, _ := newTestIndex(t, 1000, map[string]platform.Order{})
+	index.orders = nil
+	index.registry = nil
+	store.entries["o"] = 100
+	if _, err := index.PendingOrders(context.Background(), 8); err == nil {
+		t.Fatal("an index that cannot reach the service at all reported an empty batch")
 	}
 }
 

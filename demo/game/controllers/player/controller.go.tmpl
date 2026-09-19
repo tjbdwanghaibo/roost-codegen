@@ -187,7 +187,7 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 		registry: registry, nestClient: client, players: players,
 		matcher: matcher, messaging: messaging, mailer: mailer, sessions: sessions, ranking: ranking,
 		payments: payments, paymentSecret: paymentSecret,
-		presence: chatroom.NewPresence(), worldID: worldID, sceneID: sceneID,
+		presence: chatroom.DefaultPresence(), worldID: worldID, sceneID: sceneID,
 	}, nil
 }
 

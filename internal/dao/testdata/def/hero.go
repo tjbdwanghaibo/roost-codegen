@@ -14,6 +14,11 @@ type HeroDao struct {
 	// Squad is the slice shape of the same ownership question: a top-level
 	// container of nested values (RR-20260918-10).
 	Squad []*EquipInfo
+	// Mount is the third shape at the TOP level: one nested pointer in a
+	// field of its own. U-0238 fixed the map and the slice and left this one,
+	// and it has the same defect (RR-20260919-01) — replacing it never
+	// released the old value's notification.
+	Mount *EquipInfo
 }
 
 type Position struct {
