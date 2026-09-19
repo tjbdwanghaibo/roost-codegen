@@ -10,7 +10,6 @@ import (
 	"{{MODULE}}/game/chatroom"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
-	world "{{MODULE}}/game/entities/world"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/purchase"
 	"{{MODULE}}/game/skills"
@@ -45,6 +44,7 @@ type Controller struct {
 	payments   svcplatform.Platform
 	purchases  atomic.Pointer[purchaseDrainer]
 	activities atomic.Pointer[activityRunner]
+	owners     atomic.Pointer[playerOwners]
 	presence   *chatroom.Presence
 	transport  atomic.Pointer[pushTransport]
 	battles    atomic.Pointer[battleRouter]
@@ -76,6 +76,14 @@ type sceneJoiner interface {
 	Join(ctx context.Context, subject *player.Player, at spatial.Point) error
 	Moved(ctx context.Context, subjectID int64, to spatial.Point)
 	Leave(ctx context.Context, subjectID int64)
+}
+
+// playerOwners is the slice of the game service's ownership table an endpoint
+// uses: claim this player for this process at login. Looked up by capability
+// name for the same reason the scene is.
+type playerOwners interface {
+	Claim(ctx context.Context, playerID int64) (bool, error)
+	OwnerSID(ctx context.Context, playerID int64) (int32, error)
 }
 
 // activityRunner is the slice of the game service's activity runner the
@@ -124,6 +132,10 @@ const purchaseCapability app.ModName = "{{GAME_SERVICE}}.purchases"
 // activityCapability is what internal/service/<game> publishes its activity
 // runner under (ActivityCapability there).
 const activityCapability app.ModName = "{{GAME_SERVICE}}.activity"
+
+// playerOwnerCapability is what internal/service/<game> publishes its player
+// ownership table under (PlayerOwnerCapability there).
+const playerOwnerCapability app.ModName = "{{GAME_SERVICE}}.playerowner"
 
 // FromRegistry is what the generated protocol binding calls once per
 // process; keep its signature.
@@ -175,7 +187,7 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if !ok || payments == nil {
 		return nil, fmt.Errorf("player controller: capability %q not found; list platform under services.<game>.uses", svcplatform.CapabilityName)
 	}
-	worldID, err := entity.BuildEntityID(lifecycle.WorldUniqueID, world.EntityKindWorld)
+	worldID, err := lifecycle.WorldID(registry)
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
@@ -335,6 +347,22 @@ func (controller *Controller) Purchases() (purchaseDrainer, error) {
 	}
 	controller.purchases.Store(&drain)
 	return drain, nil
+}
+
+// PlayerOwners is the ownership table, looked up lazily like the scene.
+func (controller *Controller) PlayerOwners() (playerOwners, error) {
+	if controller == nil {
+		return nil, errors.New("player controller: nil")
+	}
+	if owners := controller.owners.Load(); owners != nil {
+		return *owners, nil
+	}
+	owners, ok := app.Lookup[playerOwners](controller.registry, playerOwnerCapability)
+	if !ok || owners == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; player ownership is not published", playerOwnerCapability)
+	}
+	controller.owners.Store(&owners)
+	return owners, nil
 }
 
 // Activities is the timed server-wide event, looked up lazily like the scene.

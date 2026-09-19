@@ -8,7 +8,6 @@ import (
 
 	gameactivity "{{MODULE}}/game/activity"
 	player "{{MODULE}}/game/entities/player"
-	world "{{MODULE}}/game/entities/world"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/rewards"
@@ -134,7 +133,7 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 	if !ok || sagas == nil {
 		return fmt.Errorf("gm: saga engine %q is unavailable", mods.ModSaga)
 	}
-	worldID, err := entity.BuildEntityID(lifecycle.WorldUniqueID, world.EntityKindWorld)
+	worldID, err := lifecycle.WorldID(registry)
 	if err != nil {
 		return fmt.Errorf("gm: %w", err)
 	}

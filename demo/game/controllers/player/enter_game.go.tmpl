@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"{{MODULE}}/game/chatroom"
+	apperrors "{{MODULE}}/internal/errors"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	player_agent "{{MODULE}}/game/player_agent"
@@ -21,6 +22,37 @@ import (
 func (controller *Controller) HandleEnterGame(context *player_agent.Context, request *pb.EnterGameRequest) (*pb.EnterGameResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("enter_game endpoint: context and request are required")
+	}
+	// Ownership FIRST, before the Entity is loaded, because loading it is the
+	// thing being gated. A Player may be resident in exactly one process: two
+	// copies means two version counters over one document, and the loser of
+	// that race is a `fatal projection version conflict` that takes the whole
+	// process down (GAME_DEMO_TEMPLATE §9.11).
+	//
+	// So a login that lands on a process which does not own this player is
+	// REFUSED by name. It is fail-closed on purpose: the demo has no way to
+	// move a resident Entity between processes, so the alternatives are a
+	// named refusal the client can act on (reconnect to the owner's gateway,
+	// or wait out a dead process's lease) and silent corruption. When the
+	// owner is gone the lease lapses within playerroute.Lease and the next
+	// attempt succeeds here.
+	owners, ownersErr := controller.PlayerOwners()
+	if ownersErr != nil {
+		slog.Error("enter_game: ownership unavailable", "player_id", context.PlayerID, "err", ownersErr)
+		code, reason := errcode.ClientError(ownersErr)
+		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
+	}
+	mine, claimErr := owners.Claim(context.Context(), context.PlayerID)
+	if claimErr != nil {
+		slog.Error("enter_game: ownership not claimed", "player_id", context.PlayerID, "err", claimErr)
+		code, reason := errcode.ClientError(claimErr)
+		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
+	}
+	if !mine {
+		sid, _ := owners.OwnerSID(context.Context(), context.PlayerID)
+		slog.Warn("enter_game: player is owned by another process", "player_id", context.PlayerID, "owner_sid", sid)
+		code, reason := errcode.ClientError(errcode.Wrap(apperrors.ErrPlayerElsewhere, nil, "player_id", context.PlayerID, "owner_sid", sid))
+		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
 	}
 	subject, created, err := controller.Players().GetOrCreate(context.Context(), context.PlayerID)
 	if err != nil {

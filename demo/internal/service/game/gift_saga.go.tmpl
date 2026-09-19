@@ -116,7 +116,14 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (func(), error) 
 	if err != nil {
 		return nil, fmt.Errorf("gift saga: %w", err)
 	}
-	steps := giftSteps{nest: nestClient, mailer: mailer, mongo: mongoClient, gameDatabase: gameDatabase, inbox: nativeInbox}
+	// Not optional: a step that runs without the ownership table is a step
+	// that will happily load another process's player, and nothing about the
+	// resulting corruption points back here. Refuse to subscribe instead.
+	owners, ok := app.Lookup[*PlayerOwners](registry, PlayerOwnerCapability)
+	if !ok || owners == nil {
+		return nil, fmt.Errorf("gift saga: player ownership (%s) is not published yet; it must be registered before the step consumers subscribe", PlayerOwnerCapability)
+	}
+	steps := giftSteps{nest: nestClient, mailer: mailer, mongo: mongoClient, gameDatabase: gameDatabase, inbox: nativeInbox, owners: owners}
 	subscriptions := make([]fnats.IJetStreamSubscription, 0, 4)
 	stop := func() {
 		for _, subscription := range subscriptions {
@@ -126,18 +133,23 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (func(), error) 
 	// One consumer per topic, each with the shape its business needs. The
 	// topic constants come from the generated definition, so the durable and
 	// the filter can never drift apart.
+	//
+	// Admit is set on the two steps that write the sender's Player and left
+	// nil on the two that do not: deliver is a mail call, which any process
+	// may make, and pinning it to the owner would only make it wait.
 	for _, consumer := range []struct {
 		name    string
 		topic   string
 		handler saga.StepHandler
 		native  bool
+		admit   func(context.Context, saga.Command) error
 	}{
-		{"debit", giftitem.TopicDebit, steps.debit, true},
-		{"debit-undo", giftitem.TopicDebitCompensation, steps.refund, true},
-		{"deliver", giftitem.TopicDeliver, steps.deliver, false},
-		{"deliver-undo", giftitem.TopicDeliverCompensation, steps.nothingToUndo, false},
+		{"debit", giftitem.TopicDebit, steps.debit, true, steps.admitOwned},
+		{"debit-undo", giftitem.TopicDebitCompensation, steps.refund, true, steps.admitOwned},
+		{"deliver", giftitem.TopicDeliver, steps.deliver, false, nil},
+		{"deliver-undo", giftitem.TopicDeliverCompensation, steps.nothingToUndo, false, nil},
 	} {
-		config := saga.StepConsumerConfig{Stream: stream, Durable: giftSagaDurable + "-" + consumer.name, Topic: consumer.topic}
+		config := saga.StepConsumerConfig{Stream: stream, Durable: giftSagaDurable + "-" + consumer.name, Topic: consumer.topic, Admit: consumer.admit}
 		var subscription fnats.IJetStreamSubscription
 		var err error
 		if consumer.native {
@@ -171,6 +183,9 @@ type giftSteps struct {
 	mongo        fmongo.IMongo
 	gameDatabase string
 	inbox        *saga.DataEngineStepInbox
+	// owners is who may touch which player. nil means a single-process
+	// deployment, where every player is this process's.
+	owners *PlayerOwners
 }
 
 // nativeStep gathers what a Nest-transaction step carries into its handler.
@@ -183,6 +198,57 @@ func (steps giftSteps) nativeStep(ctx context.Context, command saga.Command) (gi
 		return gift.NativeStep{}, fmt.Errorf("gift saga: no reservation on the context; this step must run under SubscribeDataEngineStep")
 	}
 	return gift.NativeStep{Inbox: steps.inbox, Command: command, Reservation: reservation}, nil
+}
+
+// admitOwned is the consumers' admission predicate: may THIS process run this
+// command at all?
+//
+// The step consumers share one JetStream durable across every game process, so
+// a command about player X arrives at whichever process is free — not at the
+// one that has X loaded. Loading X here as well is the corruption: two entity
+// runtimes, two version counters, one document, and the loser is a
+// `fatal projection version conflict` that takes a process down
+// (GAME_DEMO_TEMPLATE §9.11).
+//
+// It is wired as saga.StepConsumerConfig.Admit rather than as the first line
+// of the handler, and that placement is the whole point. The consumer reserves
+// the command in the Data Engine inbox BEFORE it calls the handler, so a
+// handler-level refusal leaves a two-minute lease under the wrong process's
+// name: the rightful owner then cannot run the command either, and the message
+// bounces. Measured on the two-process run before the seam existed: 248
+// deliveries for 16 gifts, 24 of them still stuck at the end. With the
+// predicate ahead of the reserve, a refused delivery leaves nothing behind and
+// the next delivery can go to the owner.
+//
+// The refusal is back-pressure, not routing: the message is offered again to
+// any consumer of the durable, so the owner gets it after a bounce or two
+// rather than directly. Routing a step would mean shipping its reservation to
+// another process, which cannot be done; a per-owner consumer is the shape
+// that removes the bounce, and it is the next slice.
+func (steps giftSteps) admitOwned(ctx context.Context, command saga.Command) error {
+	if steps.owners == nil {
+		return nil
+	}
+	state, _, err := giftTarget(command, func(state gift.State) int64 { return state.From })
+	if err != nil {
+		// Not a gift payload: admit it and let the handler produce the real
+		// refusal. Admission answers "whose work is this", not "is it valid".
+		return nil
+	}
+	owned, err := steps.owners.Owns(ctx, state.From)
+	if err != nil {
+		return fmt.Errorf("gift saga: ownership of player %d: %w", state.From, err)
+	}
+	if !owned {
+		sid, _ := steps.owners.OwnerSID(ctx, state.From)
+		// Logged, because otherwise this is invisible: the refusal travels
+		// back as a nak and nothing in the process says the work moved. A
+		// steady stream of these is the signal that the durable is spreading
+		// one owner's work across the cluster and wants partitioning.
+		slog.Info("gift saga: step left to the player's owner", "player_id", state.From, "owner_sid", sid, "command", command.ID)
+		return fmt.Errorf("gift saga: player %d is owned by sid %d, not by this process; leaving the step for them", state.From, sid)
+	}
+	return nil
 }
 
 // debit takes the items out of the sender's Bag. The sender may have spent

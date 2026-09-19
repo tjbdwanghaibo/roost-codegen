@@ -218,6 +218,16 @@ func demoPaymentSecrets(root, gameService string) error {
 	return writeAtomic(gamePath, append(append([]byte(nil), gameRaw...), []byte(block)...), 0o644)
 }
 
+// gameRoutePrefix is the game's own Redis namespace, derived from a prefix the
+// project already has so a deployment does not have to keep two in step: the
+// activity service's `roost:<project>:activity` becomes `roost:<project>:route`.
+func gameRoutePrefix(serviceKeyPrefix string) string {
+	if cut := strings.LastIndex(serviceKeyPrefix, ":"); cut > 0 {
+		return serviceKeyPrefix[:cut] + ":route"
+	}
+	return "roost:route"
+}
+
 // blockKeyPrefix reads a service's key prefix out of that service's own
 // config, so two processes cannot be given different ones by an edit to one
 // file.
@@ -254,6 +264,12 @@ func demoActivityKeys(root, gameService string) error {
 	if strings.Contains(string(gameRaw), "\nactivity:\n") {
 		return nil
 	}
+	// The game's own keyspace, for facts that are the GAME's rather than a
+	// framework service's: which process owns which player (game/playerroute).
+	// It is per deployment, like every other prefix, so two deployments on one
+	// Redis do not decide each other's ownership.
+	routeBlock := "game_route:\n  key_prefix: " + gameRoutePrefix(blockKeyPrefix(string(activityRaw), "activity")) + "\n"
+	gameRaw = append(append([]byte(nil), gameRaw...), []byte(routeBlock)...)
 	block := "activity:\n  key_prefix: " + blockKeyPrefix(string(activityRaw), "activity") +
 		"\n  # Every game server this deployment may run. LiveGames narrows it to\n" +
 		"  # the ones holding a lease, and those are what an activity waits for.\n" +
@@ -309,6 +325,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/errors/scene_position.go", why: "one code for out of bounds / taken / not on a map: a client that learns which points are occupied has everyone's positions"},
 		{write: "internal/errors/dungeon_claim_window.go", why: "a reward refused for being too old has to be a named refusal, not a quiet zero"},
 		{write: "internal/errors/purchase_grant.go", why: "a grant with no order id or no payment moment cannot be made exactly-once"},
+		{write: "internal/errors/player_elsewhere.go", why: "a login that lands on a process which does not own the player is refused by name, not served from a second copy of their Entity"},
 		{write: "game/gameplay/attribute/combat.go", why: "the attribute profile: three attributes, one derived by formula, plus the dirty mask the generator writes through"},
 		{write: "game/gameplay/attribute/combat_test.go", why: "the derived attribute follows its inputs and a container snapshot is a copy"},
 		{write: "game/equipment/equipment.go", why: "which slots exist and what may go in one: a game decision, not the DAO's"},
@@ -509,6 +526,9 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "cmd/accountctl/main.go", why: "the operator surface account keeps off the bus: register the game server so CreateRole works"},
 		{write: "internal/service/game/flags_test.go", why: "启动即表里的值、reload 跟着变、表里删掉的开关消失、缺表时拒绝发布"},
 		{write: "internal/service/game/flags.go", why: "the table is the source and the store is rebuilt from it on every reload; also the one place that says what may be hot-patched"},
+		{write: "game/playerroute/playerroute.go", why: "who owns which player: a Redis claim with a lease, because two processes sharing one database are two writers of the same documents"},
+		{write: "game/playerroute/playerroute_test.go", why: "the ownership rules: one owner at a time, refresh and release only our own, a lapsed lease frees the player"},
+		{write: "internal/service/game/playerowner.go", why: "claim at login, refresh while online, release on the last close, and the question the shared consumers ask before touching a player"},
 		{write: "internal/service/game/presence.go", why: "the other half of RR-20260918-06: chat presence follows the same session-close source the scene does"},
 		{write: "internal/service/game/activity.go", why: "this server's lease, the World tick, the window loop, the phase effect consumer and the settlement: mail → record → ack"},
 		{write: "internal/service/game/purchase_drain.go", why: "the game side of the platform handover: grant under the Player's lock, then delete the record — never the other order"},

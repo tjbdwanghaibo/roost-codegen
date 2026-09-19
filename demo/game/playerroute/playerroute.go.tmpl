@@ -1,0 +1,210 @@
+// Package playerroute answers one question: which game process owns this
+// player right now.
+//
+// It exists because two game processes sharing one database are not two
+// independent games — they are two writers of the same documents. A Player is
+// loaded into the process its connection landed on, and that process's entity
+// runtime is the only thing serialising writes to it. A second process that
+// loads the same Player has its own lock, its own version counter and its own
+// idea of the document; the first write from each of them that lands is fine
+// and the second is a `fatal projection version conflict`, which takes the
+// process down. That is not a theoretical risk: it is what the demo did the
+// first time it was started twice (see GAME_DEMO_TEMPLATE §9.10.3).
+//
+// So ownership has to be a FACT somewhere both processes can read, and this is
+// it: a Redis key per player, holding the sid that owns them, with a lease so
+// that a process which dies does not own players forever.
+//
+// What this is NOT: a lock. Nothing here prevents a process from loading a
+// player it does not own — it only lets code ASK, and the callers are
+// responsible for acting on the answer. A hard guarantee is what remote-managed
+// entities give (a versioned distributed lock, see game/entities/guild), and
+// the reason players do not use one is cost: a player's every action would
+// take a Redis round trip before its own lock.
+package playerroute
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strconv"
+	"time"
+
+	fredis "github.com/tjbdwanghaibo/roost-core/redis"
+)
+
+// Lease is how long an ownership claim survives without a refresh.
+//
+// It is the window in which a crashed process still appears to own its
+// players — long enough that a normal GC pause or a slow tick does not drop a
+// live claim, short enough that a restart is not locked out of its own
+// players for minutes. The refresh interval must be comfortably shorter.
+const (
+	Lease           = 30 * time.Second
+	RefreshInterval = 10 * time.Second
+)
+
+// Route is who owns a player. It satisfies core's ownerroute.OwnerRoute.
+type Route struct{ SID int32 }
+
+// OwnerRouteSid implements ownerroute.OwnerRoute.
+func (r Route) OwnerRouteSid() int32 { return r.SID }
+
+// keyspace is the part of Redis this package uses: four operations, of which
+// only SetNX carries the correctness (it is the atomic one). Declaring it
+// here rather than taking fredis.IRedis whole is what lets the ownership
+// rules — first claim wins, refresh only what is ours, release only what is
+// ours — be tested without a Redis.
+type keyspace interface {
+	SetNX(ctx context.Context, key string, value any, expiration time.Duration) (bool, error)
+	Get(ctx context.Context, key string) ([]byte, error)
+	Expire(ctx context.Context, key string, expiration time.Duration) (bool, error)
+	Del(ctx context.Context, keys ...string) (int64, error)
+}
+
+// Store is the shared ownership table.
+type Store struct {
+	redis  keyspace
+	prefix string
+	sid    int32
+}
+
+// NewStore builds it. The prefix is the game's own Redis namespace, because
+// this is the game's fact and not a framework service's.
+func NewStore(client fredis.IRedis, prefix string, sid int32) (*Store, error) {
+	if client == nil {
+		return nil, fmt.Errorf("playerroute: redis client is required")
+	}
+	if prefix == "" {
+		return nil, fmt.Errorf("playerroute: key prefix is required")
+	}
+	if sid <= 0 {
+		return nil, fmt.Errorf("playerroute: sid must be positive, got %d", sid)
+	}
+	return newStore(client, prefix, sid)
+}
+
+// newStore is NewStore over the narrow seam; the tests build a Store from a
+// fake keyspace through it.
+func newStore(client keyspace, prefix string, sid int32) (*Store, error) {
+	if client == nil {
+		return nil, fmt.Errorf("playerroute: redis client is required")
+	}
+	if prefix == "" {
+		return nil, fmt.Errorf("playerroute: key prefix is required")
+	}
+	if sid <= 0 {
+		return nil, fmt.Errorf("playerroute: sid must be positive, got %d", sid)
+	}
+	return &Store{redis: client, prefix: prefix, sid: sid}, nil
+}
+
+func (s *Store) key(playerID int64) string {
+	return s.prefix + ":owner:" + strconv.FormatInt(playerID, 10)
+}
+
+// Claim takes ownership of a player for this process and reports who owns
+// them afterwards.
+//
+// It is insert-only with a lease: the first process to claim wins, and a
+// process that already owns the player refreshes instead. That is what makes
+// "nobody owns this player yet" safe — two processes racing to pick up the
+// same piece of work resolve to one owner rather than both proceeding.
+func (s *Store) Claim(ctx context.Context, playerID int64) (Route, error) {
+	if playerID <= 0 {
+		return Route{}, fmt.Errorf("playerroute: player id must be positive")
+	}
+	key := s.key(playerID)
+	ours := strconv.FormatInt(int64(s.sid), 10)
+	taken, err := s.redis.SetNX(ctx, key, ours, Lease)
+	if err != nil {
+		return Route{}, fmt.Errorf("playerroute: claim %d: %w", playerID, err)
+	}
+	if taken {
+		return Route{SID: s.sid}, nil
+	}
+	current, err := s.Owner(ctx, playerID)
+	if err != nil {
+		return Route{}, err
+	}
+	if current.SID == s.sid {
+		// Ours already: extend the lease rather than leaving it to expire
+		// under a player who is very much still here.
+		if _, err := s.redis.Expire(ctx, key, Lease); err != nil {
+			return Route{}, fmt.Errorf("playerroute: refresh %d: %w", playerID, err)
+		}
+	}
+	return current, nil
+}
+
+// Owner reports who owns a player, if anyone.
+func (s *Store) Owner(ctx context.Context, playerID int64) (Route, error) {
+	raw, err := s.redis.Get(ctx, s.key(playerID))
+	if err != nil {
+		if errors.Is(err, fredis.ErrNil) {
+			// Nobody owns them. Not an error: it is the normal state of every
+			// player who is not logged in.
+			return Route{}, nil
+		}
+		return Route{}, fmt.Errorf("playerroute: owner of %d: %w", playerID, err)
+	}
+	sid, convErr := strconv.ParseInt(string(raw), 10, 32)
+	if convErr != nil || sid <= 0 {
+		return Route{}, fmt.Errorf("playerroute: owner of %d is %q, which is not a sid", playerID, string(raw))
+	}
+	return Route{SID: int32(sid)}, nil
+}
+
+// GetRoute implements core's ownerroute.Resolver.
+//
+// A player nobody owns is reported as NOT FOUND rather than as "owned by me".
+// The difference matters: the router refuses, and the caller decides whether
+// to claim the player first or to leave the work for whoever does own them.
+// Answering "me" here would make every process the owner of every idle
+// player, which is the corruption this package exists to prevent.
+func (s *Store) GetRoute(ctx context.Context, playerID int64) (Route, bool, error) {
+	route, err := s.Owner(ctx, playerID)
+	if err != nil {
+		return Route{}, false, err
+	}
+	return route, route.SID != 0, nil
+}
+
+// Owns reports whether this process owns the player. It is the question the
+// background consumers ask before touching one.
+func (s *Store) Owns(ctx context.Context, playerID int64) (bool, error) {
+	route, err := s.Owner(ctx, playerID)
+	if err != nil {
+		return false, err
+	}
+	return route.SID == s.sid, nil
+}
+
+// Refresh extends this process's claims. Only claims that are still OURS are
+// extended — Expire on a key another process now owns would hand them a lease
+// they never asked for.
+func (s *Store) Refresh(ctx context.Context, playerIDs []int64) {
+	for _, playerID := range playerIDs {
+		route, err := s.Owner(ctx, playerID)
+		if err != nil || route.SID != s.sid {
+			continue
+		}
+		_, _ = s.redis.Expire(ctx, s.key(playerID), Lease)
+	}
+}
+
+// Release gives up ownership, and only if it is ours: a stale release from a
+// process the player has already left must not free the new owner's claim.
+func (s *Store) Release(ctx context.Context, playerID int64) error {
+	route, err := s.Owner(ctx, playerID)
+	if err != nil || route.SID != s.sid {
+		return err
+	}
+	if _, err := s.redis.Del(ctx, s.key(playerID)); err != nil {
+		return fmt.Errorf("playerroute: release %d: %w", playerID, err)
+	}
+	return nil
+}
+
+// SID is this process's id.
+func (s *Store) SID() int32 { return s.sid }

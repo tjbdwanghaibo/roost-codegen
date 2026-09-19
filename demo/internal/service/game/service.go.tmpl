@@ -27,6 +27,7 @@ type Service struct {
 	scene          *Scene
 	stopSpawner    func()
 	spawner        *spawner
+	owners         *PlayerOwners
 	stopFlags      func()
 	stopPresence   func()
 	activity       *ActivityRunner
@@ -112,6 +113,20 @@ func (s *Service) Init(registry *app.Registry) error {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	s.stopSpawner, s.spawner = stopSpawner, spawn
+	// Who owns which player, published BEFORE the consumers that ask it. The
+	// matchmaker and the gift saga's steps both look this capability up once,
+	// when they start, and either of them finding nothing there runs
+	// unguarded — which is exactly the two-process corruption the table
+	// exists to prevent, and it fails silently. Started below, once
+	// everything that uses it is wired.
+	owners, err := NewPlayerOwners(registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	if err := registry.Register(PlayerOwnerCapability, owners); err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: publish player owners: %w", err)
+	}
+	s.owners = owners
 	stop, err := startMatchmaker(context.Background(), registry, battles, scene)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
@@ -154,6 +169,7 @@ func (s *Service) Init(registry *app.Registry) error {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	s.stopPresence = stopPresence
+	owners.Start(context.Background())
 	// The timed server-wide event: this server's lease, the World's timer
 	// heap and the coordinator loop (activity.go). After the scene, because
 	// the settlement mails players who are already in the world, and before
@@ -211,6 +227,10 @@ func (s *Service) Shutdown(context.Context) error {
 	if s.stopFlags != nil {
 		s.stopFlags()
 		s.stopFlags = nil
+	}
+	if s.owners != nil {
+		s.owners.Stop()
+		s.owners = nil
 	}
 	// The activity loops before the consumer that feeds them, so nothing is
 	// still opening a window while the phase subscription drains.

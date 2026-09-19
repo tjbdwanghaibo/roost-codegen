@@ -1,0 +1,213 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	"{{MODULE}}/game/playerroute"
+	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-kit/mods"
+)
+
+// PlayerOwnerCapability is the name the ownership table is published under, so
+// an endpoint can reach it without importing this package.
+const PlayerOwnerCapability app.ModName = "{{GAME_SERVICE}}.playerowner"
+
+// Who owns which player, in a deployment with more than one game process.
+//
+// The rule this enforces is one sentence: **a Player is written only by the
+// process that owns it.** Everything else here follows from it.
+//
+//	login          claim the player for this process (game/playerroute)
+//	while loaded   refresh the claim, so a resident player is never re-owned
+//	process gone   the lease lapses and somebody else may take them
+//	background     ask before touching a player at all
+//
+// Note what is NOT in that list: the connection closing. The claim tracks
+// where the Player ENTITY lives, not where its socket is. A Player stays
+// resident in the process that loaded it after the player disconnects —
+// nothing in the demo evicts one — so a process that gave the claim up at
+// session close would still be holding the document, and the next process to
+// take the claim would load a second copy of it. That is the same corruption
+// as below, reached the slow way; measured on the two-process run, six gift
+// steps for logged-out players moved to the other process within seconds of
+// their robots finishing. Ownership therefore ends when the entity does
+// (Release, from a destroy) or when the lease lapses because the process is
+// gone — and those are the only two honest statements about a resident entity.
+//
+// The last line of the table is the one that matters for correctness, and it
+// is the reason this exists at all: the saga step consumers and the effect consumers share
+// one JetStream durable across every game process, so a message about player X
+// is delivered to WHICHEVER process is free — not to the one that has X
+// loaded. Before this, that process would load X too, and the two of them
+// would write the same document with two independent version counters. The
+// first run of the demo with two processes ended in
+// `fatal projection version conflict` and a dead process, within seconds.
+type PlayerOwners struct {
+	store *playerroute.Store
+
+	mu    sync.Mutex
+	local map[int64]struct{}
+	stop  chan struct{}
+	done  chan struct{}
+}
+
+// NewPlayerOwners builds the table from what the process publishes.
+func NewPlayerOwners(registry *app.Registry) (*PlayerOwners, error) {
+	client, err := mods.Redis(registry)
+	if err != nil {
+		return nil, fmt.Errorf("player owners: %w", err)
+	}
+	config := registry.Config()
+	sid := int32(config.GetInt("sid"))
+	prefix := config.GetString("game_route.key_prefix")
+	if prefix == "" {
+		return nil, fmt.Errorf("player owners: game_route.key_prefix is empty; ownership is a shared fact and needs a keyspace")
+	}
+	store, err := playerroute.NewStore(client, prefix, sid)
+	if err != nil {
+		return nil, fmt.Errorf("player owners: %w", err)
+	}
+	return &PlayerOwners{store: store, local: map[int64]struct{}{}}, nil
+}
+
+// Start begins refreshing this process's claims.
+//
+// It deliberately does not subscribe to session closes. See the type comment:
+// the Player entity outlives the connection, so releasing here would give the
+// claim away while this process still holds the document.
+func (owners *PlayerOwners) Start(ctx context.Context) {
+	if owners == nil {
+		return
+	}
+	owners.stop, owners.done = make(chan struct{}), make(chan struct{})
+	go owners.refreshLoop(ctx)
+}
+
+func (owners *PlayerOwners) refreshLoop(ctx context.Context) {
+	defer close(owners.done)
+	ticker := time.NewTicker(playerroute.RefreshInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-owners.stop:
+			return
+		case <-ticker.C:
+		}
+		owners.store.Refresh(ctx, owners.snapshot())
+	}
+}
+
+// Stop ends the refresh loop. Claims are left to expire rather than released:
+// a process going down does not know whether it is coming back, and a lease
+// that runs out is the only statement that is true either way.
+func (owners *PlayerOwners) Stop() {
+	if owners == nil || owners.stop == nil {
+		return
+	}
+	close(owners.stop)
+	<-owners.done
+	owners.stop = nil
+}
+
+// Claim takes ownership at login and reports whether this process got it.
+//
+// Losing the claim is not an error here: it means the player is still owned by
+// another process — usually because they logged in there and their session has
+// not finished closing. The caller decides; the login path lets them in and
+// logs it, because refusing a login over a stale lease is worse than two
+// processes briefly disagreeing about a player who is doing nothing.
+func (owners *PlayerOwners) Claim(ctx context.Context, playerID int64) (bool, error) {
+	if owners == nil {
+		return false, nil
+	}
+	route, err := owners.store.Claim(ctx, playerID)
+	if err != nil {
+		return false, err
+	}
+	mine := route.SID == owners.store.SID()
+	if mine {
+		owners.mu.Lock()
+		owners.local[playerID] = struct{}{}
+		owners.mu.Unlock()
+	}
+	return mine, nil
+}
+
+// Release gives up a claim. The caller is stating that this process no longer
+// holds the Player entity — a destroy, or an operator moving them — NOT that
+// the player disconnected. Releasing a resident entity's claim invites a
+// second copy of it in another process.
+func (owners *PlayerOwners) Release(ctx context.Context, playerID int64) {
+	if owners == nil {
+		return
+	}
+	owners.mu.Lock()
+	delete(owners.local, playerID)
+	owners.mu.Unlock()
+	if err := owners.store.Release(ctx, playerID); err != nil {
+		slog.Warn("player owners: claim not released", "player_id", playerID, "err", err)
+	}
+}
+
+// Owns is the question a background consumer asks before touching a player.
+//
+// "Nobody owns them" answers TRUE: an offline player has no process to defer
+// to, and refusing would leave their mail, their saga steps and their paid
+// orders undone forever. The claim that goes with it is what keeps two
+// processes from both deciding that — Claim is insert-only, so exactly one of
+// them wins and the other sees the winner.
+func (owners *PlayerOwners) Owns(ctx context.Context, playerID int64) (bool, error) {
+	if owners == nil {
+		return true, nil
+	}
+	route, err := owners.store.Owner(ctx, playerID)
+	if err != nil {
+		return false, err
+	}
+	if route.SID == 0 {
+		mine, claimErr := owners.Claim(ctx, playerID)
+		return mine, claimErr
+	}
+	return route.SID == owners.store.SID(), nil
+}
+
+// OwnedHere answers the same question as Owns without the claim. It is for
+// callers that are only deciding whether to act on a player they did not ask
+// for — a matchmaker draining a shared queue, an operator surface — where
+// taking ownership as a side effect of looking would pull idle players into
+// whichever process happened to glance at them.
+func (owners *PlayerOwners) OwnedHere(ctx context.Context, playerID int64) (bool, error) {
+	if owners == nil {
+		return true, nil
+	}
+	return owners.store.Owns(ctx, playerID)
+}
+
+// OwnerSID reports who owns a player, or 0 for nobody. It is what an operator
+// surface answers with when the work belongs somewhere else.
+func (owners *PlayerOwners) OwnerSID(ctx context.Context, playerID int64) (int32, error) {
+	if owners == nil {
+		return 0, nil
+	}
+	route, err := owners.store.Owner(ctx, playerID)
+	return route.SID, err
+}
+
+// Routes is the resolver the core router uses.
+func (owners *PlayerOwners) Routes() *playerroute.Store { return owners.store }
+
+func (owners *PlayerOwners) snapshot() []int64 {
+	owners.mu.Lock()
+	defer owners.mu.Unlock()
+	out := make([]int64, 0, len(owners.local))
+	for playerID := range owners.local {
+		out = append(out, playerID)
+	}
+	return out
+}

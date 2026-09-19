@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 
+### Added
+
+- **game-demo：按所有者分区，两个 game 进程的实跑变绿**（§9.11）。此前把 demo 启动两次，第一个进程
+  在几秒内就带着 `fatal projection version conflict` 退出。查出来的是三个各自独立的写冲突：
+  saga 步骤 durable 共享（命令投给闲着的进程而不是持有玩家的进程）、`WorldUniqueID` 是常量 `1`
+  （注释却写着"每个 game server 各有一个"）、两个进程各自的 matchmaker 在自己内存里建战斗
+  （玩家连在另一个进程上，于是 `battle not found`）。
+  - 新增 `game/playerroute`：一个 Redis key 一个玩家，值是持有者 sid，30 秒租约、10 秒续约，
+    `Claim` insert-only，`GetRoute` 把无人持有报成 NOT FOUND。带表驱动单测（变异验证过）。
+  - 新增 `internal/service/<game>/playerowner.go`：进程的所有权视图。**所有权跟着实体走，不跟着连接走**
+    ——Player 实体在连接断开后仍驻留原进程，在 session 关闭时释放等于把文档交给另一个进程加载第二份；
+    实跑里看到六个刚下线玩家的步骤在几秒内漂走。结束所有权的只有实体销毁和租约到期。
+  - 登录 fail-closed：落在非持有者进程上的登录被新错误码 `player_elsewhere`（100015）明确拒绝。
+  - 礼物 saga 的两个写 Player 的步骤挂上 `saga.StepConsumerConfig.Admit`（core v1.15.12）；
+    写在 handler 里太晚——消费者先 Reserve 再调 handler，16 个礼物曾产生 248 次投递、24 条卡住。
+  - `WorldUniqueID(registry)` 返回 sid；matchmaker 只在自己持有的玩家之间成局（代价：跨进程匹配做不了）。
+  - **行为变化**：`lifecycle.WorldUniqueID` 从常量变成函数，并新增 `lifecycle.WorldID(registry)`；
+    生成工程里四处取 World id 的地方都改用后者。
+
+### Changed
+
+- 框架发布组合升到 core v1.15.12 / kit v1.14.14（`ci/framework-release.yaml`、`scripts/source-head-check.sh`）。
+
 ## [v1.15.19] - 2026-09-19
 
 ### Added

@@ -513,10 +513,16 @@ func scaffoldGameTemplate(root string, m Manifest, gameService string) ([]string
 	return created, nil
 }
 
-// renderWorldSingleton is the one-World-per-process accessor. The World is an
-// ordinary Nest entity with a fixed unique id, created on the first start of
-// this process and loaded on every later one; "singleton" is a property of
-// this process, not of the cluster.
+// renderWorldSingleton is the one-World-per-server accessor. The World is an
+// ordinary Nest entity whose unique id IS the server's sid, created on the
+// first start of that server and loaded on every later one; "singleton" is a
+// property of one game server, not of the cluster.
+//
+// The id has to carry the sid. A constant looks harmless while there is one
+// game process, but two processes against one database then address one
+// document as two entities, each with its own version counter, and the second
+// commit is a `fatal projection version conflict` that takes a process down
+// (GAME_DEMO_TEMPLATE §9.11).
 func renderWorldSingleton(m Manifest) string {
 	return fmt.Sprintf(`package lifecycle
 
@@ -526,13 +532,38 @@ import (
 
 	world %q
 	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/entity"
 )
 
-// WorldUniqueID is the unique id of this process's one World. There is
-// exactly one World per game process: every game server has its own.
-const WorldUniqueID int64 = 1
+// WorldUniqueID is the unique id of a server's one World: its sid. There is
+// exactly one World per game server, and a server is one process, so this is
+// what keeps two processes sharing a database from writing one document as
+// two entities.
+func WorldUniqueID(registry *app.Registry) (int64, error) {
+	if registry == nil {
+		return 0, fmt.Errorf("world: registry is required to know which server's World this is")
+	}
+	sid := registry.Config().GetInt64("sid")
+	if sid <= 0 {
+		return 0, fmt.Errorf("world: sid is %%d; a World belongs to a server and needs its id", sid)
+	}
+	return sid, nil
+}
 
-// EnsureWorld returns this process's World, creating it on the first start
+// WorldID is WorldUniqueID as the full entity id the Nest senders address.
+func WorldID(registry *app.Registry) (int64, error) {
+	unique, err := WorldUniqueID(registry)
+	if err != nil {
+		return 0, err
+	}
+	id, err := entity.BuildEntityID(unique, world.EntityKindWorld)
+	if err != nil {
+		return 0, fmt.Errorf("world: build entity id: %%w", err)
+	}
+	return id, nil
+}
+
+// EnsureWorld returns this server's World, creating it on the first start
 // and loading it on every later one. The game Service calls it from Init, so
 // the World exists before any request is served.
 func EnsureWorld(ctx context.Context, registry *app.Registry) (*world.World, error) {
@@ -540,7 +571,11 @@ func EnsureWorld(ctx context.Context, registry *app.Registry) (*world.World, err
 	if err != nil {
 		return nil, err
 	}
-	value, _, err := lifecycle.GetOrCreate(ctx, WorldUniqueID)
+	unique, err := WorldUniqueID(registry)
+	if err != nil {
+		return nil, err
+	}
+	value, _, err := lifecycle.GetOrCreate(ctx, unique)
 	if err != nil {
 		return nil, fmt.Errorf("world: ensure singleton: %%w", err)
 	}

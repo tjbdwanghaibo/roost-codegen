@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"time"
 
-	world "{{MODULE}}/game/entities/world"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/matchmaking"
@@ -15,7 +14,6 @@ import (
 	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/app"
-	"github.com/tjbdwanghaibo/roost-core/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	svcmatch "github.com/tjbdwanghaibo/roost-kit/service/match"
 )
@@ -46,7 +44,7 @@ func startMatchmaker(ctx context.Context, registry *app.Registry, battles *battl
 	if !ok || nestClient == nil {
 		return nil, errors.New("matchmaker: nest client is unavailable")
 	}
-	worldID, err := entity.BuildEntityID(lifecycle.WorldUniqueID, world.EntityKindWorld)
+	worldID, err := lifecycle.WorldID(registry)
 	if err != nil {
 		return nil, fmt.Errorf("matchmaker: %w", err)
 	}
@@ -55,6 +53,17 @@ func startMatchmaker(ctx context.Context, registry *app.Registry, battles *battl
 	transport, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name)
 	if !ok || transport == nil {
 		return nil, errors.New("matchmaker: player tcp runtime is unavailable")
+	}
+	// Every game process runs this loop against the SAME queue in the match
+	// service, so any of them can commit a match — and whoever commits it
+	// builds the battle in its own memory. A battle built where its players
+	// are not gives them `battle not found` for every input they send, which
+	// is what the two-process run showed before this (GAME_DEMO_TEMPLATE
+	// §9.11). Matches are therefore formed only among the players THIS
+	// process owns, so the battle is always born where its players live.
+	owners, ok := app.Lookup[*PlayerOwners](registry, PlayerOwnerCapability)
+	if !ok || owners == nil {
+		return nil, errors.New("matchmaker: player ownership is unavailable; it must be published before the matchmaker starts")
 	}
 	loopCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -74,7 +83,7 @@ func startMatchmaker(ctx context.Context, registry *app.Registry, battles *battl
 			case <-ticker.C:
 			}
 			for _, pool := range pools {
-				if err := formMatches(loopCtx, matcher, pool.Queue, pool.Grouping, recorder, transport, battles, scene, worldID); err != nil && loopCtx.Err() == nil {
+				if err := formMatches(loopCtx, matcher, pool.Queue, pool.Grouping, recorder, transport, battles, scene, worldID, owners); err != nil && loopCtx.Err() == nil {
 					slog.Warn("matchmaker: pass failed", "queue", pool.Queue.Key(), "err", err)
 				}
 			}
@@ -86,15 +95,45 @@ func startMatchmaker(ctx context.Context, registry *app.Registry, battles *battl
 	}, nil
 }
 
+// ownedCandidates keeps the tickets whose player belongs to this process.
+//
+// A ticket the owner has not seen yet is left in the queue rather than
+// dropped: it is not this process's to match, and the owner's next pass will
+// pick it up. Nothing is removed from the service, so a player whose owner
+// disappears is matched by whoever takes the claim after the lease lapses.
+//
+// What this gives up is a match across two processes. That needs a battle
+// host the losing side's inputs are routed to, which the demo does not have;
+// the honest failure is "the queue takes a little longer" rather than a
+// battle nobody can play.
+func ownedCandidates(ctx context.Context, owners *PlayerOwners, candidates []svcmatch.Ticket) []svcmatch.Ticket {
+	if owners == nil {
+		return candidates
+	}
+	kept := candidates[:0]
+	for _, ticket := range candidates {
+		owned, err := owners.OwnedHere(ctx, ticket.Subject.ID)
+		if err != nil {
+			slog.Warn("matchmaker: ownership unknown, leaving the ticket", "player_id", ticket.Subject.ID, "err", err)
+			continue
+		}
+		if owned {
+			kept = append(kept, ticket)
+		}
+	}
+	return kept
+}
+
 // formMatches drains as many groups as the policy can form from one window
 // of candidates. A Commit that loses a race (a ticket was cancelled or taken
 // meanwhile) is not an error of this pass: the next tick reads fresh
 // candidates.
-func formMatches(ctx context.Context, matcher svcmatch.Matchmaker, queue svcmatch.Queue, grouping svcmatch.Grouping, recorder *syncsender.RecordMatchSender, transport *accessplayertcp.Runtime, battles *battleManager, scene *Scene, worldID int64) error {
+func formMatches(ctx context.Context, matcher svcmatch.Matchmaker, queue svcmatch.Queue, grouping svcmatch.Grouping, recorder *syncsender.RecordMatchSender, transport *accessplayertcp.Runtime, battles *battleManager, scene *Scene, worldID int64, owners *PlayerOwners) error {
 	candidates, err := matcher.Candidates(ctx, queue, matchmakerWindow)
 	if err != nil {
 		return fmt.Errorf("candidates: %w", err)
 	}
+	candidates = ownedCandidates(ctx, owners, candidates)
 	for len(candidates) >= queue.GroupSize {
 		group, formed, err := grouping.Group(queue, candidates)
 		if err != nil {
