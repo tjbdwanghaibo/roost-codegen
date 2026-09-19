@@ -8,6 +8,7 @@ import (
 	"time"
 
 	monster "{{MODULE}}/game/entities/monster"
+	"{{MODULE}}/game/flags"
 	"{{MODULE}}/game/runtimeid"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	lifecycle "{{MODULE}}/game/lifecycle"
@@ -89,6 +90,14 @@ func startSpawner(ctx context.Context, registry *app.Registry, area *sceneentity
 // interest system — in that order, because a subject that is visible before
 // it has a position would be replicated at (0,0).
 func (s *spawner) refill(ctx context.Context, now time.Time) {
+	// The respawn kill switch, read before the pass rather than per monster:
+	// off means the population DRAINS as monsters are killed, not that
+	// anything alive disappears. Removing live monsters would be a different
+	// operation with different consequences, and a switch should not quietly
+	// be both.
+	if !flags.Enabled(flags.MonsterSpawn) {
+		return
+	}
 	refresh := s.area.Refresh()
 	if refresh == nil {
 		return

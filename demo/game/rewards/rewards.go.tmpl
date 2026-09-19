@@ -8,6 +8,8 @@ package rewards
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/hotcode"
 )
 
 // ClaimWindowClosed reports whether a mail recorded as granted, whose
@@ -52,11 +54,37 @@ type Reward struct {
 	Count  int32 `json:"count"`
 }
 
+// LevelUpPatchPoint is the name this game's level-up reward is registered
+// under for hot patching (roost-core/hotcode). The service registers the
+// point at startup; this package only names it, so a caller cannot register
+// it twice by importing something.
+const LevelUpPatchPoint = "rewards.level_up"
+
 // LevelUpReward is what reaching a level is worth: one Mana Potion (item
 // 1002 in configs/table/item.csv) per level-up. A real game reads a reward
 // table; the point here is that the reward is decided where the mail is
 // sent, not where it is claimed.
-func LevelUpReward(level int32) Reward { return Reward{ItemID: 1002, Count: 1} }
+//
+// It goes through a PATCH POINT rather than being called directly, and the
+// reason is the kind of incident a hot patch is for: a reward table that is
+// wrong in production, where the fix is three lines and the deploy is an
+// hour. `hotcode.Resolve` hands back the registered function — the original
+// until an operator loads a replacement, the replacement afterwards, and the
+// original again after a revert — with the fallback used when no point is
+// registered at all (a test, a tool, a process that did not install them).
+//
+// What must NOT go through one: anything whose two versions would have to
+// agree about state in flight. A patch swaps the function between calls, so a
+// point is safe exactly when each call stands alone, as this one does — it
+// reads a level and returns a value.
+func LevelUpReward(level int32) Reward {
+	return hotcode.Resolve(LevelUpPatchPoint, OriginalLevelUpReward)(level)
+}
+
+// OriginalLevelUpReward is what the patch point is registered with, and what
+// a revert goes back to. Exported so the service can register it without this
+// package deciding when registration happens.
+func OriginalLevelUpReward(level int32) Reward { return Reward{ItemID: 1002, Count: 1} }
 
 // Encode renders a reward as the attachment bytes.
 func Encode(reward Reward) ([]byte, error) {

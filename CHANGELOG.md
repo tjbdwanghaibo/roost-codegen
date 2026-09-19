@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [v1.15.19] - 2026-09-19
+
+### Added
+
+- **game-demo：运维面——开关与热补丁**（§9.9）。两个零覆盖的 core 包接进 demo：
+  `featureflag` 的源是新的配置表 `configs/table/feature_flag.csv`，`internal/service/<game>/flags.go`
+  在启动时发布一次、之后挂在**配置存储自己的 reload 钩子**上每次重发布——启动就发布是因为 incident
+  期间重启的进程必须带着运维留下的开关起来；**Replace 而不是 merge** 是因为表是源（表里删掉的开关要消失）；
+  **缺表时拒绝发布**是因为把"没有这张表"读成"所有开关都关"会在一次配置失误里把商店关掉。
+  三个真实开关各自只在**入口**读：`purchase`（已记录的订单照常结算）、`monster_spawn`（活着的怪不动）、
+  `activity`（已开的窗口照样结算）——在事务中间读开关会留下两条路径都不会产生的状态。
+  `hotcode` 这边：`rewards.LevelUpReward` 走补丁点，点在服务 Init 里**显式注册**（可替换是一句运维承诺，
+  全集要能在一处读完），判据是"函数每次调用自成一体"。
+  新增 GM 命令 `gm.flag.list` / `gm.flag.set` / `gm.config.reload`（编辑表之后让它生效的那一步，此前没有入口），
+  并把 `hotcode` 自带的 list / revert / load_plugin 挂到同一个 admin 注册表上。
+  测试：`game/rewards/rewards_test.go` 三条（没注册时用原函数、替换生效、revert 回原样、错签名被拒）、
+  `internal/service/game/flags_test.go` 四条（表即源、未知开关为关、重发布丢弃表里没有的、缺表拒绝）。
+  实跑：关掉 `purchase` 机器人当场拿到编码拒绝；编辑表 + `gm.config.reload` 之后
+  `off=[monster_spawn]`，杀怪不再回补而活着的怪不动。
+
 ## [v1.15.18] - 2026-09-19
 
 ### Fixed

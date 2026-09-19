@@ -3,6 +3,7 @@ package {{GAME_SERVICE_PKG}}
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	gameactivity "{{MODULE}}/game/activity"
@@ -13,7 +14,10 @@ import (
 	"{{MODULE}}/game/rewards"
 	"github.com/tjbdwanghaibo/roost-core/admin"
 	"github.com/tjbdwanghaibo/roost-core/app"
+	"github.com/tjbdwanghaibo/roost-core/configdata"
 	"github.com/tjbdwanghaibo/roost-core/entity"
+	"github.com/tjbdwanghaibo/roost-core/featureflag"
+	"github.com/tjbdwanghaibo/roost-core/hotcode"
 	corenest "github.com/tjbdwanghaibo/roost-core/nest"
 	"github.com/tjbdwanghaibo/roost-core/saga"
 	"github.com/tjbdwanghaibo/roost-kit/mods"
@@ -46,7 +50,20 @@ const (
 	gmScenePop  = "gm.scene.population"
 	gmSceneKill = "gm.scene.kill"
 	gmActClose  = "gm.activity.close"
+	gmFlagList  = "gm.flag.list"
+	gmFlagSet   = "gm.flag.set"
+	gmCfgReload = "gm.config.reload"
 )
+
+type gmConfigReloadPayload struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+type gmFlagSetPayload struct {
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+	Note    string `json:"note,omitempty"`
+}
 
 type gmSceneKillPayload struct {
 	MonsterID int64 `json:"monster_id"`
@@ -327,6 +344,83 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 				return admin.Result{Data: map[string]any{"activity_id": activityID}}, nil
 			},
 		},
+		{
+			Name: gmCfgReload,
+			Description: "reload config data in THIS process: {reason?}. Rebuilds every table from configs/data, " +
+				"which is also how a kill switch edited in configs/table/featureflag.csv takes effect. " +
+				"A table that fails validation leaves the previous snapshot in place.",
+			Handler: func(ctx context.Context, command admin.Command) (admin.Result, error) {
+				payload, err := admin.DecodePayload[gmConfigReloadPayload](command)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				store, ok := app.Lookup[*configdata.Store](registry, mods.ModConfigData)
+				if !ok || store == nil {
+					return admin.Result{}, fmt.Errorf("gm: config data store %q is unavailable", mods.ModConfigData)
+				}
+				reason := payload.Reason
+				if reason == "" {
+					reason = "gm"
+				}
+				snapshot, err := store.ReloadWithReason(ctx, reason)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: map[string]any{
+					"reason": reason, "version": snapshot.Version,
+					"flags": featureflag.DefaultStore().Version(),
+				}}, nil
+			},
+		},
+		{
+			Name:        gmFlagList,
+			Description: "list the kill switches this process is running with: {} — name, enabled, note, and the store's version",
+			Handler: func(context.Context, admin.Command) (admin.Result, error) {
+				snapshot := featureflag.DefaultStore().Snapshot()
+				rows := make([]map[string]any, 0, len(snapshot))
+				for _, flag := range snapshot {
+					rows = append(rows, map[string]any{"name": flag.Name, "enabled": flag.Enabled, "note": flag.Note})
+				}
+				return admin.Result{Data: map[string]any{
+					"version": featureflag.DefaultStore().Version(), "flags": rows,
+				}}, nil
+			},
+		},
+		{
+			Name: gmFlagSet,
+			Description: "flip one kill switch in THIS process now: {name, enabled, note?}. " +
+				"It is not written back to the table, so the next config reload overwrites it — " +
+				"to make it stick, edit configs/table/featureflag.csv and reload.",
+			Handler: func(_ context.Context, command admin.Command) (admin.Result, error) {
+				payload, err := admin.DecodePayload[gmFlagSetPayload](command)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				if payload.Name == "" {
+					return admin.Result{}, fmt.Errorf("%w: name is required", admin.ErrCommandInvalid)
+				}
+				featureflag.DefaultStore().Set(featureflag.Flag{
+					Name: payload.Name, Enabled: payload.Enabled, Note: payload.Note,
+				})
+				// Loud on purpose: a switch flipped by hand, in one process,
+				// that a reload will undo is exactly the thing an incident
+				// review needs to find in the log.
+				slog.Warn("gm: feature flag overridden in this process only",
+					"flag", payload.Name, "enabled", payload.Enabled,
+					"version", featureflag.DefaultStore().Version())
+				return admin.Result{Data: map[string]any{
+					"name": payload.Name, "enabled": payload.Enabled,
+					"version": featureflag.DefaultStore().Version(),
+					"note":    "this process only; the next config reload restores the table's value",
+				}}, nil
+			},
+		},
+	}
+	// The hot-code patch points get their own commands from the framework:
+	// list / revert / load-plugin, with the same admin token and audit as
+	// everything else here (hotcode.RegisterAdminCommands).
+	if err := hotcode.RegisterAdminCommands(commands); err != nil {
+		return fmt.Errorf("gm: register hotcode commands: %w", err)
 	}
 	for _, definition := range definitions {
 		if err := commands.Register(definition); err != nil {

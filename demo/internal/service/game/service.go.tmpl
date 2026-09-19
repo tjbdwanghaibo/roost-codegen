@@ -27,6 +27,7 @@ type Service struct {
 	scene          *Scene
 	stopSpawner    func()
 	spawner        *spawner
+	stopFlags      func()
 	stopPresence   func()
 	activity       *ActivityRunner
 	stopActivity   func()
@@ -133,6 +134,18 @@ func (s *Service) Init(registry *app.Registry) error {
 	if err := registry.Register(PurchaseCapability, drain); err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: publish purchase drain: %w", err)
 	}
+	// The kill switches, before anything they gate: a process that comes up
+	// during an incident must come up with the store closed if that is how
+	// the operator left it (flags.go).
+	stopFlags, err := installFeatureFlags(registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.stopFlags = stopFlags
+	// What may be hot-patched, registered before anything can be patched.
+	if err := installPatchPoints(); err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
 	// Chat presence follows the same session-close source the scene does:
 	// without it an offline player stays in the world channel's recipient set
 	// until some later push to them happens to fail (presence.go).
@@ -194,6 +207,10 @@ func (s *Service) Shutdown(context.Context) error {
 	if s.stopPresence != nil {
 		s.stopPresence()
 		s.stopPresence = nil
+	}
+	if s.stopFlags != nil {
+		s.stopFlags()
+		s.stopFlags = nil
 	}
 	// The activity loops before the consumer that feeds them, so nothing is
 	// still opening a window while the phase subscription drains.

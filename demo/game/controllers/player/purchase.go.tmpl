@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"{{MODULE}}/game/flags"
 	"{{MODULE}}/game/purchase"
 	player_agent "{{MODULE}}/game/player_agent"
 	"{{MODULE}}/protocol/pb"
@@ -42,6 +43,13 @@ func (controller *Controller) HandlePurchase(context *player_agent.Context, requ
 			slog.Error("purchase failed", "player_id", context.PlayerID, "product_id", request.ProductID, "stage", stage, "err", err)
 		}
 		return &pb.PurchaseResponse{Code: code, Reason: reason}, nil
+	}
+	// The store's kill switch, read at the entry point and nowhere else. An
+	// order the platform service has already recorded still settles — the
+	// drain does not consult this — because a paid order is not something a
+	// switch may drop; what this stops is taking new money.
+	if !flags.Enabled(flags.Purchase) {
+		return refuse(fmt.Errorf("%w: the store is closed", svcplatform.ErrRequestInvalid), "flag")
 	}
 	product, ok := purchase.Lookup(request.ProductID)
 	if !ok {

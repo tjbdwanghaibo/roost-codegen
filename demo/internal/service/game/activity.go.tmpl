@@ -11,6 +11,7 @@ import (
 
 	gameactivity "{{MODULE}}/game/activity"
 	"{{MODULE}}/game/effects"
+	"{{MODULE}}/game/flags"
 	world "{{MODULE}}/game/entities/world"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	lifecycle "{{MODULE}}/game/lifecycle"
@@ -223,6 +224,12 @@ func (runner *ActivityRunner) runActivity(ctx context.Context, done chan<- struc
 // makes a window that opened while this server was down still get closed by
 // it: the id comes from the clock, so there is nothing to have missed.
 func (runner *ActivityRunner) openCurrentWindow(ctx context.Context) {
+	// Off stops OPENING windows. A window already open still closes and
+	// settles: the flag gates the entry point, not the middle of an
+	// operation, and an event that took contributions owes its rewards.
+	if !flags.Enabled(flags.Activity) {
+		return
+	}
 	now := time.Now()
 	activityID := gameactivity.ID(now.Unix())
 	key := gameactivity.Key(activityID)
