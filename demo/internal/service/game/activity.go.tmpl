@@ -43,6 +43,10 @@ const (
 	// activitySettleMailExpiresIn is how long a settlement mail stays
 	// readable.
 	activitySettleMailExpiresIn = 7 * 24 * 60 * 60
+	// activityDrainBatch bounds one pass over what this server is owed. A
+	// server that was down for a day works through its backlog in bounded
+	// steps rather than one unbounded pass.
+	activityDrainBatch = 32
 )
 
 // ActivityRunner is this server's side of the timed server-wide event.
@@ -340,10 +344,18 @@ func (runner *ActivityRunner) Settled(ctx context.Context, activityID string) (b
 	return syncsender.NewActivitySettledSender(runner.nest).Sync_ActivitySettled(ctx, runner.worldID, activityID)
 }
 
-// applyDispatches settles every result this server has been handed.
+// applyDispatches settles every result this server is owed.
 //
-// The order is mail → record → ack, and each step is safe to repeat:
+// What it does NOT do is guess. The first version computed "the window that
+// just closed" and "the current one" from the local clock and looked those two
+// up — which works exactly until this server is down longer than one window,
+// and then the older obligation is still recorded and permanently unreachable
+// (RR-20260919-10). The coordinator keeps a per-game index; this asks it.
 //
+// The order is take → mail → record → ack, and each step is safe to repeat:
+//
+//   - taking the payload (AttemptDispatch) is what spends one delivery
+//     attempt, so the budget measures deliveries that actually happened;
 //   - the mails are idempotent per (activity, player), so a redelivery mails
 //     nothing new;
 //   - the World's record makes the board read happen once in the normal case;
@@ -353,25 +365,25 @@ func (runner *ActivityRunner) Settled(ctx context.Context, activityID string) (b
 // Acking first would be the other order, and the crash that follows it costs
 // every player their reward with no record that anything was owed.
 func (runner *ActivityRunner) applyDispatches(ctx context.Context) {
-	now := time.Now()
-	// The window that just closed is the one with a result; the current one
-	// is still collecting. Both are looked at, because a server that was down
-	// for a while may be handed an older one first.
-	for _, activityID := range []string{
-		gameactivity.ID(now.Unix() - gameactivity.WindowSeconds),
-		gameactivity.ID(now.Unix()),
-	} {
-		dispatch, found, err := runner.coordinator.LookupDispatch(ctx, gameactivity.Key(activityID), runner.gameSID)
+	owed, err := runner.coordinator.OwedDispatches(ctx, gameactivity.GroupID, runner.gameSID, activityDrainBatch)
+	if err != nil {
+		slog.Warn("activity: could not read what this server is owed", "err", err)
+		return
+	}
+	for _, key := range owed {
+		dispatch, err := runner.coordinator.AttemptDispatch(ctx, key, runner.gameSID)
 		if err != nil {
-			slog.Warn("activity: dispatch lookup failed", "activity_id", activityID, "err", err)
+			// Held by another attempt, not due yet, or exhausted — all of
+			// which the coordinator decides. Nothing to do here but say so.
+			slog.Warn("activity: could not take a result", "activity_id", key.ActivityID, "err", err)
 			continue
 		}
-		if !found || dispatch.State != svcactivity.DispatchPending {
+		if dispatch.State != svcactivity.DispatchPending {
 			continue
 		}
-		if err := runner.settle(ctx, activityID, dispatch); err != nil {
+		if err := runner.settle(ctx, key.ActivityID, dispatch); err != nil {
 			slog.Error("activity: settlement failed; the dispatch stays pending",
-				"activity_id", activityID, "err", err)
+				"activity_id", key.ActivityID, "err", err)
 		}
 	}
 }

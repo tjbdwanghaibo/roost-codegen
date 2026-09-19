@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [v1.15.18] - 2026-09-19
+
+### Fixed
+
+- **demo 的活动 runner 不再猜 activity id**（随 U-0257；RR-20260919-10，T-151，**P1**）。旧版本每轮只构造
+  "上一窗口"和"当前窗口"两个 id 去 `LookupDispatch`——离线超过一个窗口，旧的奖励义务就仍然持久存在
+  却永远查不到；而服务端的 sweep 还在替它空耗交付预算，五次之后 dispatch 进 exhausted。
+  现在 runner 调 `OwedDispatches(group, sid, 32)` 按批排空欠单，再用 `AttemptDispatch` 取 payload
+  （**取的人是它，所以尝试次数由它来花**），顺序仍是 取 → 邮件 → 记录 → ack。
+  **需要 kit ≥ v1.14.13 / core ≥ v1.15.11。**
+
+### Changed
+
+- 默认 pin 升到 core v1.15.11 / kit v1.14.13。
+
 ## [v1.15.17] - 2026-09-19
 
 ### Changed
