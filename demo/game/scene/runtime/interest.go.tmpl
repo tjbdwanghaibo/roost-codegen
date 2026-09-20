@@ -55,6 +55,10 @@ type InterestSystem struct {
 	// held maps a pair to the sources currently claiming it, and to whether
 	// the aggregator has already told the transport about it.
 	held map[interestPair]*interestHold
+
+	// retry holds the pairs whose subscribe the transport refused, waiting
+	// for the next Tick to say them again. See SubscribeFailed.
+	retry []interestPair
 }
 
 type interestPair struct{ observer, subject int64 }
@@ -101,6 +105,7 @@ func (s *InterestSystem) Stop(coreentity.EntityDestroyReason) {
 	s.interest = nil
 	s.sources = nil
 	s.held = nil
+	s.retry = nil
 }
 
 // spatialSource adapts the core manager to the Source interface. Flush is
@@ -217,6 +222,71 @@ func (s *InterestSystem) Tick() []scene.SubscriptionChange {
 			}
 		}
 	}
+	// Retries last, so that a pair a source event already spoke for in THIS
+	// tick is not said twice: apply re-subscribes such a pair on the way
+	// past, and the drain skips whatever is subscribed again.
+	return append(changes, s.drainRetriesLocked()...)
+}
+
+// SubscribeFailed takes back a subscribe the transport refused.
+//
+// apply marks a pair subscribed BEFORE anyone has spoken to the transport —
+// that is what makes the source counting work — so a refused subscribe leaves
+// the system believing in a subscription that does not exist. rebandLocked
+// then re-emits only when the BAND changes, and Tick turns nothing but source
+// events into changes: the pair is never mentioned again and the observer
+// never sees that subject for the rest of the session (RR-20260920-06).
+//
+// Clearing the flag on its own would not be enough, precisely because there
+// is no event left to fold — so the pair is queued, and the next Tick says it
+// again. The queue is bounded by the held set: an entry is only added for a
+// pair that is held and not already queued, and every entry is taken off at
+// the next drain.
+func (s *InterestSystem) SubscribeFailed(observer, subject int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.held == nil {
+		return
+	}
+	key := interestPair{observer: observer, subject: subject}
+	hold := s.held[key]
+	if hold == nil {
+		// The pair was released between the emit and the refusal. There is
+		// nothing to retry, and no unsubscribe to send either: the transport
+		// never accepted it.
+		return
+	}
+	if !hold.subscribed {
+		// A held pair is subscribed unless it is queued, so this is a second
+		// refusal for a retry already waiting: one entry per pair.
+		return
+	}
+	hold.subscribed = false
+	s.retry = append(s.retry, key)
+}
+
+// drainRetriesLocked re-emits the queued subscribes. A pair that has since
+// been released, or that this same tick has already re-subscribed, is dropped
+// silently: the queue is a reminder, not a record of intent — s.held is that.
+func (s *InterestSystem) drainRetriesLocked() []scene.SubscriptionChange {
+	if len(s.retry) == 0 {
+		return nil
+	}
+	queued := s.retry
+	s.retry = nil
+	changes := make([]scene.SubscriptionChange, 0, len(queued))
+	for _, key := range queued {
+		hold := s.held[key]
+		if hold == nil || hold.subscribed {
+			continue
+		}
+		hold.subscribed = true
+		hold.band = bestBand(hold.bands)
+		changes = append(changes, scene.SubscriptionChange{Observer: key.observer, Subject: key.subject, Subscribe: true, Profile: bandProfile(hold.band), Retry: true})
+	}
+	if len(changes) == 0 {
+		return nil
+	}
 	return changes
 }
 
@@ -251,6 +321,10 @@ func (s *InterestSystem) apply(source string, event spatial.InterestEvent) (scen
 		}
 		hold.bands[source] = band
 		if !hold.subscribed {
+			// Optimistic, and deliberately so: the pair counts as subscribed
+			// from here, and the transport tells us otherwise through
+			// SubscribeFailed. This branch is also how a queued retry gets
+			// said again when a source event reaches it first.
 			hold.subscribed = true
 			hold.band = bestBand(hold.bands)
 			return scene.SubscriptionChange{Observer: key.observer, Subject: key.subject, Subscribe: true, Profile: bandProfile(hold.band)}, true

@@ -1,7 +1,7 @@
 schema: 2
 codegen: v1.15.19
 framework:
-  core: v1.15.17
+  core: v1.15.18
   kit: v1.14.17
 consumer_go:
   # 只剩 1.27.x：roost-core / roost-kit / roost-codegen 的 go 指令都是 1.27.0，

@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **game-demo：房间拒绝的 subscribe 不再被丢掉**（U-0267，C5，RR-20260920-06，T-161）。场景桥对 `room.Subscribe` 的失败只写一条 `slog.Warn`，而兴趣系统在调用房间**之前**就把 pair 标成已订阅、重发只在 band 变化时发生——两个站着不动的玩家永远不会 reband，那个观察者从此永久收不到那个 subject（16 机器人实跑里每轮 2~6 个客户端的 `"pos_x" never arrived` 就是这个形状）。`applyChanges` 上方那句 "the next tick that touches it tries again" 是假的，一并改掉。
+  实现时才看清的第三件事：`Tick` 只把 source 的事件折进聚合，没有事件就没有变更，所以"清掉乐观标记等下一 tick"同样不成立。兴趣系统因此多了一份显式的待办：`Interest.SubscribeFailed(observer, subject)` 清标记并排队，`Tick` 在排空 source 之后排空它；队列上界落在写入口（只为 `held` 里存在且尚未排队的 pair 追加）。容量类拒绝**照样重试**——丢掉它得到的正是这条缺陷本身，房间满是暂态；刷屏改用 `SubscriptionChange.Retry` 压掉：首次拒绝 `Warn`，重复降 `Debug`。
+  **行为变化**：`gamescene.Interest` 多一个方法，`SubscriptionChange` 多一个字段；自己实现过这个接口的工程要补上 `SubscribeFailed`。
+  测试：生成工程 `TestSceneRetriesASubscribeTheRoomRefused`（组队先成、队友后进场，真 room 真拒绝）+ `TestARefusedSubscribeIsSaidAgain` / `…ForAReleasedPairIsDropped` / `…KeepsBeingOffered`。记录见 roost-core `docs/bugfix/RR-20260920-06.md`。
+
+### Changed
+
+- 框架发布组合的 core 升到 v1.15.18（U-0265 / U-0266）。
+
 ## [v1.15.27] - 2026-09-20
 
 ### Fixed

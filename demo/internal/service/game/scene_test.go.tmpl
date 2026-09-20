@@ -502,3 +502,78 @@ func presenceHolds(presence *chatroom.Presence, playerID int64) bool {
 	}
 	return false
 }
+
+// U-0267 · C5 · RR-20260920-06：房间拒绝的 subscribe 必须重发。
+//
+// The matchmaker forms a team before every member has reached the scene. The
+// team source claims the pair at once, so the subscribe for the member who
+// has not joined yet is sent for a subject the room does not hold, and fails.
+// The interest system marked that pair subscribed BEFORE the room was called
+// and only re-emits on a band change — so once the member does join, nothing
+// mentions the pair again and the teammate stays invisible for the rest of
+// the session.
+func TestSceneRetriesASubscribeTheRoomRefused(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil)
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	scene.SetArea(newSceneArea(t))
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	const (
+		watcherID = int64(9101)
+		laterID   = int64(9102)
+	)
+	watcher := newScenePlayer(t, watcherID)
+	later := newScenePlayer(t, laterID)
+
+	if err := scene.Join(ctx, watcher, spatial.Point{X: 100, Y: 100}); err != nil {
+		t.Fatalf("watcher joins: %v", err)
+	}
+
+	// The team forms while the second member is still loading. The two are
+	// far enough apart that distance never claims the pair: being teammates
+	// is the only reason these two should see each other.
+	scene.SetTeam([]int64{watcherID, laterID})
+	recorder.take(watcherID)
+
+	// The teammate arrives. This is the tick that has to make good on the
+	// subscribe the room refused a moment ago.
+	if err := scene.Join(ctx, later, spatial.Point{X: 900, Y: 900}); err != nil {
+		t.Fatalf("teammate joins: %v", err)
+	}
+
+	subscribed := false
+	for _, subscription := range scene.room.Subscribers(later.ID()) {
+		if subscription.Subscriber.ID == watcher.ID() {
+			subscribed = true
+		}
+	}
+	if !subscribed {
+		t.Fatalf("the watcher is not subscribed to teammate %d after the teammate joined: %v",
+			later.ID(), scene.room.Subscribers(later.ID()))
+	}
+
+	// And what arrives is the teammate's whole state, not the tail of a
+	// stream the watcher missed the beginning of: a retried subscribe takes
+	// the same path as a first one, so it captures a snapshot.
+	updates := decodeSceneFrames(t, watcherID, recorder.take(watcherID))
+	document, ok := updates[later.ID()]
+	if !ok {
+		t.Fatalf("the watcher received nothing for teammate %d; got %v", later.ID(), updates)
+	}
+	for _, field := range []string{"_id", "level", "exp"} {
+		if _, ok := document[field]; !ok {
+			t.Errorf("the retried subscribe delivered %q-less state, so it was not a snapshot: %v", field, document)
+		}
+	}
+}

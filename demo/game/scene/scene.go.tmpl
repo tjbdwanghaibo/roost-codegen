@@ -124,6 +124,11 @@ type SubscriptionChange struct {
 	Subject   int64
 	Subscribe bool
 	Profile   entity.SyncProfile
+	// Retry says this subscribe has been refused before and the system is
+	// saying it again. It carries no meaning for the transport — it is there
+	// so the caller can report the first refusal loudly and the repeats
+	// quietly, instead of one line per pair per tick while a room is full.
+	Retry bool
 }
 
 // Interest is the scene's interest system: the spatial source, the relation
@@ -152,6 +157,12 @@ type Interest interface {
 	// Calling it is the assembly's choice — the system is a state machine, not
 	// a goroutine.
 	Tick() []SubscriptionChange
+	// SubscribeFailed reports that the transport refused a subscribe Tick
+	// asked for. Whoever applies the changes MUST call it on every failure:
+	// the system counts a pair as subscribed the moment it emits, so a
+	// refusal it is not told about is a subscription that exists nowhere and
+	// is never retried.
+	SubscribeFailed(observer, subject int64)
 }
 
 // --- 刷新：场景该有多少东西活着 ---

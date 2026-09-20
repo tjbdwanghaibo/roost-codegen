@@ -16,7 +16,7 @@ scenario="${1:-minimal}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 core_dir="$(cd "${2:-$repo_root/../roost-core}" && pwd)"
 kit_dir="$(cd "${3:-$repo_root/../roost-kit}" && pwd)"
-core_pin="${ROOST_CORE_PIN:-v1.15.17}"
+core_pin="${ROOST_CORE_PIN:-v1.15.18}"
 kit_pin="${ROOST_KIT_PIN:-v1.14.17}"
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/roost-source-head.XXXXXX")"

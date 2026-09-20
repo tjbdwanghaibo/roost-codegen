@@ -316,10 +316,21 @@ func (bridge *Scene) Moved(ctx context.Context, subjectID int64, to spatial.Poin
 	bridge.applyChanges(ctx, area.Interest().Tick())
 }
 
-// applyChanges says the interest system's answer to the room. A subscribe
-// that fails is logged and dropped: the pair stays claimed in the interest
-// system, so the next tick that touches it tries again.
+// applyChanges says the interest system's answer to the room.
+//
+// A failed subscribe goes BACK to the interest system rather than into a log
+// line alone. The system counted the pair as subscribed when it emitted the
+// change, and it re-emits only when the band moves — so a refusal it is not
+// told about is a subscription nobody has, retried by nobody, for as long as
+// the pair is held (RR-20260920-06). Told, it queues the pair and the next
+// tick says it again. An unsubscribe that fails needs no such treatment: the
+// pair is gone from the system either way, and the room drops subscriptions
+// to a retired subject on its own.
 func (bridge *Scene) applyChanges(ctx context.Context, changes []gamescene.SubscriptionChange) {
+	var interest gamescene.Interest
+	if area := bridge.area.Load(); area != nil {
+		interest = area.Interest()
+	}
 	for _, change := range changes {
 		// The subscriber ref carries the OBSERVER'S ENTITY ID, the same id
 		// space the subject uses. An entity id is unique across kinds; a
@@ -334,7 +345,18 @@ func (bridge *Scene) applyChanges(ctx context.Context, changes []gamescene.Subsc
 			continue
 		}
 		if _, err := bridge.room.Subscribe(ctx, observer, change.Subject, change.Profile); err != nil {
-			slog.Warn("scene: subscribe", "observer", change.Observer, "subject", change.Subject, "err", err)
+			// The first refusal is the one worth reading. A refusal that
+			// keeps coming back is a room that is full or a durability gate
+			// that has not opened, and one line per pair per tick would bury
+			// the line that says so.
+			if change.Retry {
+				slog.Debug("scene: subscribe still refused", "observer", change.Observer, "subject", change.Subject, "err", err)
+			} else {
+				slog.Warn("scene: subscribe", "observer", change.Observer, "subject", change.Subject, "err", err)
+			}
+			if interest != nil {
+				interest.SubscribeFailed(change.Observer, change.Subject)
+			}
 		}
 	}
 }
