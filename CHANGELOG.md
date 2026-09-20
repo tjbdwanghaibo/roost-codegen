@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [v1.15.32] - 2026-09-20
+
+### Changed
+
+- **本仓库并入 roost-core，这是最后一个版本。** 生成器从 roost-core v1.16.0 起位于 `roost-core/codegen/`（CLI：`go install github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost@latest`），demo 模板位于 `roost-core/demo/`，都带完整历史搬入。旧 tag 永远可用；已有工程用 `roost project upgrade --consolidate` 一次改写 import。方案见 roost-core `docs/ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md`。
+
 ## [v1.15.31] - 2026-09-20
 
 ### Fixed
