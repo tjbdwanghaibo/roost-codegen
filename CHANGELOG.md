@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.15.22] - 2026-09-20
+
 ### Fixed
 
 - **一次提交失败不再让整轮匹配停摆**（§9.13.4）。`formMatches` 里 `Commit` 撞上 `ErrTicketMissing` /
