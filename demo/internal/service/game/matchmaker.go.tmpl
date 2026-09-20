@@ -151,7 +151,25 @@ func formMatches(ctx context.Context, matcher svcmatch.Matchmaker, queue svcmatc
 		match, err := matcher.Commit(ctx, queue, ids)
 		if err != nil {
 			if errors.Is(err, svcmatch.ErrTicketMissing) || errors.Is(err, svcmatch.ErrTicketMatched) || errors.Is(err, svcmatch.ErrConflict) {
-				return nil
+				// This GROUP cannot be committed: a ticket in it was
+				// cancelled, or another matchmaker took it between the read
+				// and the commit. That says nothing about the rest of the
+				// queue, so the group drops out of this pass and the pass
+				// continues with what is left.
+				//
+				// Returning here — what this did before — ends the whole
+				// pass, so everything behind the unusable group waits for the
+				// next tick, and if the same group is formed again it waits
+				// forever. Candidates come back oldest first, so the loser of
+				// a race is exactly the group that gets re-formed.
+				//
+				// This became reachable the moment every game process started
+				// running this loop against one shared queue (§9.11): two
+				// matchmakers reading the same window is a race whose normal
+				// outcome is that one of them loses the commit.
+				slog.Debug("matchmaker: group not committed, skipping it", "queue", queue.Key(), "tickets", len(ids), "err", err)
+				candidates = dropTickets(candidates, taken)
+				continue
 			}
 			return fmt.Errorf("commit: %w", err)
 		}
@@ -192,13 +210,20 @@ func formMatches(ctx context.Context, matcher svcmatch.Matchmaker, queue svcmatc
 				slog.Debug("matchmaker: match push not delivered", "match_id", match.ID, "player_id", member.ID, "err", err)
 			}
 		}
-		remaining := candidates[:0]
-		for _, ticket := range candidates {
-			if !taken[ticket.ID] {
-				remaining = append(remaining, ticket)
-			}
-		}
-		candidates = remaining
+		candidates = dropTickets(candidates, taken)
 	}
 	return nil
+}
+
+// dropTickets removes the tickets just dealt with from the working set. Every
+// path through the loop has to call it: it is what guarantees the pass makes
+// progress, whether the group was committed or skipped.
+func dropTickets(candidates []svcmatch.Ticket, taken map[string]bool) []svcmatch.Ticket {
+	remaining := candidates[:0]
+	for _, ticket := range candidates {
+		if !taken[ticket.ID] {
+			remaining = append(remaining, ticket)
+		}
+	}
+	return remaining
 }
