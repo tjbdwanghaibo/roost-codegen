@@ -529,6 +529,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/playerroute/playerroute.go", why: "who owns which player: a Redis claim with a lease, because two processes sharing one database are two writers of the same documents"},
 		{write: "game/playerroute/playerroute_test.go", why: "the ownership rules: one owner at a time, refresh and release only our own, a lapsed lease frees the player"},
 		{write: "internal/service/game/playerowner.go", why: "claim at login, refresh while online, release on the last close, and the question the shared consumers ask before touching a player"},
+		{write: "internal/service/game/playerowner_test.go", why: "租约丢了要停服务：失去时围栏、不确定时让准入自然走到头、未经确认的 sid 不算所有权"},
 		{write: "internal/service/game/gift_handoff_test.go", why: "the handoff decisions: admit the owner's own step, refuse and forward a foreign one, never claim an idle player to have somewhere to send it"},
 		{write: "internal/service/game/presence.go", why: "the other half of RR-20260918-06: chat presence follows the same session-close source the scene does"},
 		{write: "internal/service/game/activity.go", why: "this server's lease, the World tick, the window loop, the phase effect consumer and the settlement: mail → record → ack"},

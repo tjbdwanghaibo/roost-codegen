@@ -1,0 +1,232 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"{{MODULE}}/game/playerroute"
+	"{{MODULE}}/protocol/msgid"
+)
+
+// RR-20260920-04：持有一把租约，和**知道自己还持有它**，是两件事。
+//
+// 续租失败之后这个进程什么都不知道，而 30 秒后另一个进程可以合法地接手同一个
+// 玩家。所以"写到有人来拦"不成立——没有人会来拦。每条写入路径都问 Admit，它只
+// 根据 Redis 最近一次**确认过**的续租回答，并且在确认的租约快到期时提前收口。
+
+type fakeLeaseTable struct {
+	sid      int32
+	owner    map[int64]int32
+	refresh  func(playerID int64) playerroute.RefreshResult
+	released []int64
+}
+
+func newFakeLeaseTable(sid int32) *fakeLeaseTable {
+	return &fakeLeaseTable{sid: sid, owner: map[int64]int32{}}
+}
+
+func (f *fakeLeaseTable) SID() int32 { return f.sid }
+
+func (f *fakeLeaseTable) Claim(_ context.Context, playerID int64) (playerroute.Route, error) {
+	if held, ok := f.owner[playerID]; ok {
+		return playerroute.Route{SID: held, Token: "t"}, nil
+	}
+	f.owner[playerID] = f.sid
+	return playerroute.Route{SID: f.sid, Token: "t"}, nil
+}
+
+func (f *fakeLeaseTable) Owner(_ context.Context, playerID int64) (playerroute.Route, error) {
+	if held, ok := f.owner[playerID]; ok {
+		return playerroute.Route{SID: held, Token: "t"}, nil
+	}
+	return playerroute.Route{}, nil
+}
+
+func (f *fakeLeaseTable) Owns(_ context.Context, playerID int64) (bool, error) {
+	return f.owner[playerID] == f.sid, nil
+}
+
+func (f *fakeLeaseTable) GetRoute(_ context.Context, playerID int64) (playerroute.Route, bool, error) {
+	held, ok := f.owner[playerID]
+	if !ok {
+		return playerroute.Route{}, false, nil
+	}
+	return playerroute.Route{SID: held, Token: "t"}, true, nil
+}
+
+func (f *fakeLeaseTable) Refresh(_ context.Context, playerIDs []int64) []playerroute.RefreshResult {
+	out := make([]playerroute.RefreshResult, 0, len(playerIDs))
+	for _, playerID := range playerIDs {
+		if f.refresh != nil {
+			out = append(out, f.refresh(playerID))
+			continue
+		}
+		out = append(out, playerroute.RefreshResult{PlayerID: playerID, Held: f.owner[playerID] == f.sid})
+	}
+	return out
+}
+
+func (f *fakeLeaseTable) Release(_ context.Context, playerID int64) error {
+	f.released = append(f.released, playerID)
+	delete(f.owner, playerID)
+	return nil
+}
+
+type fakeFencer struct{ closed []int64 }
+
+func (f *fakeFencer) CloseSessions(playerID int64, _ error) int {
+	f.closed = append(f.closed, playerID)
+	return 1
+}
+
+func ownersUnderTest(t *testing.T) (*PlayerOwners, *fakeLeaseTable, *fakeFencer, *time.Time) {
+	t.Helper()
+	table := newFakeLeaseTable(1000)
+	fencer := &fakeFencer{}
+	clock := time.Unix(1_700_000_000, 0)
+	owners := newPlayerOwners(table, fencer, func() time.Time { return clock })
+	return owners, table, fencer, &clock
+}
+
+// Redis 说这把租约已经是别人的：立刻停止服务这个玩家——拒绝新事务，并断开连接。
+func TestALostLeaseFencesThePlayer(t *testing.T) {
+	owners, table, fencer, _ := ownersUnderTest(t)
+	ctx := context.Background()
+	if mine, err := owners.Claim(ctx, 42); err != nil || !mine {
+		t.Fatalf("claim = %v, %v", mine, err)
+	}
+	if err := owners.Admit(42); err != nil {
+		t.Fatalf("a freshly confirmed lease was refused: %v", err)
+	}
+
+	// The next renewal says it is somebody else's. (Not merely gone: a lease
+	// that has simply lapsed is retaken, which the test below covers.)
+	table.owner[42] = 1001
+	owners.renew(ctx)
+
+	if err := owners.Admit(42); !errors.Is(err, ErrLeaseNotHeld) {
+		t.Fatalf("a player whose lease moved is still admitted for writes: %v", err)
+	}
+	if len(fencer.closed) != 1 || fencer.closed[0] != 42 {
+		t.Fatalf("the player was left connected to a process that may not serve them: closed=%v", fencer.closed)
+	}
+	// The lease belongs to somebody else now; deleting it would delete THEIR
+	// lease, so nothing was released.
+	if len(table.released) != 0 {
+		t.Fatalf("a fenced lease was released, which deletes the new owner's: %v", table.released)
+	}
+}
+
+// 续租读不出来（Redis 挂了）：不知道 ≠ 失去。租约不被放弃，但确认的期限不再延长，
+// 于是准入自己走到头——这正是"停在越界之前"和"越界之后还在写"的区别。
+func TestAnUnknownRenewalRunsAdmissionOutInsteadOfPretending(t *testing.T) {
+	owners, table, fencer, clock := ownersUnderTest(t)
+	ctx := context.Background()
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	table.refresh = func(playerID int64) playerroute.RefreshResult {
+		return playerroute.RefreshResult{PlayerID: playerID, Err: errors.New("redis down")}
+	}
+
+	// Renewals keep failing while the confirmed lease still has room.
+	for i := 0; i < 2; i++ {
+		*clock = clock.Add(playerroute.RefreshInterval)
+		owners.renew(ctx)
+		if err := owners.Admit(42); err != nil {
+			t.Fatalf("admission stopped while the confirmed lease still had %s left: %v", playerroute.Lease-time.Duration(i+1)*playerroute.RefreshInterval, err)
+		}
+	}
+	if len(fencer.closed) != 0 {
+		t.Fatalf("an unknown renewal disconnected the player; unknown is not lost: %v", fencer.closed)
+	}
+
+	// Past the guard band, admission must stop on its own.
+	*clock = clock.Add(playerroute.Lease - 2*playerroute.RefreshInterval - AdmissionGuard + time.Second)
+	if err := owners.Admit(42); !errors.Is(err, ErrLeaseNotHeld) {
+		t.Fatalf("a new transaction was admitted inside the guard band: %v", err)
+	}
+}
+
+// 准入必须提前于到期收口，否则一个在最后一刻被放行的事务会跨过截止时刻。
+func TestAdmissionStopsOneGuardBandBeforeTheDeadline(t *testing.T) {
+	owners, _, _, clock := ownersUnderTest(t)
+	ctx := context.Background()
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	*clock = clock.Add(playerroute.Lease - AdmissionGuard - time.Second)
+	if err := owners.Admit(42); err != nil {
+		t.Fatalf("refused while more than the guard band remained: %v", err)
+	}
+	*clock = clock.Add(2 * time.Second)
+	if err := owners.Admit(42); !errors.Is(err, ErrLeaseNotHeld) {
+		t.Fatalf("admitted with less than the guard band left: %v", err)
+	}
+}
+
+// 没有确认过的租约就不能写，哪怕 Redis 里这个 sid 确实是持有者——那可能是前一次
+// 化身留下的。
+func TestASidMatchWithoutAConfirmedLeaseIsNotOwnership(t *testing.T) {
+	owners, table, _, _ := ownersUnderTest(t)
+	ctx := context.Background()
+	table.owner[42] = 1000 // same sid, but this process never claimed it
+
+	if err := owners.Admit(42); !errors.Is(err, ErrLeaseNotHeld) {
+		t.Fatalf("a lease this process never confirmed was admitted: %v", err)
+	}
+	owned, err := owners.OwnedHere(ctx, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owned {
+		t.Fatal("OwnedHere answered yes for a lease this process cannot prove it holds")
+	}
+}
+
+// 边界上的闸门：登录必须放行（它就是取得所有权的那条消息），其余一律按 Admit 判。
+func TestTheWriteGateExemptsLoginAndRefusesEverythingElse(t *testing.T) {
+	owners, _, _, _ := ownersUnderTest(t)
+	ctx := context.Background()
+
+	// Nothing claimed yet: only the login may run.
+	if err := owners.AdmitMessage(42, msgid.MsgEnterGame); err != nil {
+		t.Fatalf("login was gated on already owning the player: %v", err)
+	}
+	if err := owners.AdmitMessage(42, msgid.MsgAddItem); !errors.Is(err, ErrLeaseNotHeld) {
+		t.Fatalf("a write was admitted for a player this process does not own: %v", err)
+	}
+
+	// After the login's claim, ordinary messages run.
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	if err := owners.AdmitMessage(42, msgid.MsgAddItem); err != nil {
+		t.Fatalf("a write was refused while the lease is confirmed: %v", err)
+	}
+}
+
+// 租约只是"没了"（我们的续租断过一段），而没有别人接手：重新取回来，不要把玩家踢掉。
+// SetNX 是原子的，所以"没人拿着"这个判断和取回是同一件事。
+func TestALapsedLeaseNobodyElseTookIsRetakenInsteadOfFenced(t *testing.T) {
+	owners, table, fencer, _ := ownersUnderTest(t)
+	ctx := context.Background()
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	// The key vanished — our renewals lapsed — but nobody took the player.
+	delete(table.owner, 42)
+	owners.renew(ctx)
+
+	if err := owners.Admit(42); err != nil {
+		t.Fatalf("a lease that merely lapsed was not retaken: %v", err)
+	}
+	if len(fencer.closed) != 0 {
+		t.Fatalf("the player was disconnected although nobody else had taken them: %v", fencer.closed)
+	}
+	if table.owner[42] != 1000 {
+		t.Fatalf("the table does not show this process as the owner: %v", table.owner)
+	}
+}

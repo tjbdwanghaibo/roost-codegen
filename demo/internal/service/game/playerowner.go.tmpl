@@ -2,12 +2,15 @@ package {{GAME_SERVICE_PKG}}
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
+	"{{MODULE}}/protocol/msgid"
 	"{{MODULE}}/game/playerroute"
+	"github.com/tjbdwanghaibo/roost-core/ownerroute"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-kit/mods"
 )
@@ -46,14 +49,68 @@ const PlayerOwnerCapability app.ModName = "{{GAME_SERVICE}}.playerowner"
 // would write the same document with two independent version counters. The
 // first run of the demo with two processes ended in
 // `fatal projection version conflict` and a dead process, within seconds.
+//
+// One more rule, and it is the one that makes the table worth anything:
+// **holding a claim is not the same as knowing you still hold it.** A renewal
+// that fails leaves this process in the dark, and 30 seconds later another
+// process may legitimately take the player. Writing until somebody tells you
+// to stop is therefore not an option — nobody will. Every write path asks
+// Admit, which answers from the last renewal Redis CONFIRMED, and refuses as
+// the confirmed lease runs out (RR-20260920-04).
 type PlayerOwners struct {
-	store *playerroute.Store
+	store    leaseTable
+	fencer   sessionFencer
+	guard    time.Duration
+	now      func() time.Time
 
 	mu    sync.Mutex
-	local map[int64]struct{}
+	local map[int64]*leaseState
 	stop  chan struct{}
 	done  chan struct{}
 }
+
+// leaseTable is the shared table as these owners use it. The interface exists
+// so the fencing rules can be tested without a Redis; *playerroute.Store is
+// the implementation.
+type leaseTable interface {
+	Claim(ctx context.Context, playerID int64) (playerroute.Route, error)
+	Owner(ctx context.Context, playerID int64) (playerroute.Route, error)
+	Owns(ctx context.Context, playerID int64) (bool, error)
+	// GetRoute is the addressing question — who should this work go to —
+	// which is the table's view, not this process's admission. A router that
+	// asked the gate here would refuse to address work to anybody.
+	GetRoute(ctx context.Context, playerID int64) (playerroute.Route, bool, error)
+	Refresh(ctx context.Context, playerIDs []int64) []playerroute.RefreshResult
+	Release(ctx context.Context, playerID int64) error
+	SID() int32
+}
+
+// sessionFencer is how a process stops serving a player it can no longer
+// prove it owns: it disconnects them. The player reconnects — to whichever
+// process owns them by then, which is the point.
+type sessionFencer interface {
+	CloseSessions(playerID int64, reason error) int
+}
+
+// leaseState is what this process knows about one lease, and when it stops
+// being able to claim it knows it. validUntil is a LOCAL deadline computed
+// from the last confirmation, never from the value in Redis: the two clocks
+// are different and the local one is the one the writes race against.
+type leaseState struct {
+	validUntil time.Time
+	lost       bool
+}
+
+// ErrLeaseNotHeld is what a write path gets when this process cannot prove it
+// owns the player right now.
+var ErrLeaseNotHeld = errors.New("player owners: this process does not hold a confirmed lease on the player")
+
+// AdmissionGuard is how much of the lease is reserved for work already in
+// flight. A transaction admitted at the last confirmed moment must finish
+// before the lease can lapse, so admission stops this long before the
+// deadline; anything slower than the guard is the one thing this cannot
+// protect, and it is far outside what a Nest transaction takes.
+const AdmissionGuard = 5 * time.Second
 
 // NewPlayerOwners builds the table from what the process publishes.
 func NewPlayerOwners(registry *app.Registry) (*PlayerOwners, error) {
@@ -71,7 +128,30 @@ func NewPlayerOwners(registry *app.Registry) (*PlayerOwners, error) {
 	if err != nil {
 		return nil, fmt.Errorf("player owners: %w", err)
 	}
-	return &PlayerOwners{store: store, local: map[int64]struct{}{}}, nil
+	return newPlayerOwners(store, nil, time.Now), nil
+}
+
+// newPlayerOwners is the seam the tests build through.
+func newPlayerOwners(store leaseTable, fencer sessionFencer, now func() time.Time) *PlayerOwners {
+	if now == nil {
+		now = time.Now
+	}
+	return &PlayerOwners{
+		store: store, fencer: fencer, guard: AdmissionGuard, now: now,
+		local: map[int64]*leaseState{},
+	}
+}
+
+// Fence sets what disconnects a player this process may no longer serve. It
+// is separate from construction because the transport comes up after the
+// table does.
+func (owners *PlayerOwners) Fence(fencer sessionFencer) {
+	if owners == nil {
+		return
+	}
+	owners.mu.Lock()
+	owners.fencer = fencer
+	owners.mu.Unlock()
 }
 
 // Start begins refreshing this process's claims.
@@ -99,9 +179,135 @@ func (owners *PlayerOwners) refreshLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
-		owners.store.Refresh(ctx, owners.snapshot())
+		owners.renew(ctx)
 	}
 }
+
+// renew is one pass of the refresh loop, factored out so a test can drive it
+// without waiting for a ticker.
+func (owners *PlayerOwners) renew(ctx context.Context) {
+	for _, result := range owners.store.Refresh(ctx, owners.snapshot()) {
+		switch {
+		case result.Held:
+			owners.confirm(result.PlayerID)
+		case result.Err != nil:
+			// UNKNOWN. The lease may still be ours, so this does not give it
+			// up — but it does not extend the deadline either, and admission
+			// runs out on its own if the next renewals keep failing. That is
+			// the whole difference between a process that stops in time and
+			// one that is still writing when somebody else takes over.
+			slog.Warn("player owners: lease renewal failed; admission is running out", "player_id", result.PlayerID, "err", result.Err)
+		default:
+			// Redis answered, and the answer is that the lease is not ours.
+			// Two different situations wear that answer, and they deserve
+			// different endings:
+			//
+			//   nobody holds it   our renewals lapsed while the player stayed
+			//                     here. Taking it again is atomic (SetNX), it
+			//                     is correct, and it does not disturb anyone.
+			//   somebody holds it another process owns this player now; this
+			//                     one must stop serving them.
+			//
+			// The re-claim decides which it is, so this does not have to
+			// guess — and a lost re-claim is exactly the case that must
+			// fence.
+			mine, err := owners.Claim(ctx, result.PlayerID)
+			switch {
+			case err != nil:
+				slog.Warn("player owners: lease lost and could not be retaken; admission is running out", "player_id", result.PlayerID, "err", err)
+			case mine:
+				slog.Warn("player owners: lease had lapsed and was retaken", "player_id", result.PlayerID)
+			default:
+				owners.fence(result.PlayerID, "another process holds the lease now")
+			}
+		}
+	}
+}
+
+// confirm records that Redis just said the lease is ours.
+func (owners *PlayerOwners) confirm(playerID int64) {
+	owners.mu.Lock()
+	defer owners.mu.Unlock()
+	state := owners.local[playerID]
+	if state == nil {
+		state = &leaseState{}
+		owners.local[playerID] = state
+	}
+	state.validUntil = owners.now().Add(playerroute.Lease)
+	state.lost = false
+}
+
+// fence stops this process from serving a player it can no longer prove it
+// owns: the lease is dropped locally, every write path starts refusing, and
+// the player's connections are closed so they stop sending work. Their
+// session-close path then runs the ordinary cleanups.
+//
+// It does NOT release the claim in Redis: either somebody else already holds
+// it — in which case releasing would delete THEIR lease — or the state is
+// unknown, where the safe move is to let it lapse.
+func (owners *PlayerOwners) fence(playerID int64, reason string) {
+	owners.mu.Lock()
+	state := owners.local[playerID]
+	if state == nil || state.lost {
+		owners.mu.Unlock()
+		return
+	}
+	state.lost = true
+	delete(owners.local, playerID)
+	fencer := owners.fencer
+	owners.mu.Unlock()
+	closed := 0
+	if fencer != nil {
+		closed = fencer.CloseSessions(playerID, fmt.Errorf("player owners: %s", reason))
+	}
+	slog.Warn("player owners: fenced a player this process no longer owns", "player_id", playerID, "reason", reason, "sessions_closed", closed)
+}
+
+// Admit is the write gate: may this process start a new transaction on this
+// player right now?
+//
+// It answers from local state on purpose — a Redis round trip per action
+// would cost more than the lease is worth, and would not be more true: the
+// answer can go stale a microsecond after any read. What makes the local
+// answer sound is that it is derived from the last renewal Redis CONFIRMED,
+// and that it expires on its own.
+func (owners *PlayerOwners) Admit(playerID int64) error {
+	if owners == nil {
+		// No table: a single-process deployment, where every player is ours.
+		return nil
+	}
+	owners.mu.Lock()
+	defer owners.mu.Unlock()
+	state := owners.local[playerID]
+	if state == nil || state.lost {
+		return fmt.Errorf("%w: player %d", ErrLeaseNotHeld, playerID)
+	}
+	if remaining := state.validUntil.Sub(owners.now()); remaining <= owners.guard {
+		return fmt.Errorf("%w: player %d, confirmed lease has %s left and admission needs %s", ErrLeaseNotHeld, playerID, remaining, owners.guard)
+	}
+	return nil
+}
+
+// AdmitMessage is the access boundary's gate (accessplayer.WriteGate): may
+// this process act on this request at all?
+//
+// Login is exempt, and it has to be: it is the message that TAKES ownership,
+// so gating it on already having ownership would lock every player out. Every
+// other message is refused while this process cannot prove it owns the
+// player — which covers endpoints that do not exist yet, the reason the check
+// lives here rather than in each handler.
+func (owners *PlayerOwners) AdmitMessage(playerID int64, messageID uint32) error {
+	if owners == nil {
+		return nil
+	}
+	if messageID == msgid.MsgEnterGame {
+		return nil
+	}
+	return owners.Admit(playerID)
+}
+
+// Admitted reports Admit as a boolean, for callers that only branch on it.
+func (owners *PlayerOwners) Admitted(playerID int64) bool { return owners.Admit(playerID) == nil }
 
 // Stop ends the refresh loop. Claims are left to expire rather than released:
 // a process going down does not know whether it is coming back, and a lease
@@ -132,9 +338,7 @@ func (owners *PlayerOwners) Claim(ctx context.Context, playerID int64) (bool, er
 	}
 	mine := route.SID == owners.store.SID()
 	if mine {
-		owners.mu.Lock()
-		owners.local[playerID] = struct{}{}
-		owners.mu.Unlock()
+		owners.confirm(playerID)
 	}
 	return mine, nil
 }
@@ -166,6 +370,13 @@ func (owners *PlayerOwners) Owns(ctx context.Context, playerID int64) (bool, err
 	if owners == nil {
 		return true, nil
 	}
+	// Already ours and still admitted: no round trip, and — more importantly
+	// — the same answer every other write path gets. A consumer that asked
+	// Redis directly could be admitted here while Admit refuses two lines
+	// later, which is how you end up with half a rule.
+	if owners.Admitted(playerID) {
+		return true, nil
+	}
 	route, err := owners.store.Owner(ctx, playerID)
 	if err != nil {
 		return false, err
@@ -174,7 +385,13 @@ func (owners *PlayerOwners) Owns(ctx context.Context, playerID int64) (bool, err
 		mine, claimErr := owners.Claim(ctx, playerID)
 		return mine, claimErr
 	}
-	return route.SID == owners.store.SID(), nil
+	if route.SID != owners.store.SID() {
+		return false, nil
+	}
+	// Redis says this sid owns them but this process has no confirmed lease:
+	// it is a previous incarnation's claim, or one this process gave up. Not
+	// ours to write through until a Claim confirms it.
+	return false, nil
 }
 
 // OwnedHere answers the same question as Owns without the claim. It is for
@@ -186,7 +403,18 @@ func (owners *PlayerOwners) OwnedHere(ctx context.Context, playerID int64) (bool
 	if owners == nil {
 		return true, nil
 	}
-	return owners.store.Owns(ctx, playerID)
+	// The gate first, for the same reason as Owns: one answer, one rule.
+	if owners.Admitted(playerID) {
+		return true, nil
+	}
+	held, err := owners.store.Owns(ctx, playerID)
+	if err != nil || !held {
+		return false, err
+	}
+	// Redis agrees it is this sid's, but there is no confirmed local lease
+	// behind it. Answering true here would let a caller act on a lease this
+	// process cannot prove it still holds.
+	return false, nil
 }
 
 // OwnerSID reports who owns a player, or 0 for nobody. It is what an operator
@@ -209,7 +437,9 @@ func (owners *PlayerOwners) SID() int32 {
 }
 
 // Routes is the resolver the core router uses.
-func (owners *PlayerOwners) Routes() *playerroute.Store { return owners.store }
+func (owners *PlayerOwners) Routes() ownerroute.Resolver[int64, playerroute.Route] {
+	return owners.store
+}
 
 func (owners *PlayerOwners) snapshot() []int64 {
 	owners.mu.Lock()

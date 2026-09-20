@@ -496,6 +496,22 @@ func (runtime *Runtime) ActiveSessions(playerID int64) int {
 	return server.activeSessions(playerID)
 }
 
+// CloseSessions disconnects every session of one player and reports how many
+// it closed. It is the transport half of a fail-closed decision: the process
+// has concluded it may no longer serve this player, and the honest way to act
+// on that is to stop reading their socket rather than to keep accepting work
+// it is not entitled to do.
+//
+// The closes go through the same path a network error takes, so the usual
+// lifecycle event reaches every subscriber and the scene, chat presence and
+// ownership cleanups run exactly as they would for a disconnect.
+func (runtime *Runtime) CloseSessions(playerID int64, reason error) int {
+	if runtime == nil { return 0 }
+	server := runtime.server.Load()
+	if server == nil { return 0 }
+	return server.closeSessions(playerID, reason)
+}
+
 type Server struct {
 	config Config
 	runtime *accessplayer.Runtime
@@ -784,6 +800,26 @@ func (server *Server) activeSessions(playerID int64) int {
 	server.mu.RLock()
 	defer server.mu.RUnlock()
 	return len(server.playerSessions[playerID])
+}
+
+// closeSessions snapshots the player's sessions under the lock and closes
+// them outside it: Close runs the connection's teardown, which ends up taking
+// this same lock to unregister the session.
+func (server *Server) closeSessions(playerID int64, reason error) int {
+	server.mu.RLock()
+	byPlayer := server.playerSessions[playerID]
+	targets := make([]*session, 0, len(byPlayer))
+	for _, current := range byPlayer {
+		targets = append(targets, current)
+	}
+	server.mu.RUnlock()
+	closed := 0
+	for _, current := range targets {
+		if err := current.Close(reason); err == nil {
+			closed++
+		}
+	}
+	return closed
 }
 
 type session struct {

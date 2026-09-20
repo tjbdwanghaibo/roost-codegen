@@ -13,6 +13,14 @@
   - **行为变化**：升级后旧格式（裸 sid）的 key 不可用，等 30 秒租约自然过期；`NewStore` 不再接受空 token。
   测试：生成工程 `playerroute_test.go` 四条（含两条交错复现、同 sid 重启、Refresh 结果语义），变异验证过。记录：[RR-20260920-03](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/bugfix/RR-20260920-03.md)。
 
+- **租约丢了就停止服务这个玩家**（U-0259，C5；RR-20260920-04，T-153，**P1**）。`refreshLoop` 原来丢掉 `Refresh` 的全部结果和错误，Player 实体既不卸载也不停服务；网络故障或 GC 暂停超过 30 秒后，另一个进程可以合法接手，而这一个还在写。
+  - 本地记 `validUntil = 最近一次**被 Redis 确认**的续租 + Lease`；所有写入路径问 `Admit`，它在 `validUntil - AdmissionGuard`（5 秒）就开始拒绝。**时间驱动**，所以续租线程卡住时准入照样会自己走到头。
+  - 新增**可选**的访问边界闸门：`access.player` 发布 `WriteGate` capability 与一条中间件，挂在协议注册之前，因此覆盖每一个 endpoint（包括以后新增的）。没有发布 gate 的工程行为不变。
+  - `Runtime.CloseSessions(playerID, reason)`：走网络错误那条关闭路径，scene / chat presence / 所有权清理照常触发。
+  - “不是我们的”先**原子重取一次**再决定：只是自己的续租断过一段而没人接手时把它拿回来，拿不到才说明真的易主，这时才断开玩家。实跑改出来的：在线时删光租约键 → retaken=16 / fenced=0。
+  - **边界**：这套保证的前提是租约只因到期而结束；Redis 丢键 / 被人删键会破坏该前提，需要把 owner generation 带进持久化 CAS（未做）。
+  测试：生成工程 `playerowner_test.go` 六条，变异验证过。记录：[RR-20260920-04](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/bugfix/RR-20260920-04.md)。
+
 ### Changed
 
 - 框架发布组合升到 core v1.15.13。

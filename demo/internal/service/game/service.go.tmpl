@@ -9,6 +9,8 @@ import (
 	lifecycle "{{MODULE}}/game/lifecycle"
 	migrations "{{MODULE}}/db/migrations"
 	"{{MODULE}}/game/skills"
+	accessplayer "{{MODULE}}/internal/access/player"
+	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"github.com/tjbdwanghaibo/roost-core/skill"
@@ -126,6 +128,13 @@ func (s *Service) Init(registry *app.Registry) error {
 	if err := registry.Register(PlayerOwnerCapability, owners); err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: publish player owners: %w", err)
 	}
+	// The same table, under the access boundary's optional gate name: from
+	// here every player request is checked before it reaches a handler, so a
+	// process whose lease has lapsed stops acting on that player everywhere
+	// at once (RR-20260920-04).
+	if err := registry.Register(accessplayer.WriteGateCapability, accessplayer.WriteGate(owners)); err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: publish player write gate: %w", err)
+	}
 	s.owners = owners
 	stop, err := startMatchmaker(context.Background(), registry, battles, scene)
 	if err != nil {
@@ -169,6 +178,12 @@ func (s *Service) Init(registry *app.Registry) error {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	s.stopPresence = stopPresence
+	// The transport is up by now, so the owners can fence: a player this
+	// process can no longer prove it owns gets disconnected rather than
+	// served (RR-20260920-04).
+	if runtime, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name); ok && runtime != nil {
+		owners.Fence(runtime)
+	}
 	owners.Start(context.Background())
 	// The timed server-wide event: this server's lease, the World's timer
 	// heap and the coordinator loop (activity.go). After the scene, because
