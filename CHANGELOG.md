@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [v1.15.25] - 2026-09-20
+
+### Changed
+
+- 框架发布组合升到 core v1.15.17 / kit v1.14.16：远端 snapshot 的 checksum 改存 8 字节（U-0261，解除第十八批 Guild 的阻塞）、`versionstore.ErrMalformedRecord` / `IndexDefer`、platform 对不可解码订单改为推后（U-0262）。生成工程无需改动。
+
 ## [v1.15.24] - 2026-09-20
 
 ### Changed
