@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.15.28] - 2026-09-20
+
 ### Fixed
 
 - **game-demo：房间拒绝的 subscribe 不再被丢掉**（U-0267，C5，RR-20260920-06，T-161）。场景桥对 `room.Subscribe` 的失败只写一条 `slog.Warn`，而兴趣系统在调用房间**之前**就把 pair 标成已订阅、重发只在 band 变化时发生——两个站着不动的玩家永远不会 reband，那个观察者从此永久收不到那个 subject（16 机器人实跑里每轮 2~6 个客户端的 `"pos_x" never arrived` 就是这个形状）。`applyChanges` 上方那句 "the next tick that touches it tries again" 是假的，一并改掉。
