@@ -210,6 +210,11 @@ func (login *accountLogin) authPacket(rb *robot.Context) (*transport.Packet, err
 	}
 	rb.PlayerID = role.PlayerID
 	rb.Blackboard.Set("player_id", role.PlayerID)
+	// Every robot founds its own guild. A literal name in the scenario would
+	// make the demo runnable exactly once against a given database: the
+	// second run would collide on the name and fail with guild_exists, which
+	// says nothing about the code under test.
+	rb.Blackboard.Set("guild_name", fmt.Sprintf("robot guild %d", role.PlayerID))
 	return playertcp.AuthPacket(fmt.Sprintf("session:%d:%s", role.PlayerID, session.Token)), nil
 }
 
@@ -453,6 +458,53 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 					resp.ActivityID, resp.Score, resp.Progress)
 			}
 			rb.Blackboard.Set("activity_id", resp.ActivityID)
+			return nil
+		}))
+	// found_guild / guild_info: the demo's one entity that does not belong to
+	// this process.
+	//
+	// From the client's side it looks like every other endpoint, which is the
+	// claim being tested: the guild id carries the remote bit, so the
+	// transaction behind it took a distributed lock, loaded the guild from the
+	// authoritative store and wrote it back fenced — and none of that reaches
+	// the wire. What the response does carry is which process served the call
+	// (`served_by`), because in a two-process run that is the only visible
+	// difference, and the demo's second-game.sh exists to make it visible.
+	action.MustRegisterCall[pb.FoundGuildRequest, pb.GuildResponse](actions, protocols, "found_guild", msgid.MsgFoundGuild,
+		action.MapField[pb.GuildResponse]("Name", "guild_name"),
+		action.OnResp(func(rb *robot.Context, resp *pb.GuildResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			if resp.GuildID == 0 {
+				return fmt.Errorf("the guild was founded with no id")
+			}
+			if resp.Members != 1 {
+				return fmt.Errorf("a new guild has %d members, want its founder", resp.Members)
+			}
+			if resp.ServedBySID == 0 {
+				return fmt.Errorf("the answer does not say which process served it")
+			}
+			rb.Blackboard.Set("guild_id", resp.GuildID)
+			return nil
+		}))
+	// guild_info with no id reads "the guild I am in" — the player's own copy
+	// of that one fact, which is why it costs a local lock and not a
+	// distributed one. It has to agree with what founding returned.
+	action.MustRegisterCall[pb.GuildInfoRequest, pb.GuildResponse](actions, protocols, "guild_info", msgid.MsgGuildInfo,
+		action.OnResp(func(rb *robot.Context, resp *pb.GuildResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			raw, _ := rb.Blackboard.Get("guild_id")
+			founded, _ := raw.(int64)
+			if founded != 0 && resp.GuildID != founded {
+				return fmt.Errorf("the player's own copy says guild %d, the one they founded is %d",
+					resp.GuildID, founded)
+			}
+			if resp.Members < 1 {
+				return fmt.Errorf("guild %d reports %d members", resp.GuildID, resp.Members)
+			}
 			return nil
 		}))
 	// purchase: a paid order end to end, across two processes. The endpoint
@@ -728,6 +780,12 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalPurchaseRequest(message)
 	case *pb.ActivityStandingRequest:
 		return pb.MarshalActivityStandingRequest(message)
+	case *pb.FoundGuildRequest:
+		return pb.MarshalFoundGuildRequest(message)
+	case *pb.JoinGuildRequest:
+		return pb.MarshalJoinGuildRequest(message)
+	case *pb.GuildInfoRequest:
+		return pb.MarshalGuildInfoRequest(message)
 	default:
 		return nil, fmt.Errorf("pb codec: no marshal for %T", value)
 	}
@@ -857,6 +915,12 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 		*message = *decoded
 	case *pb.ActivityStandingResponse:
 		decoded, err := pb.UnmarshalActivityStandingResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.GuildResponse:
+		decoded, err := pb.UnmarshalGuildResponse(data)
 		if err != nil {
 			return err
 		}

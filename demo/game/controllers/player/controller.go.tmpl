@@ -12,6 +12,7 @@ import (
 	sceneentity "{{MODULE}}/game/entities/scene"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/purchase"
+	"{{MODULE}}/game/runtimeid"
 	"{{MODULE}}/game/skills"
 	"github.com/tjbdwanghaibo/roost-core/app"
 	"github.com/tjbdwanghaibo/roost-core/entity"
@@ -36,6 +37,7 @@ type Controller struct {
 	registry   *app.Registry
 	nestClient corenest.Client
 	players    *lifecycle.PlayerLifecycle
+	guilds     *lifecycle.GuildLifecycle
 	matcher    svcmatch.Matchmaker
 	messaging  svcchat.Messaging
 	mailer     svcmail.Mail
@@ -54,6 +56,11 @@ type Controller struct {
 	// paymentSecret is the demo's stand-in for a payment provider's signing
 	// key. A real game process does not hold one (see the purchase endpoint).
 	paymentSecret string
+	// serverSID and ids are what this process needs to mint ids for things it
+	// creates: a guild, like a monster, gets an id with this process's sid in
+	// it, so two processes founding at the same moment cannot collide.
+	serverSID int32
+	ids       *runtimeid.Allocator
 
 	// The skill catalog, compiled from game/skills/*.json on first use.
 	skillsOnce   sync.Once
@@ -151,6 +158,10 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
+	guilds, err := lifecycle.GuildFromRegistry(registry)
+	if err != nil {
+		return nil, fmt.Errorf("player controller: %w", err)
+	}
 	// The same capabilities internal/service/<game>'s generated Match() and
 	// Chat() accessors return; looked up here directly so this package does
 	// not import the service package.
@@ -187,6 +198,14 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if !ok || payments == nil {
 		return nil, fmt.Errorf("player controller: capability %q not found; list platform under services.<game>.uses", svcplatform.CapabilityName)
 	}
+	// The sid comes from the registry's config, not from the runtime-config
+	// slot: that slot holds whatever wrote to it last, and the config-data Mod
+	// overwrites it with its snapshot (U-0244).
+	serverSID := int32(registry.Config().GetInt("sid"))
+	ids, err := runtimeid.New(serverSID)
+	if err != nil {
+		return nil, fmt.Errorf("player controller: %w", err)
+	}
 	worldID, err := lifecycle.WorldID(registry)
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
@@ -196,9 +215,10 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
 	return &Controller{
-		registry: registry, nestClient: client, players: players,
+		registry: registry, nestClient: client, players: players, guilds: guilds,
 		matcher: matcher, messaging: messaging, mailer: mailer, sessions: sessions, ranking: ranking,
 		payments: payments, paymentSecret: paymentSecret,
+		serverSID: serverSID, ids: ids,
 		presence: chatroom.DefaultPresence(), worldID: worldID, sceneID: sceneID,
 	}, nil
 }
@@ -323,6 +343,32 @@ func (controller *Controller) Payments() svcplatform.Platform {
 		return nil
 	}
 	return controller.payments
+}
+
+// Guilds is the guild lifecycle: creating the aggregate a guild's
+// distributed lock will later be taken on.
+func (controller *Controller) Guilds() (*lifecycle.GuildLifecycle, error) {
+	if controller == nil || controller.guilds == nil {
+		return nil, errors.New("player controller: guild lifecycle is unavailable")
+	}
+	return controller.guilds, nil
+}
+
+// ServerSID is this process's id. It is in a few answers so that a two-process
+// run shows which one served the call.
+func (controller *Controller) ServerSID() int32 {
+	if controller == nil {
+		return 0
+	}
+	return controller.serverSID
+}
+
+// RuntimeIDs mints ids for objects this process creates at run time.
+func (controller *Controller) RuntimeIDs() (*runtimeid.Allocator, error) {
+	if controller == nil || controller.ids == nil {
+		return nil, errors.New("player controller: runtime id allocator is unavailable")
+	}
+	return controller.ids, nil
 }
 
 // PaymentSecret is what this process signs simulated provider callbacks with.

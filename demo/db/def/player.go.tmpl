@@ -62,6 +62,17 @@ type PlayerDao struct {
 	// player who has claimed nothing. What needs a step is a change of SHAPE
 	// (see db/migrations/player.go), which is why schema= is still 2.
 	PurchaseClaims map[string]int64 `bson:"purchase_claims" dao:"persist,map=fast"`
+	// GuildID is the guild this player belongs to, or 0.
+	//
+	// The roster lives on the guild — which is a remote-managed entity owned
+	// by whichever process holds its lock — and this is the player's own copy
+	// of one fact from it. Two places for one fact is normally the thing to
+	// avoid; it is right here because the alternative is taking a distributed
+	// lock every time the game wants to know whether a player has a guild.
+	// The rule that keeps them from drifting: both are written in the SAME
+	// transaction (game/handler/join_guild.go), which is possible precisely
+	// because Nest can lock a remote entity and a local one together.
+	GuildID int64 `bson:"guild_id" dao:"persist,sync"`
 }
 
 // Equipment is a nested struct: the generator gives it its own dirty

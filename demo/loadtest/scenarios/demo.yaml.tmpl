@@ -158,6 +158,22 @@ scenarios:
         # the action, because "the replay was free" is only visible as an
         # exact count.
         - action: activity_standing
+        # The guild: an entity that belongs to no process in particular.
+        # Founding takes its distributed lock; reading "my guild" does not,
+        # because the player keeps a copy of that one fact — and the two have
+        # to agree, which is what the second step checks.
+        # Founding takes the guild's distributed lock. It is idempotent per
+        # (player, name), so the client may repeat it: a lost reply replays
+        # the same answer instead of minting a second guild.
+        #
+        # There is no retry wrapper here on purpose. The one temporary answer
+        # this endpoint gives — guild_busy (100020), while a restarted
+        # process waits out its predecessor's lock lease — is not something a
+        # tight client loop fixes: measured, the dispatch itself waits far
+        # longer than the lease (W-2026-09-20-04). Wrapping it would hide that
+        # behind a slow, green run.
+        - action: found_guild
+        - action: guild_info
         # A paid order, across the platform process: the endpoint signs a
         # callback, the platform service records and delivers it, the grant
         # lands in Redis and the game drains it into the bag. Then a second

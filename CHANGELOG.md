@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- **game-demo：第十八批 Guild 合入**（§9.14）——远端托管实体（`remote=managed`）的第一个使用方，之前被 U-0261（checksum 写不进 BSON，并且会把 WAL 变成启动毒丸）阻塞。`GuildDao`、`Guild` 实体与 `RosterComponent`、三个 handler（`JoinGuild` 同时锁远端 guild 与本地 player）、三个端点、五个错误码、机器人动作。合入时的三处改动都是验收实跑逼出来的：
+  - **`guild_busy`（100020）代替“服务器错误”**：拿不到远端锁是可重试的暂时答案，不是内部错误。
+  - **创建按 (player, name) 幂等**：上一条邀请客户端重试，而重试若又铸一个新 guild 或报“你已经有公会”，就是在惩罚客户端听话；判据读玩家自己那份副本，因为它不需要拿锁。
+  - **公会名每个机器人一个**（登录时写黑板 + `MapField`）：固定字面量让 demo 在同一数据库上只能跑一次。
+  验收：冷启动 `success=2 failure=0`（`handlerFoundGuild` ~200ms），同一数据库连跑三轮全绿，重启后进程能起来。
+  **未做**：重启窗口内的锁等待（一次 dispatch 实测 79 秒）交审查，W-2026-09-20-04。
+
 ## [v1.15.25] - 2026-09-20
 
 ### Changed
