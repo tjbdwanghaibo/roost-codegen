@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.15.23] - 2026-09-20
+
 ### Fixed
 
 - **玩家租约的三条路径改成单次原子操作**（U-0258，C8；RR-20260920-03，T-152，**P1**）。`game/playerroute` 的 `Claim`（“已是我”分支）/ `Refresh` / `Release` 都是 `GET` 确认 SID 后再发 `EXPIRE`/`DEL`；两条命令之间租约可以过期并被另一个进程取得，第二条命令于是落在**别人的** key 上——旧 owner 给新 owner 续了期，或者直接把它删了。
