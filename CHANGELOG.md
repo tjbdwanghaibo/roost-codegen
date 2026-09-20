@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.15.31] - 2026-09-20
+
 ### Fixed
 
 - **game-demo：撤离的预算只限制它能限制的东西**（U-0272，C8，RR-20260920-12，T-166）。`dropResident` 给撤离套了 `evictBudget` 的 ctx 超时，而撤离的终点 `EntityManager.Destroy` 只在入口看一次 `ctx.Err()`，随后等实体的互斥锁——那把锁不接受 ctx。`Claim` 路径又是同步的且被 `renew` 调用，于是一个长事务的实体能把整轮刷新钉住；`Lease` 30s、`RefreshInterval` 10s，钉过 20 秒就开始有**别的**玩家的租约真的失效。与当天上午修掉的 RR-20260920-08（`OpTimeout` 在拿到写闸之后才生效）是同一个形状。

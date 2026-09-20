@@ -1,5 +1,5 @@
 schema: 2
-codegen: v1.15.30
+codegen: v1.15.31
 framework:
   core: v1.15.18
   kit: v1.14.17
