@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **玩家租约的三条路径改成单次原子操作**（U-0258，C8；RR-20260920-03，T-152，**P1**）。`game/playerroute` 的 `Claim`（“已是我”分支）/ `Refresh` / `Release` 都是 `GET` 确认 SID 后再发 `EXPIRE`/`DEL`；两条命令之间租约可以过期并被另一个进程取得，第二条命令于是落在**别人的** key 上——旧 owner 给新 owner 续了期，或者直接把它删了。
+  - 租约值从裸 sid 升级为 `<sid>:<token>`：token 是**进程**化身，每个 `Store` 随机生成一个。同一个 sid 重启之后算别人：它既不能续期也不能释放前任的租约（前任可能还活着）。
+  - `keyspace` 接口从 `SetNX/Get/Expire/Del` 变成 `SetNX/Get/CompareAndExpire/CompareAndDelete`，两个 compare 操作直接调 core 的 Lua（需 core ≥ v1.15.13），demo 侧不重写脚本。
+  - `Refresh` 改为返回 `[]RefreshResult{PlayerID, Held, Err}`：**读不出来是 UNKNOWN，不是 still held**。
+  - **行为变化**：升级后旧格式（裸 sid）的 key 不可用，等 30 秒租约自然过期；`NewStore` 不再接受空 token。
+  测试：生成工程 `playerroute_test.go` 四条（含两条交错复现、同 sid 重启、Refresh 结果语义），变异验证过。记录：[RR-20260920-03](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/bugfix/RR-20260920-03.md)。
+
+### Changed
+
+- 框架发布组合升到 core v1.15.13。
+
 ## [v1.15.22] - 2026-09-20
 
 ### Fixed
