@@ -499,3 +499,119 @@ func TestAHandBackThatCannotDropTheCopyKeepsTheLease(t *testing.T) {
 		t.Fatalf("the claim was given back although this process still holds the player: %v", table.owner)
 	}
 }
+
+// U-0271 · C8 · RR-20260920-11：为新工作重新取得的租约不是空闲租约。
+//
+// `confirm` used to serve two different events through one `IsZero` guard: a
+// renewal (which must NOT count as use, or no lease would ever look idle) and
+// a fresh claim (which must, because work is about to start). A lease retaken
+// after its window expired therefore kept the timestamp of the work before
+// it, and the very next refresh pass handed it back — out from under the step
+// it had just admitted.
+func TestALeaseRetakenForNewWorkIsNotIdle(t *testing.T) {
+	owners, table, _, clock := ownersUnderTest(t)
+	ctx := context.Background()
+
+	// T0: a background step claims an offline player.
+	if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+		t.Fatalf("owns: %v %v", owned, err)
+	}
+	// The confirmed window runs out and the key expires with it: from here
+	// Admit refuses, so the next Owns has to go and retake the lease.
+	*clock = clock.Add(playerroute.Lease + time.Second)
+	delete(table.owner, 77)
+
+	// T1: new work arrives and is admitted.
+	if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+		t.Fatalf("the new step was refused: %v %v", owned, err)
+	}
+	// The refresh pass that follows, with that step still running.
+	owners.renew(ctx)
+
+	if _, held := table.owner[77]; !held {
+		t.Fatalf("the lease was handed back under the step it had just admitted: %v", table.owner)
+	}
+	if err := owners.Admit(77); err != nil {
+		t.Fatalf("the step lost its admission mid-work: %v", err)
+	}
+}
+
+// A renewal is not use: if it were, no lease would ever look idle and the
+// hand-back would never happen at all.
+func TestRenewalsDoNotCountAsUse(t *testing.T) {
+	owners, table, _, clock := ownersUnderTest(t)
+	ctx := context.Background()
+	if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+		t.Fatalf("owns: %v %v", owned, err)
+	}
+	// Refresh passes keep confirming the lease, but nobody asks for the
+	// player. Each pass is well inside HandBackIdle, so only the accumulated
+	// time can make it idle.
+	for range 4 {
+		*clock = clock.Add(playerroute.RefreshInterval)
+		owners.renew(ctx)
+	}
+	if _, held := table.owner[77]; held {
+		t.Fatalf("a lease nothing has used was renewed forever: %v", table.owner)
+	}
+}
+
+// While a hand-back is in flight the lease admits nothing. Between dropping
+// the copy and releasing the claim there is a window where the old code still
+// said yes, and work admitted in it would load a fresh copy of a player this
+// process is about to give away.
+func TestAHandBackInFlightAdmitsNothing(t *testing.T) {
+	owners, _, _, clock := ownersUnderTest(t)
+	ctx := context.Background()
+	// Armed only for the hand-back: a claim evicts too (RR-20260920-09), and
+	// that one says no for a different reason — there is no lease yet.
+	armed := false
+	var duringHandBack []error
+	owners.Evict(evictorFunc(func(_ context.Context, playerID int64) error {
+		if armed {
+			duringHandBack = append(duringHandBack, owners.Admit(playerID))
+		}
+		return nil
+	}))
+	if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+		t.Fatalf("owns: %v %v", owned, err)
+	}
+	*clock = clock.Add(HandBackIdle + time.Second)
+	armed = true
+	owners.renew(ctx)
+	armed = false
+
+	if len(duringHandBack) != 1 {
+		t.Fatalf("the hand-back did not evict exactly once: %v", duringHandBack)
+	}
+	if duringHandBack[0] == nil {
+		t.Fatal("work was admitted while the player was being handed back")
+	}
+}
+
+// A hand-back that could not complete leaves the lease in service rather than
+// in a state that refuses everything.
+func TestAFailedHandBackPutsTheLeaseBackInService(t *testing.T) {
+	owners, table, _, clock := ownersUnderTest(t)
+	ctx := context.Background()
+	if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+		t.Fatalf("owns: %v %v", owned, err)
+	}
+	owners.Evict(&evictorStub{fail: errors.New("the entity is busy")})
+	*clock = clock.Add(HandBackIdle + time.Second)
+	owners.renew(ctx)
+
+	if table.owner[77] != 1000 {
+		t.Fatalf("the claim was given back although the copy is still here: %v", table.owner)
+	}
+	if err := owners.Admit(77); err != nil {
+		t.Fatalf("the lease stayed closed after a hand-back that did not happen: %v", err)
+	}
+}
+
+// evictorFunc adapts a function to residentEvictor.
+type evictorFunc func(context.Context, int64) error
+
+func (fn evictorFunc) EvictPlayer(ctx context.Context, playerID int64) error {
+	return fn(ctx, playerID)
+}
