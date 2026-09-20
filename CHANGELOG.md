@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.15.30] - 2026-09-20
+
 ### Fixed
 
 - **发布清单不再和 tag 漂移**（U-0270，C4，T-164；进度盘点对照 CI 发现，无 RR）。`ci/framework-release.yaml` 的 `codegen:` 停在 v1.15.19，而 `release.yml` 的受保护 gate 用 `framework verify --expected-codegen "$RELEASE_TAG"` 比对它——v1.15.22 起每一个 tag 都红在这一步，`framework-lock.json`（core / kit 的 module path、checksum、replace 与内部伪版本校验）**十个版本没有产出过**。
