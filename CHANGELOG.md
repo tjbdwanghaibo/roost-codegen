@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **发布清单不再和 tag 漂移**（U-0270，C4，T-164；进度盘点对照 CI 发现，无 RR）。`ci/framework-release.yaml` 的 `codegen:` 停在 v1.15.19，而 `release.yml` 的受保护 gate 用 `framework verify --expected-codegen "$RELEASE_TAG"` 比对它——v1.15.22 起每一个 tag 都红在这一步，`framework-lock.json`（core / kit 的 module path、checksum、replace 与内部伪版本校验）**十个版本没有产出过**。
+  这个失败的形状最难察觉：tag 本身完全可用，`go get` 正常、生成工程正常、`pretag.sh` 全绿，因为 pretag 检查的是"这个 tag 能不能被消费"，而漂移的是"这次发布声明了什么"。修法把判据挪到唯一能阻止坏 tag 的地方：`scripts/pretag.sh` 在打 tag 之前校验清单的 `codegen:` 等于要发的版本，不等就失败（清单不存在时跳过，core / kit 没有这份文件）。
+  **补不了的部分**：旧 tag 上的清单仍是 v1.15.19，工作流按 tag 检出，重跑也还是红；lock 从 v1.15.30 起恢复产出。记录见 roost-core `docs/bugfix/U-0270-framework-release-version-drift.md`。
+
 ## [v1.15.29] - 2026-09-20
 
 ### Fixed

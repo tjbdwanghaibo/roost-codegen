@@ -60,7 +60,24 @@ if [[ -n "$(git status --porcelain)" ]]; then
   fail "working tree is not clean"
 fi
 
-# 4. It must build and test with the workspace off — the workspace hides
+# 4. The framework release manifest must name the version being released.
+#    The release workflow verifies it against the tag it was triggered by
+#    (`framework verify --expected-codegen "$RELEASE_TAG"`), so a manifest
+#    that drifts turns the protected framework gate red AFTER the tag is
+#    pushed — silently, because the tag itself is perfectly usable and the
+#    only thing missing is the lock the gate produces. v1.15.20 … v1.15.29
+#    were all released with this field stuck at v1.15.19 (U-0270).
+manifest="ci/framework-release.yaml"
+if [[ -f "$manifest" ]]; then
+  declared=$(awk '/^codegen:/{print $2; exit}' "$manifest")
+  [[ -n "$declared" ]] || fail "$manifest has no codegen: field"
+  if [[ "$declared" != "$version" ]]; then
+    fail "$manifest says codegen: $declared but this release is $version; the release workflow compares the two and fails the framework gate once the tag is pushed"
+  fi
+  echo "pretag: framework release manifest names $declared"
+fi
+
+# 5. It must build and test with the workspace off — the workspace hides
 #    exactly the dependency mistakes a consumer would hit.
 echo "pretag: building with GOWORK=off"
 GOWORK=off go build ./... >/dev/null
