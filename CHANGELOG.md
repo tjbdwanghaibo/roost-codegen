@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.15.24] - 2026-09-20
+
 ### Changed
 
 - 框架发布组合升到 core v1.15.14 / kit v1.14.15（U-0260：普通 room delta 改走可靠通道，不再被 latest-only datagram 覆盖）。生成工程无需改动；实跑里客户端的 `deltas` 计数从 >0 变为 0。
