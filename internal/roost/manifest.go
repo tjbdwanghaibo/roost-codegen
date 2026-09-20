@@ -23,14 +23,25 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // used only as an offline/bootstrap go.mod baseline and as compatibility
 // guards for users that intentionally pin a release.
 //
-// Since the consolidation (core v1.14.0 / kit v1.13.0) the framework is two
+// The consolidation (core v1.14.0 / kit v1.13.0) made the framework two
 // modules: roost-skill lives in roost-core/skill and roost-service in
-// roost-kit/service. The floors are the first versions with that layout; a
-// project pinning core below v1.14.0 must be upgraded with
-// `roost project upgrade --consolidate`, which rewrites its imports.
+// roost-kit/service. A project pinning core below v1.14.0 must be upgraded
+// with `roost project upgrade --consolidate`, which rewrites its imports.
+//
+// The floors below are HIGHER than that layout change, and they are not a
+// guess: they are the oldest versions against which the generated code of the
+// minimal and full templates actually compiles. What raised them is what the
+// generators emit today — `entity.ValidateEntityRegistry`,
+// `entity.EntityCategoryOther`, `platform.PendingOrders` — none of which
+// exists at v1.14.0 / v1.13.0. The framework-compat workflow's `minimum` cell
+// generates and compiles at exactly these versions, so a floor that stops
+// being true fails there rather than in someone's first hour.
+//
+// The game-demo template needs more than this (it tracks the current release
+// set) and is excluded from that cell on purpose.
 var minimumVersions = VersionSpec{
-	Core:    "v1.14.0",
-	Kit:     "v1.13.0",
+	Core:    "v1.15.7",
+	Kit:     "v1.14.8",
 	Codegen: "v1.15.0",
 }
 

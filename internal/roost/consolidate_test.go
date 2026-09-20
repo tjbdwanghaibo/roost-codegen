@@ -187,14 +187,35 @@ func TestConsolidateProjectRefusesUnmappedRemovedImports(t *testing.T) {
 }
 
 // The embedded relocation map itself must stay coherent: every rename points
-// at a mapped package and the boundary versions are the generator floors.
+// at a mapped package, and its boundary sits at or below the generator floor.
+//
+// The two used to be required equal, and that stopped being true: the
+// boundary is the version where the two-module layout arrived (below it, a
+// project needs `upgrade --consolidate` to rewrite imports), while the floor
+// is the oldest framework the CURRENT generated code compiles against. The
+// generators moved on; the layout did not. What must hold is the direction —
+// a floor below the boundary would promise support for a layout this
+// generator can no longer emit for.
 func TestConsolidationMapMatchesTheGeneratorFloor(t *testing.T) {
 	table, m, err := loadConsolidationMap()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Boundary.Core != minimumVersions.Core || m.Boundary.Kit != minimumVersions.Kit || m.Boundary.Codegen != minimumVersions.Codegen {
-		t.Fatalf("map boundary %+v != generator floor %+v", m.Boundary, minimumVersions)
+	for _, pair := range []struct {
+		name              string
+		boundary, floor   string
+	}{
+		{"core", m.Boundary.Core, minimumVersions.Core},
+		{"kit", m.Boundary.Kit, minimumVersions.Kit},
+		{"codegen", m.Boundary.Codegen, minimumVersions.Codegen},
+	} {
+		major, minor, patch, ok := releaseVersion(pair.boundary)
+		if !ok {
+			t.Fatalf("%s boundary %q is not a release version", pair.name, pair.boundary)
+		}
+		if !versionAtLeast(pair.floor, major, minor, patch) {
+			t.Fatalf("%s floor %s is below the consolidation boundary %s", pair.name, pair.floor, pair.boundary)
+		}
 	}
 	for _, old := range []string{"github.com/tjbdwanghaibo/roost-skill/skill", "github.com/tjbdwanghaibo/roost-service/mail", "github.com/tjbdwanghaibo/roost-kit/nestwal", "github.com/tjbdwanghaibo/roost-kit/redis"} {
 		if _, ok := table[old]; !ok {

@@ -94,8 +94,10 @@ func TestUpdateFrameworkDependenciesUsesExplicitPolicies(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := DefaultManifest("planet", "example.com/planet", nil, nil, nil)
-	manifest.Versions.Core = "v1.14.0"
-	manifest.Versions.Kit = "v1.13.1"
+	// Pinned versions at the generator floor: the policy refuses anything
+	// below it, because the code this generator emits does not compile there.
+	manifest.Versions.Core = minimumVersions.Core
+	manifest.Versions.Kit = minimumVersions.Kit
 	var get []string
 	runner := func(_ context.Context, _ string, _, _ io.Writer, args ...string) error {
 		if len(args) > 0 && args[0] == "get" {
@@ -107,7 +109,7 @@ func TestUpdateFrameworkDependenciesUsesExplicitPolicies(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(get, " ")
-	for _, want := range []string{"roost-core@v1.14.0", "roost-kit@v1.13.1"} {
+	for _, want := range []string{"roost-core@" + minimumVersions.Core, "roost-kit@" + minimumVersions.Kit} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("go get command missing %q: %v", want, get)
 		}

@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **声明的框架版本下限不再是假的**（U-0264，C4，T-158；CI 发现，无 RR）。`minimumVersions` 声称 core v1.14.0 / kit v1.13.0，而生成物用到的 `entity.ValidateEntityRegistry`、`entity.EntityCategoryOther`、`platform.PendingOrders` 在那里都不存在——`framework-compat` 的`generated-consumer (minimum, …)` 两格因此编译失败。这个值还是**没有显式 pin 时写进 go.mod 的默认值**，所以不只是文档不准。
+  抬到**实测能编译**的 core v1.15.7 / kit v1.14.8（用这两个版本生成 minimal 与 full 两个场景、full 还跑了 CI 那九步 `add`，均编译通过），工作流的 `minimum` 格子同步。
+  **行为变化**：pin 在更老版本的工程会被依赖策略拒绝（`versions.core requires >= v1.15.7`）——它们本来就生成不出能编译的代码，`roost project upgrade` 是出口。
+  “合并边界 == 生成器下限”的旧断言按规矩改成断言新不变量（**下限不得低于边界**）而不是删掉。
+
+### Changed
+
+- 框架发布组合的 kit 升到 v1.14.17（U-0263）。
+
 ## [v1.15.26] - 2026-09-20
 
 ### Added
