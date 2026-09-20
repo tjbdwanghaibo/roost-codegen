@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.15.26] - 2026-09-20
+
 ### Added
 
 - **game-demo：第十八批 Guild 合入**（§9.14）——远端托管实体（`remote=managed`）的第一个使用方，之前被 U-0261（checksum 写不进 BSON，并且会把 WAL 变成启动毒丸）阻塞。`GuildDao`、`Guild` 实体与 `RosterComponent`、三个 handler（`JoinGuild` 同时锁远端 guild 与本地 player）、三个端点、五个错误码、机器人动作。合入时的三处改动都是验收实跑逼出来的：
