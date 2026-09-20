@@ -1,5 +1,7 @@
 # roost-codegen
 
+> **维护线冻结（2026-09-20 起）**：本仓正在并入 roost-core（`core/codegen/` 与 `core/demo/`），`main` 只收 Bug 修复，其余改动进 `consolidation-v3` 分支。方案见 roost-core [三仓合一仓](https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/ARCHITECTURE_V3_SINGLE_MODULE_PLAN.zh-CN.md)。
+
 roost 框架的项目脚手架与代码生成工具链：用源码里的标记注释（`//roost:dao`、`//roost:nest` 等）驱动一组 Go 代码生成器，把持久化、同步、协议、事件、配置表这些"写错就丢数据"的样板代码变成可重复生成、可 CI 校验的产物。版本与升级记录以 [CHANGELOG](CHANGELOG.md) 和仓库 release/tag 为准；生成器会在运行前校验框架兼容下限。
 
 生成物依赖 [roost-core](https://github.com/tjbdwanghaibo/roost-core) 运行时（`dataengine`、`entity`、`nest`、`fmap` 等包），见[与 roost-core 的关系](#学习路径与-roost-core-的关系)。
