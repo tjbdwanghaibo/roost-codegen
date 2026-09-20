@@ -75,11 +75,26 @@ func (f *fakeLeaseTable) Release(_ context.Context, playerID int64) error {
 	return nil
 }
 
-type fakeFencer struct{ closed []int64 }
+type fakeFencer struct {
+	closed []int64
+	// online is who this process still has a connection for. The zero value
+	// is "nobody", which is what a background consumer's player looks like.
+	online map[int64]int
+}
 
 func (f *fakeFencer) CloseSessions(playerID int64, _ error) int {
 	f.closed = append(f.closed, playerID)
+	delete(f.online, playerID)
 	return 1
+}
+
+func (f *fakeFencer) ActiveSessions(playerID int64) int { return f.online[playerID] }
+
+func (f *fakeFencer) connect(playerID int64) {
+	if f.online == nil {
+		f.online = map[int64]int{}
+	}
+	f.online[playerID] = 1
 }
 
 func ownersUnderTest(t *testing.T) (*PlayerOwners, *fakeLeaseTable, *fakeFencer, *time.Time) {
@@ -331,13 +346,16 @@ func TestAClaimWhoseCopyCannotBeDroppedIsNotTakenIntoService(t *testing.T) {
 // Holding the lease without interruption keeps the resident copy: the whole
 // point is that an ordinary session costs nothing.
 func TestAnUninterruptedLeaseKeepsItsPlayer(t *testing.T) {
-	owners, _, _, clock := ownersUnderTest(t)
+	owners, _, fencer, clock := ownersUnderTest(t)
 	evictor := &evictorStub{}
 	owners.Evict(evictor)
 	ctx := context.Background()
 	if _, err := owners.Claim(ctx, 42); err != nil {
 		t.Fatal(err)
 	}
+	// Logged in here, so the idle hand-back (U-0269) leaves them alone and
+	// this test is about the interruption rule only.
+	fencer.connect(42)
 	evictor.forget()
 	for range 5 {
 		*clock = clock.Add(playerroute.RefreshInterval)
@@ -379,4 +397,105 @@ func TestFencingAlsoDropsTheCopy(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("a fenced player's copy was kept: dropped=%v", evictor.taken())
+}
+
+// U-0269 · C8 · RR-20260920-10：为后台工作取得的所有权必须还回去。
+//
+// Ownership has to be takeable for an offline player — their mail, their saga
+// steps and their paid orders cannot wait for them to log in. What it must
+// not be is permanent: nothing releases it, so the first background step to
+// touch an offline player used to pin them to that process for as long as it
+// lived, and a login anywhere else was refused by name, forever.
+func TestABackgroundClaimIsHandedBackWhenNobodyIsPlaying(t *testing.T) {
+	owners, table, _, clock := ownersUnderTest(t)
+	evictor := &evictorStub{}
+	owners.Evict(evictor)
+	ctx := context.Background()
+
+	// A gift step for a player who is not logged in anywhere.
+	owned, err := owners.Owns(ctx, 77)
+	if err != nil || !owned {
+		t.Fatalf("a background consumer could not take an unowned player: owned=%v err=%v", owned, err)
+	}
+	if table.owner[77] != 1000 {
+		t.Fatalf("the claim did not happen: %v", table.owner)
+	}
+	// Taking a player this process did not hold is itself a claim across a
+	// gap, so it already asked for a copy that is not there (U-0268). What
+	// this test is about is the drop that comes with the hand-back.
+	evictor.forget()
+	// The step finishes; nothing else asks about this player.
+	*clock = clock.Add(HandBackIdle + time.Second)
+	owners.renew(ctx)
+
+	if len(evictor.taken()) != 1 {
+		t.Fatalf("the player's copy was kept: %v", evictor.taken())
+	}
+	if _, held := table.owner[77]; held {
+		t.Fatalf("the lease was not handed back: %v", table.owner)
+	}
+	if err := owners.Admit(77); err == nil {
+		t.Fatal("this process still admits writes for a player it gave back")
+	}
+}
+
+// A player who is actually playing here keeps their lease however quiet they
+// are: an idle connection is still a connection.
+func TestAPlayerWithASessionIsNeverHandedBack(t *testing.T) {
+	owners, table, fencer, clock := ownersUnderTest(t)
+	ctx := context.Background()
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	fencer.connect(42)
+	for range 5 {
+		*clock = clock.Add(HandBackIdle)
+		owners.renew(ctx)
+	}
+	if table.owner[42] != 1000 {
+		t.Fatalf("a connected player's lease was given away: %v", table.owner)
+	}
+	if err := owners.Admit(42); err != nil {
+		t.Fatalf("a connected player is no longer admitted: %v", err)
+	}
+}
+
+// Work in progress holds the lease: every admission is a use, so a step that
+// keeps being retried is never handed back underneath itself.
+func TestWorkInProgressKeepsTheLease(t *testing.T) {
+	owners, table, _, clock := ownersUnderTest(t)
+	ctx := context.Background()
+	if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+		t.Fatalf("owns: %v %v", owned, err)
+	}
+	for range 5 {
+		*clock = clock.Add(HandBackIdle - time.Second)
+		if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+			t.Fatalf("the background consumer lost the player mid-work: %v %v", owned, err)
+		}
+		owners.renew(ctx)
+	}
+	if table.owner[77] != 1000 {
+		t.Fatalf("a lease doing work was handed back: %v", table.owner)
+	}
+}
+
+// The copy goes first and the claim second, never the other way round:
+// releasing while the entity is still resident is what invites a second copy
+// of it in another process (U-0259).
+func TestAHandBackThatCannotDropTheCopyKeepsTheLease(t *testing.T) {
+	owners, table, _, clock := ownersUnderTest(t)
+	ctx := context.Background()
+	if owned, err := owners.Owns(ctx, 77); err != nil || !owned {
+		t.Fatalf("owns: %v %v", owned, err)
+	}
+	// The entity becomes unavailable AFTER the claim: a transaction is on it
+	// when the hand-back comes round.
+	owners.Evict(&evictorStub{fail: errors.New("the entity is busy")})
+	*clock = clock.Add(HandBackIdle + time.Second)
+	owners.renew(ctx)
+
+	if table.owner[77] != 1000 {
+		t.Fatalf("the claim was given back although this process still holds the player: %v", table.owner)
+	}
 }
