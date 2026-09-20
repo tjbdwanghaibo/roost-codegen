@@ -615,3 +615,119 @@ type evictorFunc func(context.Context, int64) error
 func (fn evictorFunc) EvictPlayer(ctx context.Context, playerID int64) error {
 	return fn(ctx, playerID)
 }
+
+// blockingEvictor holds the eviction until a test lets it go, the way a
+// transaction on the entity holds EntityManager.Destroy — which waits for the
+// entity's mutex and does not look at a context.
+type blockingEvictor struct {
+	release chan struct{}
+	calls   chan int64
+}
+
+func newBlockingEvictor() *blockingEvictor {
+	return &blockingEvictor{release: make(chan struct{}), calls: make(chan int64, 8)}
+}
+
+func (e *blockingEvictor) EvictPlayer(_ context.Context, playerID int64) error {
+	e.calls <- playerID
+	<-e.release
+	return nil
+}
+
+// U-0272 · C8 · RR-20260920-12：撤离的预算只能限制"等多久"，那就让它限制等待。
+//
+// The wait used to be a ctx timeout around a call that ends in
+// EntityManager.Destroy, which waits on the entity's mutex without reading
+// ctx — so it bounded nothing, and a busy entity sat on the refresh loop with
+// every other player's renewal behind it.
+func TestAClaimWaitsAtMostTheBudgetForABusyEntity(t *testing.T) {
+	owners, table, _, _ := ownersUnderTest(t)
+	owners.evictWait = 50 * time.Millisecond
+	evictor := newBlockingEvictor()
+	owners.Evict(evictor)
+	t.Cleanup(func() { close(evictor.release) })
+	ctx := context.Background()
+
+	start := time.Now()
+	mine, err := owners.Claim(ctx, 42)
+	elapsed := time.Since(start)
+
+	if elapsed > time.Second {
+		t.Fatalf("the claim waited %s for a budget of %s", elapsed, owners.evictWait)
+	}
+	if mine || err == nil {
+		t.Fatalf("a player whose copy is still resident was taken into service: mine=%v err=%v", mine, err)
+	}
+	if err := owners.Admit(42); err == nil {
+		t.Fatal("writes are admitted for a player this process could not make safe")
+	}
+	// The claim did happen in Redis; nothing refreshes it, so it lapses.
+	if table.owner[42] != 1000 {
+		t.Fatalf("the claim did not happen at all: %v", table.owner)
+	}
+}
+
+// A second caller joins the eviction already in flight instead of starting a
+// second one — which is also what keeps a claim from being confirmed while an
+// older drop of the same player is still running.
+func TestASecondDropJoinsTheOneAlreadyRunning(t *testing.T) {
+	owners, _, _, _ := ownersUnderTest(t)
+	owners.evictWait = 50 * time.Millisecond
+	evictor := newBlockingEvictor()
+	owners.Evict(evictor)
+	ctx := context.Background()
+
+	for range 3 {
+		if _, err := owners.Claim(ctx, 42); err == nil {
+			t.Fatal("the claim succeeded although the eviction never finished")
+		}
+	}
+	if len(evictor.calls) != 1 {
+		t.Fatalf("the eviction was started %d times", len(evictor.calls))
+	}
+
+	// Once the entity is free the drop completes, and the next claim is
+	// served by it.
+	close(evictor.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mine, err := owners.Claim(ctx, 42)
+		if mine && err == nil {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("the player was never taken into service after the entity was released")
+}
+
+// The refresh loop keeps its cadence: one busy entity costs a bounded wait,
+// not everybody else's lease.
+func TestOneBusyEntityDoesNotHoldUpTheRefreshLoop(t *testing.T) {
+	owners, table, _, _ := ownersUnderTest(t)
+	owners.evictWait = 50 * time.Millisecond
+	evictor := newBlockingEvictor()
+	owners.Evict(evictor)
+	t.Cleanup(func() { close(evictor.release) })
+	ctx := context.Background()
+
+	// Two players held here; one of them will need an eviction it cannot get.
+	owners.Evict(&evictorStub{})
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owners.Claim(ctx, 43); err != nil {
+		t.Fatal(err)
+	}
+	owners.Evict(evictor)
+	delete(table.owner, 42) // 42's lease lapsed: the pass will try to retake it
+
+	start := time.Now()
+	owners.renew(ctx)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("one busy entity held the refresh pass for %s", elapsed)
+	}
+	// And the other player's lease was renewed by that same pass.
+	if err := owners.Admit(43); err != nil {
+		t.Fatalf("a bystander lost their lease to somebody else's busy entity: %v", err)
+	}
+}

@@ -65,12 +65,20 @@ type PlayerOwners struct {
 	fencer   sessionFencer
 	evict    residentEvictor
 	guard    time.Duration
-	now      func() time.Time
+	// evictWait is evictBudget, as a field so a test does not have to spend
+	// five seconds proving that the wait is bounded.
+	evictWait time.Duration
+	now       func() time.Time
 
 	mu    sync.Mutex
 	local map[int64]*leaseState
-	stop  chan struct{}
-	done  chan struct{}
+	// evictions dedupes in-flight drops by player. It is what keeps a claim
+	// from being confirmed while an older eviction of the same player is
+	// still running: every caller joins the one in flight instead of starting
+	// a second.
+	evictions map[int64]*eviction
+	stop      chan struct{}
+	done      chan struct{}
 }
 
 // leaseTable is the shared table as these owners use it. The interface exists
@@ -123,11 +131,28 @@ type residentEvictor interface {
 	EvictPlayer(ctx context.Context, playerID int64) error
 }
 
-// evictBudget bounds one eviction. It is generous because an eviction waits
-// for whatever transaction is on the entity, and short because it is spent on
-// the refresh loop's goroutine, where other players' renewals are queued
-// behind it.
+// evictBudget is how long a CALLER waits for an eviction — not how long the
+// eviction takes.
+//
+// The distinction is the whole of RR-20260920-12. Dropping a player ends in
+// EntityManager.Destroy, which waits for the entity's mutex and does not look
+// at a context: whatever transaction is on that entity, the eviction waits for
+// it. A ctx timeout around that call therefore bounded nothing, while the call
+// itself sat on the refresh loop's goroutine with every other player's renewal
+// queued behind it — one busy entity could cost this process the leases of
+// everybody else (Lease 30s, RefreshInterval 10s).
+//
+// So the eviction now runs on its own goroutine and runs to completion, and
+// this is the bound on waiting for it. A caller that times out has NOT had the
+// copy dropped and must act accordingly: Claim refuses to take the player into
+// service, the hand-back keeps the lease.
 const evictBudget = 5 * time.Second
+
+// eviction is one in-flight drop, shared by everyone waiting for it.
+type eviction struct {
+	done chan struct{}
+	err  error
+}
 
 // playerEvictor is the demo's answer to "drop this process's copy of a
 // player": off the scene, then out of the entity manager.
@@ -268,7 +293,9 @@ func newPlayerOwners(store leaseTable, fencer sessionFencer, now func() time.Tim
 	}
 	return &PlayerOwners{
 		store: store, fencer: fencer, guard: AdmissionGuard, now: now,
-		local: map[int64]*leaseState{},
+		evictWait: evictBudget,
+		local:     map[int64]*leaseState{},
+		evictions: map[int64]*eviction{},
 	}
 }
 
@@ -294,16 +321,51 @@ func (owners *PlayerOwners) Evict(evictor residentEvictor) {
 func (owners *PlayerOwners) dropResident(ctx context.Context, playerID int64) error {
 	owners.mu.Lock()
 	evictor := owners.evict
-	owners.mu.Unlock()
 	if evictor == nil {
+		owners.mu.Unlock()
 		return fmt.Errorf("player owners: no evictor is installed, so the copy of player %d cannot be dropped", playerID)
+	}
+	inFlight, running := owners.evictions[playerID]
+	if !running {
+		inFlight = &eviction{done: make(chan struct{})}
+		owners.evictions[playerID] = inFlight
+	}
+	wait := owners.evictWait
+	owners.mu.Unlock()
+	if !running {
+		go owners.runEviction(evictor, playerID, inFlight)
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	evictCtx, cancel := context.WithTimeout(ctx, evictBudget)
-	defer cancel()
-	return evictor.EvictPlayer(evictCtx, playerID)
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-inFlight.done:
+		return inFlight.err
+	case <-timer.C:
+		// Still waiting on the entity. Say so as a failure — the copy is NOT
+		// gone — and leave the eviction running: it will finish when the
+		// transaction does, and until then every caller joins this same one.
+		return fmt.Errorf("player owners: dropping player %d is taking longer than %s; it continues in the background", playerID, wait)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// runEviction performs one drop and hands the result to everyone waiting.
+//
+// It is given a background context on purpose: the thing it ends in does not
+// read one (see evictBudget), so passing a deadline here would only be a
+// promise nothing keeps.
+func (owners *PlayerOwners) runEviction(evictor residentEvictor, playerID int64, in *eviction) {
+	in.err = evictor.EvictPlayer(context.Background(), playerID)
+	owners.mu.Lock()
+	if owners.evictions[playerID] == in {
+		delete(owners.evictions, playerID)
+	}
+	owners.mu.Unlock()
+	close(in.done)
 }
 
 // Fence sets what disconnects a player this process may no longer serve. It
