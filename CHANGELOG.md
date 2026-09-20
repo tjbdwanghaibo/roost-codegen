@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.15.27] - 2026-09-20
+
 ### Fixed
 
 - **声明的框架版本下限不再是假的**（U-0264，C4，T-158；CI 发现，无 RR）。`minimumVersions` 声称 core v1.14.0 / kit v1.13.0，而生成物用到的 `entity.ValidateEntityRegistry`、`entity.EntityCategoryOther`、`platform.PendingOrders` 在那里都不存在——`framework-compat` 的`generated-consumer (minimum, …)` 两格因此编译失败。这个值还是**没有显式 pin 时写进 go.mod 的默认值**，所以不只是文档不准。
