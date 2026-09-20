@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **game-demo：租约与它保护的那份实体从此同生共死**（U-0268，C8，RR-20260920-09，T-162）。租约失而复得之后——刷新循环重新认领，或者玩家再次登录——进程接着用的是间断期间**没有重新加载过**的常驻 Player 实体。三件各自成立的事实合起来就是数据损坏：`EntityManager` 没有淘汰入口且 demo 从不 Destroy Player（所以副本永远不刷新），`renew` 的 `case mine:` 只打一条 Warn（所以复得被当成良性），而 `{SID, Token}` 的 Token 标识进程、没有世代号（所以"键不存在"分不清是没人拿过还是别人拿过、写过、也到期了）。
+  修法不去回答"中间有没有人写过"，只回答"**有没有间断**"，判据用已经存在的 `Admit`：它只在 Redis 确认过的窗口里放行，所以"Admit 此刻会拒绝"与"这次认领跨过了间断"是同一句话。跨间断的 `Claim` 先扔掉副本再 confirm，扔不掉就不 confirm、让租约自己失效；`fence` 在断开连接的同时异步扔副本。新增 `residentEvictor` 缝，demo 的实现先 `Scene.Leave` 再 `Destroy(..., deletePersisted=false)`（只忘记，不删数据），并且只查常驻不加载。
+  **行为变化**：`Admit` 现在也拒绝"Redis 说过不是你的、之后没有重新认领"的租约（键被误删或 failover 之后，窗口内的写入也会被拒）；没有装 `Evict(...)` 的 `PlayerOwners` 会拒绝任何认领并说明缺什么——生成的 `service.go` 在发布 owners 之前就装好，不存在登录早于装配的窗口。
+  测试：生成工程 `playerowner_test.go` 四条新用例；编码旧契约的 `TestALapsedLeaseNobodyElseTookIsRetakenInsteadOfFenced` 改成断言新不变量。记录见 roost-core `docs/bugfix/RR-20260920-09.md`。
+
 ## [v1.15.28] - 2026-09-20
 
 ### Fixed

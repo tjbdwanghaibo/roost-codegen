@@ -12,8 +12,10 @@ import (
 	accessplayer "{{MODULE}}/internal/access/player"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	"github.com/tjbdwanghaibo/roost-core/app"
+	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
 	fnats "github.com/tjbdwanghaibo/roost-core/nats"
 	"github.com/tjbdwanghaibo/roost-core/skill"
+	"github.com/tjbdwanghaibo/roost-kit/mods"
 )
 
 // Service is the game server. It owns this process's World, the consumers
@@ -125,6 +127,22 @@ func (s *Service) Init(registry *app.Registry) error {
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
+	// What to drop when a lease ends, installed before the table is published
+	// so that no login can arrive without it. Disconnecting a player stops
+	// this process being asked to do anything for them; it does not make the
+	// copy in memory match a document another process is now writing, and
+	// nothing reloads a resident entity. The lease and the copy therefore end
+	// together (RR-20260920-09). The scene is above, because dropping a
+	// player means taking them off it first.
+	players, err := lifecycle.PlayerFromRegistry(registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: player lifecycle for eviction: %w", err)
+	}
+	access, ok := app.Lookup[*coreentity.ManagerAccess](registry, mods.ModEntityRuntime)
+	if !ok || access == nil || access.Manager() == nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: entity runtime is unavailable, so a lease could never drop its player")
+	}
+	owners.Evict(playerEvictor{scene: scene, players: players, manager: access.Manager()})
 	if err := registry.Register(PlayerOwnerCapability, owners); err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: publish player owners: %w", err)
 	}

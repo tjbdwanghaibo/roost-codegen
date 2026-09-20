@@ -3,6 +3,7 @@ package {{GAME_SERVICE_PKG}}
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -87,6 +88,10 @@ func ownersUnderTest(t *testing.T) (*PlayerOwners, *fakeLeaseTable, *fakeFencer,
 	fencer := &fakeFencer{}
 	clock := time.Unix(1_700_000_000, 0)
 	owners := newPlayerOwners(table, fencer, func() time.Time { return clock })
+	// Every assembled deployment has one (service.go installs it before the
+	// table is published), and without one a claim across a gap is refused —
+	// which is the point of RR-20260920-09, not the subject of most tests.
+	owners.Evict(&evictorStub{})
 	return owners, table, fencer, &clock
 }
 
@@ -212,6 +217,11 @@ func TestTheWriteGateExemptsLoginAndRefusesEverythingElse(t *testing.T) {
 // SetNX 是原子的，所以"没人拿着"这个判断和取回是同一件事。
 func TestALapsedLeaseNobodyElseTookIsRetakenInsteadOfFenced(t *testing.T) {
 	owners, table, fencer, _ := ownersUnderTest(t)
+	// Retaking means dropping the copy from before the gap, so a table that
+	// can retake is a table that can forget (RR-20260920-09). This used to
+	// pass without an evictor, which was the defect: the retake was treated
+	// as benign.
+	owners.Evict(&evictorStub{})
 	ctx := context.Background()
 	if _, err := owners.Claim(ctx, 42); err != nil {
 		t.Fatal(err)
@@ -229,4 +239,144 @@ func TestALapsedLeaseNobodyElseTookIsRetakenInsteadOfFenced(t *testing.T) {
 	if table.owner[42] != 1000 {
 		t.Fatalf("the table does not show this process as the owner: %v", table.owner)
 	}
+}
+
+// evictorStub records which players this process was told to forget, and can
+// refuse one.
+type evictorStub struct {
+	mu      sync.Mutex
+	dropped []int64
+	fail    error
+}
+
+func (stub *evictorStub) EvictPlayer(_ context.Context, playerID int64) error {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if stub.fail != nil {
+		return stub.fail
+	}
+	stub.dropped = append(stub.dropped, playerID)
+	return nil
+}
+
+// forget is what a test calls between the claim it does not care about and
+// the one it does.
+func (stub *evictorStub) forget() {
+	stub.mu.Lock()
+	stub.dropped = nil
+	stub.mu.Unlock()
+}
+
+func (stub *evictorStub) taken() []int64 {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	return append([]int64(nil), stub.dropped...)
+}
+
+// U-0268 · C8 · RR-20260920-09：租约有过间断，内存里那份副本就不能再用。
+//
+// An absent key has two histories — nobody ever took the player, or somebody
+// took them, wrote, and their lease expired too — and the table cannot tell
+// them apart. So a claim across a gap must drop whatever this process still
+// has: nothing reloads a resident entity, and the document may have moved on
+// without it.
+func TestALeaseThatWasInterruptedDropsTheResidentCopy(t *testing.T) {
+	owners, table, _, _ := ownersUnderTest(t)
+	evictor := &evictorStub{}
+	owners.Evict(evictor)
+	ctx := context.Background()
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	// The first claim is itself a claim across a gap — this process had
+	// nothing before it — so it asks for the copy to be dropped and finds
+	// none. What matters is the SECOND one.
+	evictor.forget()
+
+	// The key vanished: our renewals lapsed. Whether anybody else held it in
+	// the meantime is exactly what cannot be known.
+	delete(table.owner, 42)
+	owners.renew(ctx)
+
+	if dropped := evictor.taken(); len(dropped) != 1 || dropped[0] != 42 {
+		t.Fatalf("the copy from before the gap was kept: dropped=%v", dropped)
+	}
+	if err := owners.Admit(42); err != nil {
+		t.Fatalf("the player is not served after a clean retake: %v", err)
+	}
+}
+
+// A claim this process could not make safe is not taken into service: the
+// lease is left to lapse rather than used on a copy that is still there.
+func TestAClaimWhoseCopyCannotBeDroppedIsNotTakenIntoService(t *testing.T) {
+	owners, table, _, _ := ownersUnderTest(t)
+	owners.Evict(&evictorStub{fail: errors.New("the entity is busy")})
+	ctx := context.Background()
+	mine, err := owners.Claim(ctx, 42)
+	if mine {
+		t.Fatal("the player was taken into service although the stale copy is still resident")
+	}
+	if err == nil {
+		t.Fatal("the caller was not told why")
+	}
+	if err := owners.Admit(42); err == nil {
+		t.Fatal("writes are admitted for a player this process could not make safe")
+	}
+	// The lease IS ours in Redis — nothing refreshes it, so it lapses.
+	if table.owner[42] != 1000 {
+		t.Fatalf("the claim did not happen at all: %v", table.owner)
+	}
+}
+
+// Holding the lease without interruption keeps the resident copy: the whole
+// point is that an ordinary session costs nothing.
+func TestAnUninterruptedLeaseKeepsItsPlayer(t *testing.T) {
+	owners, _, _, clock := ownersUnderTest(t)
+	evictor := &evictorStub{}
+	owners.Evict(evictor)
+	ctx := context.Background()
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	evictor.forget()
+	for range 5 {
+		*clock = clock.Add(playerroute.RefreshInterval)
+		owners.renew(ctx)
+	}
+	// And a re-login while the lease never lapsed is not a gap either.
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	if dropped := evictor.taken(); len(dropped) != 0 {
+		t.Fatalf("a player this process never stopped owning was dropped: %v", dropped)
+	}
+}
+
+// Fencing takes the copy with the sessions. Disconnecting stops this process
+// being asked to do anything; it does not make the resident entity match a
+// document the new owner is writing.
+func TestFencingAlsoDropsTheCopy(t *testing.T) {
+	owners, table, fencer, _ := ownersUnderTest(t)
+	evictor := &evictorStub{}
+	owners.Evict(evictor)
+	ctx := context.Background()
+	if _, err := owners.Claim(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
+	evictor.forget()
+	table.owner[42] = 2000 // another process owns them now
+	owners.renew(ctx)
+
+	if len(fencer.closed) != 1 {
+		t.Fatalf("the player was not disconnected: %v", fencer.closed)
+	}
+	// The eviction is not waited on, so give it a moment to land.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(evictor.taken()) > 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("a fenced player's copy was kept: dropped=%v", evictor.taken())
 }

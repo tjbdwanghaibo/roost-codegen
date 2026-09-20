@@ -9,9 +9,12 @@ import (
 	"time"
 
 	"{{MODULE}}/protocol/msgid"
+	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/playerroute"
+	player "{{MODULE}}/game/entities/player"
 	"github.com/tjbdwanghaibo/roost-core/ownerroute"
 	"github.com/tjbdwanghaibo/roost-core/app"
+	coreentity "github.com/tjbdwanghaibo/roost-core/entity"
 	"github.com/tjbdwanghaibo/roost-kit/mods"
 )
 
@@ -60,6 +63,7 @@ const PlayerOwnerCapability app.ModName = "{{GAME_SERVICE}}.playerowner"
 type PlayerOwners struct {
 	store    leaseTable
 	fencer   sessionFencer
+	evict    residentEvictor
 	guard    time.Duration
 	now      func() time.Time
 
@@ -92,6 +96,85 @@ type sessionFencer interface {
 	CloseSessions(playerID int64, reason error) int
 }
 
+// residentEvictor drops this process's copy of a player: off the scene, out
+// of the entity manager. It exists because a lease and the entity it protects
+// must not have different lifetimes.
+//
+// Holding a lease is what makes a resident Player safe to write. The moment
+// this process cannot prove it has held the lease WITHOUT INTERRUPTION, the
+// copy in memory is no longer known to match the document: during the gap
+// another process could legitimately have owned the player and written to
+// them — that is exactly what the gap permits, and what `fence` invites by
+// disconnecting them. Nothing reloads a resident entity (the manager returns
+// the instance it has), so a lease that comes back without the copy being
+// dropped puts this process back to work on a stale one: a lost update, or
+// the `fatal projection version conflict` this whole table exists to prevent
+// (RR-20260920-09).
+type residentEvictor interface {
+	// EvictPlayer removes the player from this process. It must be safe to
+	// call for a player who is not resident, and it must return an error
+	// rather than half-evicting: the caller refuses to serve a player whose
+	// copy it could not drop.
+	EvictPlayer(ctx context.Context, playerID int64) error
+}
+
+// evictBudget bounds one eviction. It is generous because an eviction waits
+// for whatever transaction is on the entity, and short because it is spent on
+// the refresh loop's goroutine, where other players' renewals are queued
+// behind it.
+const evictBudget = 5 * time.Second
+
+// playerEvictor is the demo's answer to "drop this process's copy of a
+// player": off the scene, then out of the entity manager.
+//
+// The order matters. The room holds the subject's sync state, so a player
+// destroyed while still registered would leave the room pointing at a dead
+// entity; Scene.Leave unsubscribes the watchers, retires the subject and
+// unregisters it, which is the same path a logout takes.
+//
+// It does NOT delete anything persisted: the document is the authority and is
+// exactly what the next load must read. Evicting is forgetting, not deleting.
+type playerEvictor struct {
+	scene   *Scene
+	players *lifecycle.PlayerLifecycle
+	manager *coreentity.EntityManager
+}
+
+func (evictor playerEvictor) EvictPlayer(ctx context.Context, playerID int64) error {
+	if evictor.players == nil || evictor.manager == nil {
+		return fmt.Errorf("player evictor: not assembled")
+	}
+	subjectID, err := coreentity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return err
+	}
+	if evictor.scene != nil {
+		evictor.scene.Leave(ctx, subjectID)
+	}
+	// Resident only. Asking the lifecycle would LOAD the player in order to
+	// destroy them, which is a database read and a second copy to answer a
+	// question about the first one.
+	resident := evictor.manager.GetWithCategory(subjectID, coreentity.MustEntityCategoryOfKind(player.EntityKindPlayer))
+	if resident == nil {
+		return nil
+	}
+	typed, ok := resident.(*player.Player)
+	if !ok {
+		return fmt.Errorf("player evictor: entity %d is a %T", subjectID, resident)
+	}
+	err = evictor.players.Destroy(ctx, typed, coreentity.DestroyReasonCommon, false)
+	switch {
+	case err == nil, errors.Is(err, coreentity.ErrEntityRemoved), errors.Is(err, coreentity.ErrEntityNotManaged):
+		// Already gone, by this call or by another one. The postcondition —
+		// this process has no copy — holds either way.
+		return nil
+	default:
+		return err
+	}
+}
+
+var _ residentEvictor = playerEvictor{}
+
 // leaseState is what this process knows about one lease, and when it stops
 // being able to claim it knows it. validUntil is a LOCAL deadline computed
 // from the last confirmation, never from the value in Redis: the two clocks
@@ -99,6 +182,14 @@ type sessionFencer interface {
 type leaseState struct {
 	validUntil time.Time
 	lost       bool
+	// interrupted records that Redis has told us, at least once since the
+	// last confirmation, that this lease is not ours. It is separate from the
+	// deadline because the two can disagree: a key that vanishes early — an
+	// operator, a failover, a flushed Redis — makes the lease somebody else's
+	// to take while this process's own window still looks open. Redis is the
+	// authority on that question, so its answer sticks until a fresh claim
+	// clears it (RR-20260920-09).
+	interrupted bool
 }
 
 // ErrLeaseNotHeld is what a write path gets when this process cannot prove it
@@ -140,6 +231,40 @@ func newPlayerOwners(store leaseTable, fencer sessionFencer, now func() time.Tim
 		store: store, fencer: fencer, guard: AdmissionGuard, now: now,
 		local: map[int64]*leaseState{},
 	}
+}
+
+// Evict sets what drops this process's copy of a player. Like Fence it is
+// separate from construction: the scene and the entity runtime come up after
+// the table does.
+//
+// A table without one still refuses to serve a player whose lease was
+// interrupted — it simply cannot take the claim back, so the lease lapses
+// instead. That is the safe default, and it is what a single-process
+// deployment gets.
+func (owners *PlayerOwners) Evict(evictor residentEvictor) {
+	if owners == nil {
+		return
+	}
+	owners.mu.Lock()
+	owners.evict = evictor
+	owners.mu.Unlock()
+}
+
+// dropResident drops this process's copy of a player, with a bounded budget.
+// It reports whether the copy is now gone: "no evictor" is NOT gone.
+func (owners *PlayerOwners) dropResident(ctx context.Context, playerID int64) error {
+	owners.mu.Lock()
+	evictor := owners.evict
+	owners.mu.Unlock()
+	if evictor == nil {
+		return fmt.Errorf("player owners: no evictor is installed, so the copy of player %d cannot be dropped", playerID)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	evictCtx, cancel := context.WithTimeout(ctx, evictBudget)
+	defer cancel()
+	return evictor.EvictPlayer(evictCtx, playerID)
 }
 
 // Fence sets what disconnects a player this process may no longer serve. It
@@ -211,12 +336,20 @@ func (owners *PlayerOwners) renew(ctx context.Context) {
 			// The re-claim decides which it is, so this does not have to
 			// guess — and a lost re-claim is exactly the case that must
 			// fence.
+			//
+			// Marked first, because from here on this process cannot prove it
+			// held the player without interruption, and Admit must say so
+			// even if the local window still looks open.
+			owners.interrupt(result.PlayerID)
 			mine, err := owners.Claim(ctx, result.PlayerID)
 			switch {
 			case err != nil:
 				slog.Warn("player owners: lease lost and could not be retaken; admission is running out", "player_id", result.PlayerID, "err", err)
 			case mine:
-				slog.Warn("player owners: lease had lapsed and was retaken", "player_id", result.PlayerID)
+				// Claim dropped the copy from before the gap on the way
+				// through, so this process resumes on a reload rather than on
+				// whatever it still had in memory.
+				slog.Warn("player owners: lease had lapsed and was retaken; the stale copy was dropped", "player_id", result.PlayerID)
 			default:
 				owners.fence(result.PlayerID, "another process holds the lease now")
 			}
@@ -235,6 +368,18 @@ func (owners *PlayerOwners) confirm(playerID int64) {
 	}
 	state.validUntil = owners.now().Add(playerroute.Lease)
 	state.lost = false
+	state.interrupted = false
+}
+
+// interrupt records that Redis says this lease is not ours right now. It does
+// not decide anything by itself: the caller either retakes the lease (and the
+// claim drops the copy from before the gap) or fences.
+func (owners *PlayerOwners) interrupt(playerID int64) {
+	owners.mu.Lock()
+	defer owners.mu.Unlock()
+	if state := owners.local[playerID]; state != nil {
+		state.interrupted = true
+	}
 }
 
 // fence stops this process from serving a player it can no longer prove it
@@ -260,6 +405,21 @@ func (owners *PlayerOwners) fence(playerID int64, reason string) {
 	if fencer != nil {
 		closed = fencer.CloseSessions(playerID, fmt.Errorf("player owners: %s", reason))
 	}
+	// And the copy goes with the lease. Disconnecting stops this process
+	// being TOLD to do anything; it does not make the resident entity match
+	// the document, which the new owner is now writing. The eviction is not
+	// waited on: nothing here depends on it having finished, the gate already
+	// refuses every write, and this runs on the refresh loop's goroutine
+	// where a slow entity would hold up other players' renewals. A failure
+	// leaves a copy that the next Claim refuses to serve until it can drop it
+	// (RR-20260920-09).
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), evictBudget)
+		defer cancel()
+		if err := owners.dropResident(ctx, playerID); err != nil {
+			slog.Error("player owners: fenced player's copy not dropped", "player_id", playerID, "err", err)
+		}
+	}()
 	slog.Warn("player owners: fenced a player this process no longer owns", "player_id", playerID, "reason", reason, "sessions_closed", closed)
 }
 
@@ -281,6 +441,13 @@ func (owners *PlayerOwners) Admit(playerID int64) error {
 	state := owners.local[playerID]
 	if state == nil || state.lost {
 		return fmt.Errorf("%w: player %d", ErrLeaseNotHeld, playerID)
+	}
+	if state.interrupted {
+		// Redis has said the lease is not ours since the last confirmation.
+		// The local window may still look open — it is computed from our own
+		// clock — but the authority has answered, and what it answered is
+		// that somebody else could be writing this player.
+		return fmt.Errorf("%w: player %d, the lease was interrupted and has not been reclaimed", ErrLeaseNotHeld, playerID)
 	}
 	if remaining := state.validUntil.Sub(owners.now()); remaining <= owners.guard {
 		return fmt.Errorf("%w: player %d, confirmed lease has %s left and admission needs %s", ErrLeaseNotHeld, playerID, remaining, owners.guard)
@@ -332,14 +499,38 @@ func (owners *PlayerOwners) Claim(ctx context.Context, playerID int64) (bool, er
 	if owners == nil {
 		return false, nil
 	}
+	// Whether this process has held the player WITHOUT INTERRUPTION up to
+	// this moment, asked before the claim rather than after it — afterwards
+	// the answer is yes either way.
+	//
+	// Admit is exactly that question: it passes only inside a window Redis
+	// confirmed, with the guard band already subtracted. So a claim that
+	// Admit would have refused is a claim across a gap, whether the gap came
+	// from a fence, a lapse, a restart, or simply never having owned this
+	// player. The copy from before the gap has to go before this process
+	// writes anything again (RR-20260920-09); for a player who was never
+	// here it costs one call that finds nothing to do.
+	continuous := owners.Admit(playerID) == nil
 	route, err := owners.store.Claim(ctx, playerID)
 	if err != nil {
 		return false, err
 	}
 	mine := route.SID == owners.store.SID()
-	if mine {
-		owners.confirm(playerID)
+	if !mine {
+		return false, nil
 	}
+	if !continuous {
+		if err := owners.dropResident(ctx, playerID); err != nil {
+			// The lease is ours in Redis and this process still cannot use
+			// it. Not confirming is the whole answer: nothing is admitted,
+			// nothing refreshes it, and it lapses on its own — which is the
+			// same ending as a process that died holding it.
+			slog.Error("player owners: claimed a player whose stale copy could not be dropped; leaving the lease to lapse",
+				"player_id", playerID, "err", err)
+			return false, fmt.Errorf("player owners: player %d claimed but not taken into service: %w", playerID, err)
+		}
+	}
+	owners.confirm(playerID)
 	return mine, nil
 }
 
